@@ -96,9 +96,12 @@ class MockWeatherService(WeatherService):
     """Deterministic demo readings keyed by the seed-farm locations."""
 
     # Antalya is hot & humid (elevated fungal pressure); Mersin is milder.
+    # Watsonville (coastal CA) is cool but humid/foggy — moderate botrytis pressure.
     _BY_CITY = {
         "antalya": {"temperature_c": 28.0, "humidity_pct": 85.0, "rain_probability_pct": 30.0},
         "mersin": {"temperature_c": 24.0, "humidity_pct": 60.0, "rain_probability_pct": 10.0},
+        "watsonville": {"temperature_c": 19.0, "humidity_pct": 82.0, "rain_probability_pct": 15.0},
+        "california": {"temperature_c": 20.0, "humidity_pct": 80.0, "rain_probability_pct": 10.0},
     }
     _DEFAULT = {"temperature_c": 22.0, "humidity_pct": 65.0, "rain_probability_pct": 20.0}
 

@@ -1,8 +1,71 @@
-# Lumos Spray Copilot — 3-Minute Demo Script (Milestone 2)
+# Lumos Spray Copilot — Demo Script
 
-A tight, repeatable script for demoing the MVP to a farmer, agronomist, or investor.
-Milestone 2 adds: **next-action card, agronomist review workflow, pesticide cost analytics,
-weather-risk card, and an upgraded WhatsApp report.**
+Two scripts:
+- **🇺🇸 YC / U.S. demo** (use this for YC and U.S. investors) — Golden Coast Strawberry Ranch.
+- **🇹🇷 Original 3-minute demo** (Türkiye greenhouse tomatoes) — kept below as a contrast.
+
+---
+
+# 🇺🇸 YC / U.S. DEMO — "the decision/compliance layer before the spray" (~3 min)
+
+**Positioning line to open with:**
+> "Lumos is an AI pesticide **decision and compliance copilot** for U.S. specialty-crop growers
+> and their PCAs. We're not a sprayer, a robot, or a drone — we're the **decision layer before
+> the spray**. We help growers spray less and stay audit-ready, with a licensed PCA in the loop."
+
+**Setup:** backend + frontend running (see "Before you start" below), browser at
+`http://localhost:3000`. Re-run `python -m app.seed` first for a clean state.
+
+### 1. Dashboard — the U.S. farm (15s)
+- Point to **🇺🇸 Golden Coast Strawberry Ranch** (Watsonville, CA · strawberry · 18 acres).
+- *"California strawberries — hand-harvested, heavily sprayed, strict pesticide reporting. This
+  is where PHI and worker re-entry mistakes actually hurt."*
+
+### 2. Open it → cost analytics (30s)
+- Stat cards show spend in **USD** ($540), 4 sprays, harvest in 2 days.
+- **💰 Cost analytics:** most-used **captan ×3**, repeated-ingredient cost **$240**, and
+  *"$135 potential avoidable cost if one unnecessary spray is prevented."*
+- *"We don't promise savings — we show where money leaks and what's avoidable."*
+
+### 3. The compliance snapshot (35s) — the U.S. money slide
+- **🛡️ Compliance snapshot** shows red/green rows:
+  - **PHI — At risk** (a captan spray won't clear before harvest)
+  - **REI — May be active** (worker re-entry window on the latest spray)
+  - **Repeated active ingredient — Repeated** (captan ×3 → resistance)
+  - **Scouting pressure — High** (Botrytis 4/5)
+  - **Weather disease pressure — Moderate** (cool, humid coast)
+  - **PCA / agronomist review status**
+- *"This is the audit-ready view a PCA and a buyer want — PHI, REI, resistance, all in one place,
+  before anyone enters the field or picks."*
+
+### 4. Generate recommendation → next action (25s)
+- Click **Generate recommendation** → bold next action **🌡️ "Harvest timing risk — review
+  before picking."** Red elevated panel lists PHI, REI, resistance, and scouting flags.
+- *"Notice the REI line: 'worker re-entry interval may still be active — review label and PCA
+  guidance.' It never says 'safe' or 'spray now.'"*
+
+### 5. PCA approves / edits (30s)
+- In **Agronomist review**, add a comment (e.g. *"Hold harvest 2 days; rotate off captan; keep
+  crew out until REI clears"*) → **Approve** (or **Edit** then save).
+- Status flips **pending → approved**.
+- *"In California a licensed PCA signs pesticide recommendations. That human-in-the-loop approval
+  is already the law — our workflow maps onto it exactly."*
+
+### 6. Copy the report (20s)
+- **Weekly report → Build report → Copy for WhatsApp/text.**
+- It reads **PCA/agronomist**, shows **PHI/REI/resistance warnings**, the **next action**, the
+  approved guidance + comment, costs in **$**, and the disclaimer: *"Confirm pesticide use, label
+  requirements, PHI, and REI with a licensed PCA/agronomist and the product label."*
+
+### 7. The one-liner to close
+> **"We are not a sprayer. We are the decision and compliance layer before the spray —**
+> fewer unnecessary sprays, no PHI/REI surprises, and an audit-ready PCA-approved record."
+
+---
+
+# 🇹🇷 ORIGINAL 3-Minute Demo (Türkiye greenhouse tomatoes)
+
+Kept as a contrast / second market. Same engine, different crop and advisor wording (₺, "agronomist").
 
 ---
 

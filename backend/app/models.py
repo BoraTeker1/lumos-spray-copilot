@@ -13,6 +13,8 @@ class Farm(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     location: Mapped[str | None] = mapped_column(String(200))
+    # Two-letter market/country code, e.g. "US" or "TR". Drives PCA vs. agronomist wording.
+    country: Mapped[str] = mapped_column(String(2), default="US")
     crop_type: Mapped[str] = mapped_column(String(100), default="greenhouse_tomato")
     greenhouse_area: Mapped[float | None] = mapped_column(Float)  # square metres
     planting_date: Mapped[date | None] = mapped_column(Date)
@@ -42,6 +44,7 @@ class SprayEvent(Base):
     application_date: Mapped[date] = mapped_column(Date, nullable=False)
     cost: Mapped[float | None] = mapped_column(Float)
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
+    re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str | None] = mapped_column(Text)
 
     farm: Mapped["Farm"] = relationship(back_populates="spray_events")

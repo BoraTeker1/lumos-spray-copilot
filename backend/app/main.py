@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app import crud, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
+from app.recommendation_engine import generate_recommendation
 from app.weather import default_weather_service
 
 app = FastAPI(
@@ -195,6 +196,43 @@ def farm_weather_risk(farm_id: int, db: Session = Depends(get_db)):
     return default_weather_service.get_weather_risk(farm.location)
 
 
+# ---------------------------------------------------------------- Compliance
+@app.get("/farms/{farm_id}/compliance", tags=["compliance"])
+def farm_compliance(farm_id: int, db: Session = Depends(get_db)):
+    """Structured compliance snapshot for the farm-detail compliance card.
+
+    Re-runs the rule engine over current records (does not persist) and combines it
+    with weather and the latest agronomist/PCA review status.
+    """
+    farm = _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    observations = crud.list_scout_observations(db, farm_id)
+    result = generate_recommendation(farm, sprays, observations)
+    weather = default_weather_service.get_weather_risk(farm.location)
+    recs = crud.list_recommendations(db, farm_id)
+    latest = recs[0] if recs else None
+
+    return {
+        "risk_level": result.risk_level,
+        "next_action": result.next_action,
+        "phi_risk": result.signals.get("phi_risk", False),
+        "rei_risk": result.signals.get("rei_risk", False),
+        "repeated_active_ingredient_risk": result.signals.get(
+            "repeated_active_ingredient_risk", False
+        ),
+        "max_recent_severity": result.signals.get("max_recent_severity", 0),
+        "high_severity_scouting": result.signals.get("high_severity_scouting", False),
+        "weather_risk_level": weather["risk_level"],
+        "review_status": latest.agronomist_status if latest else "none",
+        "advisor_label": _advisor_label(farm),
+    }
+
+
+def _advisor_label(farm) -> str:
+    """U.S. specialty-crop growers work with a PCA; elsewhere we just say agronomist."""
+    return "PCA / agronomist" if (farm.country or "").upper() in ("US", "USA") else "agronomist"
+
+
 # -------------------------------------------------------------- Weekly report
 @app.get("/farms/{farm_id}/weekly-report", tags=["reports"])
 def weekly_report(farm_id: int, db: Session = Depends(get_db)):
@@ -206,27 +244,66 @@ def weekly_report(farm_id: int, db: Session = Depends(get_db)):
     latest_rec = recs[0] if recs else None
     analytics = compute_cost_analytics(sprays)
     weather = default_weather_service.get_weather_risk(farm.location)
+    # Current compliance signals (PHI / REI / repeated-AI) for the report's flag block.
+    signals = generate_recommendation(farm, sprays, observations).signals
 
     text = _build_weekly_report_text(
-        farm, len(sprays), len(observations), latest_rec, analytics, weather
+        farm, len(sprays), len(observations), latest_rec, analytics, weather, signals
     )
     return {"text": text}
 
 
-# Statuses that count as agronomist-reviewed guidance for the farmer-facing report.
+# Statuses that count as advisor-reviewed guidance for the farmer-facing report.
 REVIEWED_STATUSES = ("approved", "edited")
 
 
+def _currency_symbol(farm) -> str:
+    return "$" if (farm.country or "").upper() in ("US", "USA") else "₺"
+
+
+def _report_disclaimer(farm) -> str:
+    if (farm.country or "").upper() in ("US", "USA"):
+        return (
+            "— Decision support only. Confirm pesticide use, label requirements, PHI, and REI "
+            "with a licensed PCA/agronomist and the product label."
+        )
+    return "— Decision support only; confirm with your agronomist before acting."
+
+
+def _compliance_flag_lines(signals: dict) -> list[str]:
+    """Explicit PHI / REI / repeated-ingredient warning lines for the report."""
+    out = []
+    if signals.get("phi_risk"):
+        out.append("⚠️ PHI: a recent spray may not clear before harvest — review harvest timing.")
+    if signals.get("rei_risk"):
+        out.append("⚠️ REI: worker re-entry interval may still be active — review label/PCA guidance.")
+    if signals.get("repeated_active_ingredient_risk"):
+        out.append("⚠️ Resistance: same active ingredient repeated — consider rotating chemistry.")
+    if signals.get("high_severity_scouting"):
+        out.append("⚠️ Scouting: high-severity pest/disease pressure logged.")
+    if not out:
+        out.append("No PHI / REI / resistance flags from current records.")
+    return out
+
+
 def _build_weekly_report_text(
-    farm, spray_count, observation_count, latest_rec, analytics, weather
+    farm, spray_count, observation_count, latest_rec, analytics, weather, signals
 ) -> str:
+    advisor = _advisor_label(farm)              # "PCA / agronomist" (US) or "agronomist"
+    advisor_cap = advisor[:1].upper() + advisor[1:]   # capitalise first letter, keep "PCA"
+    cur = _currency_symbol(farm)
+    crop_icon = "🍓" if (farm.crop_type or "").lower().startswith("straw") else "🍅"
+
     lines = [
-        f"🍅 Lumos Weekly Report — {farm.name}",
-        f"Date: {date.today().isoformat()}",
+        f"{crop_icon} Lumos Weekly Report — {farm.name}",
+        f"Location: {farm.location} · {date.today().isoformat()}",
         "",
         f"Weather risk: {weather['risk_level'].upper()} — {weather['summary']}",
         "",
-        f"Pesticide spend (cycle): ₺{analytics['total_spend']:.2f}  |  "
+        "Compliance flags:",
+        *[f"  {ln}" for ln in _compliance_flag_lines(signals)],
+        "",
+        f"Pesticide spend (cycle): {cur}{analytics['total_spend']:.2f}  |  "
         f"Sprays this cycle: {spray_count}  |  Last 30 days: {analytics['sprays_last_30_days']}",
         f"Scouting notes on record: {observation_count}",
     ]
@@ -237,23 +314,22 @@ def _build_weekly_report_text(
             "No recommendation generated yet — open the farm to generate one.",
         ]
     elif latest_rec.agronomist_status in REVIEWED_STATUSES:
-        # Agronomist-reviewed guidance: safe to share as guidance with the grower.
+        # Advisor-reviewed guidance: safe to share as guidance with the grower.
         lines += [
             "",
             f"Risk level: {latest_rec.risk_level.upper()}",
             f"Next action: {latest_rec.next_action}",
             "",
-            "Agronomist-reviewed guidance "
-            f"({latest_rec.agronomist_status}):",
+            f"{advisor_cap}-reviewed guidance ({latest_rec.agronomist_status}):",
             latest_rec.recommendation_text,
         ]
         if latest_rec.agronomist_comment:
-            lines += ["", f"Agronomist note: {latest_rec.agronomist_comment}"]
+            lines += ["", f"{advisor_cap} note: {latest_rec.agronomist_comment}"]
     else:
         # Pending or rejected -> do NOT present as reviewed guidance.
         status_note = {
-            "pending": "A recommendation is awaiting agronomist review — not yet shareable guidance.",
-            "rejected": "The latest recommendation was rejected by the agronomist; no action advised right now.",
+            "pending": f"A recommendation is awaiting {advisor} review — not yet shareable guidance.",
+            "rejected": f"The latest recommendation was rejected by the {advisor}; no action advised right now.",
         }.get(latest_rec.agronomist_status, f"Status: {latest_rec.agronomist_status}.")
         lines += [
             "",
@@ -262,8 +338,5 @@ def _build_weekly_report_text(
             status_note,
         ]
 
-    lines += [
-        "",
-        "— Decision support only; confirm with agronomist before acting.",
-    ]
+    lines += ["", _report_disclaimer(farm)]
     return "\n".join(lines)

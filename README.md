@@ -9,6 +9,14 @@ This is a narrowed MVP of the broader Lumos precision-farming vision (see `docs/
 See **[MVP_SPEC.md](MVP_SPEC.md)** for the product brief and **[ENGINEERING_GUIDELINES.md](ENGINEERING_GUIDELINES.md)** for
 build guidance, scope boundaries, and the milestone plan.
 
+## U.S. pilot positioning
+**Lumos starts as an AI-assisted pesticide decision and compliance copilot for specialty crops,
+with agronomist/PCA-in-the-loop approval.** First U.S. wedge: **California specialty-crop growers
+(strawberries, greenhouse tomatoes) + their PCAs/agronomists** — fewer unnecessary sprays, fewer
+PHI/REI mistakes, cleaner audit-ready records. We are the **decision/compliance layer before the
+spray** — not a sprayer, robot, drone, or farm OS, and explicitly **not** competing with John
+Deere See & Spray or row-crop hardware. Full strategy: **[US_WEDGE.md](US_WEDGE.md)**.
+
 > ⚠️ The recommendation engine is **decision support, not a prescription**. It never tells a
 > farmer to spray and never claims a definitive diagnosis.
 

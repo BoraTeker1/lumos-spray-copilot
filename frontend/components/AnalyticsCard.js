@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { formatCost } from "@/lib/format";
 
 // Pesticide cost analytics for one farm. `refreshKey` re-fetches when records change.
-export default function AnalyticsCard({ farmId, refreshKey }) {
+export default function AnalyticsCard({ farmId, country, refreshKey }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
@@ -20,8 +20,8 @@ export default function AnalyticsCard({ farmId, refreshKey }) {
   if (!data) return <p className="text-sm text-gray-500">Loading analytics…</p>;
 
   const rows = [
-    { label: "Total pesticide spend (cycle)", value: formatCost(data.total_spend) },
-    { label: "Average cost per spray", value: formatCost(data.average_cost_per_spray) },
+    { label: "Total pesticide spend (cycle)", value: formatCost(data.total_spend, country) },
+    { label: "Average cost per spray", value: formatCost(data.average_cost_per_spray, country) },
     {
       label: "Most-used active ingredient",
       value: data.most_used_active_ingredient
@@ -31,7 +31,7 @@ export default function AnalyticsCard({ farmId, refreshKey }) {
     { label: "Sprays in last 30 days", value: data.sprays_last_30_days },
     {
       label: "Cost of repeated-ingredient sprays",
-      value: formatCost(data.repeated_ingredient_cost),
+      value: formatCost(data.repeated_ingredient_cost, country),
     },
   ];
 
@@ -49,7 +49,7 @@ export default function AnalyticsCard({ farmId, refreshKey }) {
 
       <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <span className="font-medium">
-          {formatCost(data.potential_avoidable_cost)}
+          {formatCost(data.potential_avoidable_cost, country)}
         </span>{" "}
         — potential avoidable cost if one unnecessary spray is prevented (based on your
         average spray cost). This is an estimate, not a guaranteed saving.

@@ -39,6 +39,7 @@ def run() -> None:
         farm1 = models.Farm(
             name="Green Valley Greenhouse",
             location="Antalya, Türkiye",
+            country="TR",
             crop_type="greenhouse_tomato",
             greenhouse_area=4000.0,
             planting_date=today - timedelta(days=70),
@@ -119,6 +120,7 @@ def run() -> None:
         farm2 = models.Farm(
             name="Sunrise Tomato House",
             location="Mersin, Türkiye",
+            country="TR",
             crop_type="greenhouse_tomato",
             greenhouse_area=2500.0,
             planting_date=today - timedelta(days=40),
@@ -155,9 +157,98 @@ def run() -> None:
             )
         )
 
+        # ------------------------------------------------------------------ #
+        # Farm 3 — U.S. SPECIALTY CROP (the YC / U.S. wedge demo farm)        #
+        #   California strawberries: triggers repeated-AI, PHI, REI, and      #
+        #   high-severity scouting all at once. Costs in USD.                 #
+        # ------------------------------------------------------------------ #
+        farm3 = models.Farm(
+            name="Golden Coast Strawberry Ranch",
+            location="Watsonville, California",
+            country="US",
+            crop_type="strawberry",
+            greenhouse_area=18.0,  # 18 acres (US farms store area in acres)
+            planting_date=today - timedelta(days=90),
+            # Harvest in 2 days -> falls inside a recent spray's PHI window.
+            expected_harvest_date=today + timedelta(days=2),
+        )
+        db.add(farm3)
+        db.flush()
+
+        db.add_all([
+            # Captan applied yesterday: PHI 4 -> clears after harvest (PHI risk),
+            # REI 24h -> worker re-entry window may still be active.
+            models.SprayEvent(
+                farm_id=farm3.id,
+                product_name="Captan 80 WDG",
+                active_ingredient="captan",
+                pesticide_class="phthalimide fungicide",
+                target_pest_or_disease="botrytis / gray mold",
+                dose="3 lb/acre",
+                application_date=today - timedelta(days=1),
+                cost=120.0,
+                pre_harvest_interval_days=4,
+                re_entry_interval_hours=24,
+                notes="Preventive cover spray ahead of cool, humid weather.",
+            ),
+            models.SprayEvent(
+                farm_id=farm3.id,
+                product_name="Captan 80 WDG",
+                active_ingredient="captan",
+                pesticide_class="phthalimide fungicide",
+                target_pest_or_disease="botrytis / gray mold",
+                dose="3 lb/acre",
+                application_date=today - timedelta(days=10),
+                cost=120.0,
+                pre_harvest_interval_days=4,
+                re_entry_interval_hours=24,
+                notes="Repeat application.",
+            ),
+            models.SprayEvent(
+                farm_id=farm3.id,
+                product_name="Captan 80 WDG",
+                active_ingredient="captan",
+                pesticide_class="phthalimide fungicide",
+                target_pest_or_disease="botrytis / gray mold",
+                dose="3 lb/acre",
+                application_date=today - timedelta(days=20),
+                cost=120.0,
+                pre_harvest_interval_days=4,
+                re_entry_interval_hours=24,
+                notes="Third captan application — same chemistry, no rotation.",
+            ),
+            # A different product, for cost variety and resistance contrast.
+            models.SprayEvent(
+                farm_id=farm3.id,
+                product_name="Brigade WSB",
+                active_ingredient="bifenthrin",
+                pesticide_class="pyrethroid insecticide",
+                target_pest_or_disease="lygus bug",
+                dose="16 oz/acre",
+                application_date=today - timedelta(days=6),
+                cost=180.0,
+                pre_harvest_interval_days=3,
+                re_entry_interval_hours=12,
+                notes="Lygus pressure on field edges.",
+            ),
+        ])
+
+        # High-severity scouting -> elevated pressure flag.
+        db.add(
+            models.ScoutObservation(
+                farm_id=farm3.id,
+                observation_date=today - timedelta(days=2),
+                crop_stage="fruiting",
+                visible_issue="gray mold (Botrytis) on ripening fruit, spreading",
+                severity_1_to_5=4,
+                notes="Several infected berries per bed in the low, shaded rows.",
+            )
+        )
+
         db.commit()
-        print(f"Seeded HIGH-risk farm: {farm1.name} (id={farm1.id})")
-        print(f"Seeded LOW-risk  farm: {farm2.name} (id={farm2.id})")
+        print(f"Seeded HIGH-risk farm:  {farm1.name} (id={farm1.id}, {farm1.country})")
+        print(f"Seeded LOW-risk  farm:  {farm2.name} (id={farm2.id}, {farm2.country})")
+        print(f"Seeded U.S. wedge farm: {farm3.name} (id={farm3.id}, {farm3.country})")
     finally:
         db.close()
 

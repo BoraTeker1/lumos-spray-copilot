@@ -51,9 +51,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // Analytics & weather
+  // Analytics, weather & compliance
   getAnalytics: (farmId) => request(`/farms/${farmId}/analytics`),
   getWeatherRisk: (farmId) => request(`/farms/${farmId}/weather-risk`),
+  getCompliance: (farmId) => request(`/farms/${farmId}/compliance`),
 
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),

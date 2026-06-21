@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class FarmBase(BaseModel):
     name: str
     location: str | None = None
+    country: str = "US"
     crop_type: str = "greenhouse_tomato"
     greenhouse_area: float | None = None
     planting_date: date | None = None
@@ -21,6 +22,7 @@ class FarmCreate(FarmBase):
 class FarmUpdate(BaseModel):
     name: str | None = None
     location: str | None = None
+    country: str | None = None
     crop_type: str | None = None
     greenhouse_area: float | None = None
     planting_date: date | None = None
@@ -42,6 +44,7 @@ class SprayEventBase(BaseModel):
     application_date: date
     cost: float | None = None
     pre_harvest_interval_days: int | None = None
+    re_entry_interval_hours: int | None = None
     notes: str | None = None
 
 

@@ -3,8 +3,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { formatCost, formatDate } from "@/lib/format";
+import { formatCost, formatDate, formatArea } from "@/lib/format";
 import RiskBadge from "@/components/RiskBadge";
+
+// Small flag + crop hint so US vs. Türkiye farms are visible at a glance.
+function cropIcon(crop) {
+  return (crop || "").toLowerCase().startsWith("straw") ? "🍓" : "🍅";
+}
+function countryFlag(country) {
+  return (country || "").toUpperCase() === "TR" ? "🇹🇷" : "🇺🇸";
+}
 
 // Dashboard: lists all farms with a quick summary (risk + pesticide spend).
 export default function DashboardPage() {
@@ -44,10 +52,10 @@ export default function DashboardPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold">Greenhouse farms</h1>
+        <h1 className="text-2xl font-semibold">Specialty-crop farms</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Log sprays &amp; scouting, then generate a cautious spray-decision
-          recommendation for each greenhouse tomato farm.
+          Pesticide decision &amp; compliance copilot — log sprays &amp; scouting, then generate
+          a cautious recommendation with PHI/REI checks and agronomist/PCA review.
         </p>
       </div>
 
@@ -70,7 +78,7 @@ export default function DashboardPage() {
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h2 className="font-semibold group-hover:text-leaf">
-                  {farm.name}
+                  {countryFlag(farm.country)} {farm.name}
                 </h2>
                 <p className="text-sm text-gray-500">📍 {farm.location}</p>
               </div>
@@ -80,7 +88,7 @@ export default function DashboardPage() {
             <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded bg-gray-50 p-2">
                 <div className="text-xs text-gray-500">Pesticide spend</div>
-                <div className="font-semibold">{formatCost(farm.totalCost)}</div>
+                <div className="font-semibold">{formatCost(farm.totalCost, farm.country)}</div>
               </div>
               <div className="rounded bg-gray-50 p-2">
                 <div className="text-xs text-gray-500">Sprays logged</div>
@@ -89,8 +97,9 @@ export default function DashboardPage() {
             </div>
 
             <p className="mt-3 text-xs text-gray-500">
-              🍅 {farm.greenhouse_area != null && `${farm.greenhouse_area} m² · `}
-              expected harvest {formatDate(farm.expected_harvest_date)}
+              {cropIcon(farm.crop_type)} {farm.crop_type?.replace(/_/g, " ")}
+              {farm.greenhouse_area != null && ` · ${formatArea(farm.greenhouse_area, farm.country)}`}
+              {" · "}harvest {formatDate(farm.expected_harvest_date)}
             </p>
           </Link>
         ))}

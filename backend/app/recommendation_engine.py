@@ -12,6 +12,7 @@ Design notes
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -38,6 +39,8 @@ class RecommendationResult:
     next_action: str = ACTION_CONTINUE_MONITORING
     flags: list[str] = field(default_factory=list)
     recommendation_text: str = ""
+    # Structured rule signals for the compliance card (booleans + a severity number).
+    signals: dict = field(default_factory=dict)
 
 
 def _recent(items, date_attr: str, today: date):
@@ -77,6 +80,7 @@ def generate_recommendation(
     score = 0
     overuse = False
     phi_risk = False
+    rei_risk = False
 
     # --- Rule 1: over-use of the same active ingredient -----------------------------
     recent_sprays = _recent(spray_events, "application_date", today)
@@ -130,6 +134,26 @@ def generate_recommendation(
             f"— consider a close inspection and review options with your agronomist."
         )
 
+    # --- Rule 3b: worker re-entry interval (REI) may still be active -----------------
+    # REI is in hours from application. We have date granularity, so we round the window
+    # up to whole days (cautious) and flag if it clears today or later.
+    for s in spray_events:
+        rei_hours = getattr(s, "re_entry_interval_hours", None)
+        applied = getattr(s, "application_date", None)
+        if rei_hours and applied:
+            rei_days = math.ceil(rei_hours / 24)
+            rei_clears_on = applied + timedelta(days=rei_days)
+            if rei_clears_on >= today:
+                score += 2
+                rei_risk = True
+                product = getattr(s, "product_name", "a recent product") or "a recent product"
+                result.flags.append(
+                    f"Worker re-entry interval may still be active: '{product}' (REI {rei_hours}h, "
+                    f"applied {applied.isoformat()}) may not clear until about "
+                    f"{rei_clears_on.isoformat()}. Review the label and PCA guidance before "
+                    f"entering the treated area."
+                )
+
     # --- Rule 4: weak / no evidence -> inspect or keep monitoring --------------------
     has_concern = bool(result.flags)
     has_recent_scouting = bool(recent_obs)
@@ -153,13 +177,27 @@ def generate_recommendation(
     else:
         result.risk_level = RISK_LOW
 
+    max_recent_severity = max(
+        (getattr(o, "severity_1_to_5", None) or 0 for o in recent_obs), default=0
+    )
+
     # --- Derive the farmer-facing next action from the same rule signals ------------
     result.next_action = _derive_next_action(
         phi_risk=phi_risk,
         overuse=overuse,
         high_sev=bool(high_sev),
+        rei_risk=rei_risk,
         has_recent_scouting=has_recent_scouting,
     )
+
+    # --- Structured signals for the compliance card ---------------------------------
+    result.signals = {
+        "phi_risk": phi_risk,
+        "rei_risk": rei_risk,
+        "repeated_active_ingredient_risk": overuse,
+        "high_severity_scouting": bool(high_sev),
+        "max_recent_severity": max_recent_severity,
+    }
 
     result.recommendation_text = _format_text(
         result.risk_level, result.next_action, result.flags
@@ -168,16 +206,17 @@ def generate_recommendation(
 
 
 def _derive_next_action(
-    *, phi_risk: bool, overuse: bool, high_sev: bool, has_recent_scouting: bool
+    *, phi_risk: bool, overuse: bool, high_sev: bool, rei_risk: bool, has_recent_scouting: bool
 ) -> str:
     """Map rule signals to one cautious, farmer-friendly next action.
 
-    Priority: harvest/residue safety first, then agronomist review for active concerns,
-    then monitoring vs. scouting depending on whether recent scouting data exists.
+    Priority: harvest/residue safety first, then agronomist/PCA review for active concerns
+    (over-use, high-severity pressure, or an active worker re-entry interval), then
+    monitoring vs. scouting depending on whether recent scouting data exists.
     """
     if phi_risk:
         return ACTION_HARVEST_TIMING
-    if overuse or high_sev:
+    if overuse or high_sev or rei_risk:
         return ACTION_REVIEW_AGRONOMIST
     if has_recent_scouting:
         return ACTION_CONTINUE_MONITORING

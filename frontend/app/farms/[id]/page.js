@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { formatCost, formatDate } from "@/lib/format";
+import { formatCost, formatDate, formatArea } from "@/lib/format";
 import SprayEventForm from "@/components/SprayEventForm";
 import ScoutObservationForm from "@/components/ScoutObservationForm";
 import RecommendationPanel from "@/components/RecommendationPanel";
@@ -12,6 +12,7 @@ import RiskBadge from "@/components/RiskBadge";
 import SeverityBadge from "@/components/SeverityBadge";
 import AnalyticsCard from "@/components/AnalyticsCard";
 import WeatherCard from "@/components/WeatherCard";
+import ComplianceCard from "@/components/ComplianceCard";
 
 // Small stat card used in the farm header.
 function Stat({ label, value }) {
@@ -75,13 +76,14 @@ export default function FarmDetailPage({ params }) {
           <RiskBadge level={latestRisk} />
         </div>
         <p className="text-sm text-gray-500">
-          📍 {farm.location} · greenhouse tomato
+          📍 {farm.location} · {farm.crop_type?.replace(/_/g, " ")}
+          {farm.greenhouse_area != null && ` · ${formatArea(farm.greenhouse_area, farm.country)}`}
         </p>
       </div>
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Pesticide spend" value={formatCost(totalCost)} />
+        <Stat label="Pesticide spend" value={formatCost(totalCost, farm.country)} />
         <Stat label="Sprays logged" value={sprays.length} />
         <Stat label="Scouting notes" value={observations.length} />
         <Stat label="Expected harvest" value={formatDate(farm.expected_harvest_date)} />
@@ -96,13 +98,18 @@ export default function FarmDetailPage({ params }) {
         />
       </section>
 
+      {/* Compliance snapshot (PHI / REI / resistance / scouting / weather / review) */}
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <ComplianceCard farmId={farmId} refreshKey={`${sprays.length}-${recommendations[0]?.agronomist_status || ""}`} />
+      </section>
+
       {/* Weather risk + cost analytics */}
       <div className="grid gap-5 md:grid-cols-2">
         <section className="rounded-lg border bg-white p-5 shadow-sm">
           <WeatherCard farmId={farmId} />
         </section>
         <section className="rounded-lg border bg-white p-5 shadow-sm">
-          <AnalyticsCard farmId={farmId} refreshKey={sprays.length} />
+          <AnalyticsCard farmId={farmId} country={farm.country} refreshKey={sprays.length} />
         </section>
       </div>
 
@@ -132,10 +139,12 @@ export default function FarmDetailPage({ params }) {
                     {s.active_ingredient && ` · ${s.active_ingredient}`}
                     {s.pre_harvest_interval_days != null &&
                       ` · PHI ${s.pre_harvest_interval_days}d`}
+                    {s.re_entry_interval_hours != null &&
+                      ` · REI ${s.re_entry_interval_hours}h`}
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-medium text-gray-700">
-                  {formatCost(s.cost)}
+                  {formatCost(s.cost, farm.country)}
                 </div>
               </li>
             ))}

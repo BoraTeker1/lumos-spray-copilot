@@ -19,6 +19,15 @@ a calendar/habit basis rather than on evidence, which wastes money, builds resis
 risks unsellable (residue-rejected) fruit. A simple tool that flags these risks and produces
 an agronomist-reviewable recommendation is immediately useful.
 
+## U.S. pilot positioning
+**Lumos starts as an AI-assisted pesticide decision and compliance copilot for specialty crops,
+with agronomist/PCA-in-the-loop approval.** The first U.S. wedge is **California specialty-crop
+growers (strawberries, greenhouse tomatoes) and their PCAs/agronomists** — helping them reduce
+unnecessary sprays while avoiding PHI/REI mistakes, resistance, residue/audit problems, and
+messy records. We are the **decision/compliance layer before the spray**, *not* a sprayer,
+robot, drone, or farm OS — explicitly **not** competing with John Deere See & Spray or row-crop
+hardware platforms. See **`US_WEDGE.md`** for the full strategy.
+
 ## Target users
 - **Greenhouse tomato growers** — log sprays and scouting, get cautious guidance, share a
   weekly summary.

@@ -12,6 +12,7 @@ const EMPTY = {
   application_date: "",
   cost: "",
   pre_harvest_interval_days: "",
+  re_entry_interval_hours: "",
   notes: "",
 };
 
@@ -37,6 +38,10 @@ export default function SprayEventForm({ farmId, onCreated }) {
           form.pre_harvest_interval_days === ""
             ? null
             : Number(form.pre_harvest_interval_days),
+        re_entry_interval_hours:
+          form.re_entry_interval_hours === ""
+            ? null
+            : Number(form.re_entry_interval_hours),
       });
       setForm(EMPTY);
       onCreated && (await onCreated());
@@ -107,6 +112,13 @@ export default function SprayEventForm({ farmId, onCreated }) {
           placeholder="Pre-harvest interval (days)"
           value={form.pre_harvest_interval_days}
           onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
+        />
+        <input
+          type="number"
+          className={input}
+          placeholder="Re-entry interval (hours)"
+          value={form.re_entry_interval_hours}
+          onChange={(e) => update("re_entry_interval_hours", e.target.value)}
         />
       </div>
       <textarea
