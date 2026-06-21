@@ -13,6 +13,7 @@ class FarmBase(BaseModel):
     greenhouse_area: float | None = None
     planting_date: date | None = None
     expected_harvest_date: date | None = None
+    advisor_involved: bool | None = None
 
 
 class FarmCreate(FarmBase):
@@ -27,6 +28,7 @@ class FarmUpdate(BaseModel):
     greenhouse_area: float | None = None
     planting_date: date | None = None
     expected_harvest_date: date | None = None
+    advisor_involved: bool | None = None
 
 
 class Farm(FarmBase):
@@ -96,3 +98,47 @@ class Recommendation(BaseModel):
     recommendation_text: str
     agronomist_status: str
     agronomist_comment: str | None = None
+
+
+# ---------------------------------------------------------------- Pilot intake
+class PilotSprayEvent(BaseModel):
+    """A spray line in the pilot-farm intake bundle (all fields optional but product)."""
+    product_name: str
+    active_ingredient: str | None = None
+    application_date: date | None = None
+    cost: float | None = None
+    pre_harvest_interval_days: int | None = None
+    re_entry_interval_hours: int | None = None
+
+
+class PilotFarmIntake(BaseModel):
+    """One-shot intake: create a farm plus its last few sprays and a scouting concern."""
+    name: str
+    location: str | None = None
+    country: str = "US"
+    crop_type: str = "strawberry"
+    greenhouse_area: float | None = None
+    expected_harvest_date: date | None = None
+    advisor_involved: bool | None = None
+    spray_events: list[PilotSprayEvent] = Field(default_factory=list)
+    scouting_concern: str | None = None
+    scouting_severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
+
+
+# -------------------------------------------------------------- Pilot feedback
+class PilotFeedbackCreate(BaseModel):
+    person_type: str  # grower / PCA / agronomist / exporter / input_supplier / other
+    crop: str | None = None
+    region: str | None = None
+    current_records_method: str | None = None
+    biggest_pain: str | None = None
+    would_use_real_data: str | None = None  # yes / no / maybe
+    would_pay: str | None = None            # yes / no / maybe
+    requested_pilot: bool | None = None
+    notes: str | None = None
+
+
+class PilotFeedback(PilotFeedbackCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime

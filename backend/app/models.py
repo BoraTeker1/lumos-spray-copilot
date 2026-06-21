@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models for Lumos Spray Copilot."""
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -16,9 +16,11 @@ class Farm(Base):
     # Two-letter market/country code, e.g. "US" or "TR". Drives PCA vs. agronomist wording.
     country: Mapped[str] = mapped_column(String(2), default="US")
     crop_type: Mapped[str] = mapped_column(String(100), default="greenhouse_tomato")
-    greenhouse_area: Mapped[float | None] = mapped_column(Float)  # square metres
+    greenhouse_area: Mapped[float | None] = mapped_column(Float)  # m² (TR) or acres (US)
     planting_date: Mapped[date | None] = mapped_column(Date)
     expected_harvest_date: Mapped[date | None] = mapped_column(Date)
+    # Pilot intake: is a PCA/agronomist already involved with this farm?
+    advisor_involved: Mapped[bool | None] = mapped_column(Boolean)
 
     spray_events: Mapped[list["SprayEvent"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
@@ -79,3 +81,26 @@ class Recommendation(Base):
     agronomist_comment: Mapped[str | None] = mapped_column(Text)
 
     farm: Mapped["Farm"] = relationship(back_populates="recommendations")
+
+
+class PilotFeedback(Base):
+    """Feedback captured after a demo with a grower / PCA / agronomist / etc.
+
+    Not tied to a farm — it records pilot signals and discovery answers.
+    """
+    __tablename__ = "pilot_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # grower / PCA / agronomist / exporter / input_supplier / other
+    person_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    crop: Mapped[str | None] = mapped_column(String(100))
+    region: Mapped[str | None] = mapped_column(String(120))
+    # how they keep spray records today: paper / spreadsheet / whatsapp / software / none / other
+    current_records_method: Mapped[str | None] = mapped_column(String(40))
+    # cost / PHI / REI / residue / resistance / audits / labor / other
+    biggest_pain: Mapped[str | None] = mapped_column(String(40))
+    would_use_real_data: Mapped[str | None] = mapped_column(String(10))  # yes / no / maybe
+    would_pay: Mapped[str | None] = mapped_column(String(10))            # yes / no / maybe
+    requested_pilot: Mapped[bool | None] = mapped_column(Boolean)
+    notes: Mapped[str | None] = mapped_column(Text)

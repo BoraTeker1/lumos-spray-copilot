@@ -14,14 +14,16 @@ export default function RootLayout({ children }) {
         <header className="border-b bg-white shadow-sm">
           <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2">
-              <span className="text-xl">🍅</span>
+              <span className="text-xl">🌱</span>
               <span className="text-lg font-semibold text-leaf">
                 Lumos Spray Copilot
               </span>
             </Link>
-            <span className="hidden sm:inline text-xs text-gray-500">
-              Greenhouse tomato spray decisions · agronomist-in-the-loop
-            </span>
+            <nav className="flex items-center gap-4 text-sm">
+              <Link href="/" className="text-gray-600 hover:text-leaf">Farms</Link>
+              <Link href="/pilot/new" className="text-gray-600 hover:text-leaf">Add pilot farm</Link>
+              <Link href="/feedback" className="text-gray-600 hover:text-leaf">Feedback</Link>
+            </nav>
           </div>
         </header>
 

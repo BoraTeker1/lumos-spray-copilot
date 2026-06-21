@@ -3,10 +3,13 @@
 Routes are intentionally thin: they validate input, call `crud`, and shape responses.
 No auth in v1, but handlers are kept stateless so an auth dependency can be added later.
 """
+import csv
+import io
 from datetime import date
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
@@ -340,3 +343,92 @@ def _build_weekly_report_text(
 
     lines += ["", _report_disclaimer(farm)]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- Pilot intake
+@app.post("/pilot/farms", response_model=schemas.Farm, status_code=201, tags=["pilot"])
+def create_pilot_farm(payload: schemas.PilotFarmIntake, db: Session = Depends(get_db)):
+    """One-shot intake: create a pilot farm plus its last sprays and a scouting concern."""
+    return crud.create_pilot_farm(db, payload)
+
+
+# ------------------------------------------------------------- Pilot feedback
+@app.get("/pilot-feedback", response_model=list[schemas.PilotFeedback], tags=["pilot"])
+def list_pilot_feedback(db: Session = Depends(get_db)):
+    return crud.list_pilot_feedback(db)
+
+
+@app.post(
+    "/pilot-feedback",
+    response_model=schemas.PilotFeedback,
+    status_code=201,
+    tags=["pilot"],
+)
+def create_pilot_feedback(
+    payload: schemas.PilotFeedbackCreate, db: Session = Depends(get_db)
+):
+    return crud.create_pilot_feedback(db, payload)
+
+
+# ------------------------------------------------------------------- Exports
+def _csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    writer.writerows(rows)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/farms/{farm_id}/export/spray-events.csv", tags=["export"])
+def export_spray_events(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    header = [
+        "id", "product_name", "active_ingredient", "pesticide_class",
+        "target_pest_or_disease", "dose", "application_date", "cost",
+        "pre_harvest_interval_days", "re_entry_interval_hours", "notes",
+    ]
+    rows = [
+        [s.id, s.product_name, s.active_ingredient, s.pesticide_class,
+         s.target_pest_or_disease, s.dose, s.application_date, s.cost,
+         s.pre_harvest_interval_days, s.re_entry_interval_hours, s.notes]
+        for s in sprays
+    ]
+    return _csv_response(f"farm{farm_id}_spray_events.csv", header, rows)
+
+
+@app.get("/farms/{farm_id}/export/recommendations.csv", tags=["export"])
+def export_recommendations(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    recs = crud.list_recommendations(db, farm_id)
+    header = [
+        "id", "created_at", "risk_level", "next_action",
+        "agronomist_status", "agronomist_comment", "recommendation_text",
+    ]
+    rows = [
+        [r.id, r.created_at, r.risk_level, r.next_action,
+         r.agronomist_status, r.agronomist_comment, r.recommendation_text]
+        for r in recs
+    ]
+    return _csv_response(f"farm{farm_id}_recommendations.csv", header, rows)
+
+
+@app.get("/export/pilot-feedback.csv", tags=["export"])
+def export_pilot_feedback(db: Session = Depends(get_db)):
+    feedback = crud.list_pilot_feedback(db)
+    header = [
+        "id", "created_at", "person_type", "crop", "region",
+        "current_records_method", "biggest_pain", "would_use_real_data",
+        "would_pay", "requested_pilot", "notes",
+    ]
+    rows = [
+        [f.id, f.created_at, f.person_type, f.crop, f.region,
+         f.current_records_method, f.biggest_pain, f.would_use_real_data,
+         f.would_pay, f.requested_pilot, f.notes]
+        for f in feedback
+    ]
+    return _csv_response("pilot_feedback.csv", header, rows)

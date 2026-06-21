@@ -5,6 +5,8 @@ an auth/tenant filter later in one place.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -147,3 +149,63 @@ def update_recommendation(
     db.commit()
     db.refresh(rec)
     return rec
+
+
+# --------------------------------------------------------------- Pilot intake
+def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm:
+    """Create a farm plus its provided sprays and an optional scouting concern."""
+    farm = models.Farm(
+        name=data.name,
+        location=data.location,
+        country=data.country,
+        crop_type=data.crop_type,
+        greenhouse_area=data.greenhouse_area,
+        expected_harvest_date=data.expected_harvest_date,
+        advisor_involved=data.advisor_involved,
+    )
+    db.add(farm)
+    db.flush()  # assign farm.id
+
+    for sp in data.spray_events:
+        if not sp.product_name:
+            continue
+        db.add(models.SprayEvent(
+            farm_id=farm.id,
+            product_name=sp.product_name,
+            active_ingredient=sp.active_ingredient,
+            application_date=sp.application_date or date.today(),
+            cost=sp.cost,
+            pre_harvest_interval_days=sp.pre_harvest_interval_days,
+            re_entry_interval_hours=sp.re_entry_interval_hours,
+        ))
+
+    if data.scouting_concern:
+        db.add(models.ScoutObservation(
+            farm_id=farm.id,
+            observation_date=date.today(),
+            visible_issue=data.scouting_concern,
+            severity_1_to_5=data.scouting_severity_1_to_5,
+        ))
+
+    db.commit()
+    db.refresh(farm)
+    return farm
+
+
+# ------------------------------------------------------------- Pilot feedback
+def list_pilot_feedback(db: Session) -> list[models.PilotFeedback]:
+    return list(
+        db.scalars(
+            select(models.PilotFeedback).order_by(models.PilotFeedback.created_at.desc())
+        )
+    )
+
+
+def create_pilot_feedback(
+    db: Session, data: schemas.PilotFeedbackCreate
+) -> models.PilotFeedback:
+    fb = models.PilotFeedback(**data.model_dump())
+    db.add(fb)
+    db.commit()
+    db.refresh(fb)
+    return fb

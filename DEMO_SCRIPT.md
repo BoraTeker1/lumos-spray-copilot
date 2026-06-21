@@ -1,12 +1,40 @@
 # Lumos Spray Copilot — Demo Script
 
-Two scripts:
-- **🇺🇸 YC / U.S. demo** (use this for YC and U.S. investors) — Golden Coast Strawberry Ranch.
-- **🇹🇷 Original 3-minute demo** (Türkiye greenhouse tomatoes) — kept below as a contrast.
+Pick the script for your audience:
+- **⚡ 90-second YC demo** — fast, investor-facing (below).
+- **🧑‍🌾 3-minute farmer/PCA demo** — the detailed U.S. walkthrough.
+- **🇹🇷 Türkiye greenhouse tomato demo** — second-market contrast (kept at the bottom).
+- **🎙️ Tough-question answers** — for "is this replacing the agronomist / how is this different
+  from John Deere / does it guarantee reduction?" (at the very bottom).
+
+Setup for all: backend + frontend running, browser at `http://localhost:3000`,
+re-run `python -m app.seed` first for a clean state. The homepage hero has the two demo CTAs.
 
 ---
 
-# 🇺🇸 YC / U.S. DEMO — "the decision/compliance layer before the spray" (~3 min)
+# ⚡ 90-SECOND YC DEMO
+
+> Goal: land the wedge, show one screen of real value, and the human-in-the-loop. Don't click everything.
+
+1. **(15s) One-liner + homepage.** *"Lumos is the pesticide decision and compliance copilot for
+   specialty-crop growers and their PCAs — the decision layer **before** the spray, not a sprayer
+   or a drone."* Point at the homepage hero (who / pain / outcome) and click
+   **🇺🇸 View U.S. strawberry demo**.
+2. **(30s) Compliance snapshot.** Scroll to **🛡️ Compliance snapshot**: PHI **At risk**, REI
+   **May be active**, repeated ingredient **Repeated**, scouting **High**.
+   *"In one screen: residue timing, worker re-entry, resistance — the exact things that get a
+   load rejected or a crew sent into a treated field too early."*
+3. **(25s) Recommendation + PCA approval.** Click **Generate recommendation** → next action
+   **"Harvest timing risk — review before picking."** Hit **Approve** in the PCA review box.
+   *"It never says 'spray now.' A licensed PCA — already required by law in California — approves
+   before anything reaches the grower."*
+4. **(20s) Report + close.** **Weekly report → Copy** (PCA wording, $ costs, PHI/REI warnings,
+   disclaimer). *"Audit-ready, shareable, exportable to CSV. We help them spray less and stay
+   compliant — capital-light software, no hardware."*
+
+---
+
+# 🧑‍🌾 3-MINUTE FARMER / PCA DEMO — "the decision/compliance layer before the spray"
 
 **Positioning line to open with:**
 > "Lumos is an AI pesticide **decision and compliance copilot** for U.S. specialty-crop growers
@@ -156,3 +184,30 @@ clears generated recommendations so the "Generate" + "Approve" clicks look live)
 - Red "is the backend running?" banner → start the backend (Terminal 1) and refresh.
 - Weather is demo data (Antalya hot/humid, Mersin milder) — a live API can be added behind the same `WeatherService`.
 - Totally clean slate → re-run `python -m app.seed` and refresh the browser.
+
+---
+
+# 🎙️ TOUGH-QUESTION ANSWERS
+
+Keep these short, confident, and honest. Each ends by steering back to the wedge.
+
+### "Is this replacing the agronomist / PCA?"
+> "No — the opposite. We make the PCA more effective and keep them in control. In California a
+> licensed PCA legally has to sign pesticide recommendations, so we built the workflow around
+> their approval: nothing reaches the grower as guidance until the PCA approves or edits it. We
+> handle the tedious part — flagging PHI, REI, resistance, and keeping audit-ready records — so
+> the advisor spends time on judgment, not paperwork."
+
+### "How is this different from John Deere (See & Spray)?"
+> "John Deere sells hardware that changes *how* a spray is physically applied, mostly on row
+> crops — cameras, booms, vehicles. We're software that sits *before* the nozzle: should you
+> spray at all, is it compliant on PHI and REI, are you overusing one chemistry, and is it
+> documented for the audit. We're complementary, not competitive — and capital-light, because we
+> ship no hardware. We also focus on specialty crops, which those platforms largely skip."
+
+### "Does this guarantee pesticide reduction?"
+> "No, and we're deliberate about not overclaiming — that's a feature in a compliance product.
+> We don't tell anyone to spray and we don't promise savings. We surface *potential avoidable
+> cost* and flag risk cautiously; the pilot's job is to **measure** real reduction and the PHI/REI
+> near-misses we help avoid. If a grower skips one unnecessary spray and dodges one residue scare
+> a season, the math already works — but we let the data prove it, not the pitch."

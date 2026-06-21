@@ -58,4 +58,17 @@ export const api = {
 
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
+
+  // Pilot feedback & intake
+  listPilotFeedback: () => request("/pilot-feedback"),
+  createPilotFeedback: (data) =>
+    request("/pilot-feedback", { method: "POST", body: JSON.stringify(data) }),
+  createPilotFarm: (data) =>
+    request("/pilot/farms", { method: "POST", body: JSON.stringify(data) }),
+
+  // CSV export URLs (used as direct download links)
+  exportUrl: (path) => `${BASE_URL}${path}`,
 };
+
+// Exposed so components can build absolute download links.
+export const API_BASE_URL = BASE_URL;

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { api } from "@/lib/api";
+import { api, API_BASE_URL } from "@/lib/api";
 import { formatCost, formatDate, formatArea } from "@/lib/format";
 import SprayEventForm from "@/components/SprayEventForm";
 import ScoutObservationForm from "@/components/ScoutObservationForm";
@@ -128,7 +128,17 @@ export default function FarmDetailPage({ params }) {
       {/* History */}
       <div className="grid gap-5 md:grid-cols-2">
         <section className="rounded-lg border bg-white p-5 shadow-sm">
-          <h2 className="mb-3 font-semibold">Spray history</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold">Spray history</h2>
+            <div className="flex gap-2 text-xs">
+              <a href={`${API_BASE_URL}/farms/${farmId}/export/spray-events.csv`} className="rounded border px-2 py-1 hover:border-leaf">
+                ⬇ Sprays CSV
+              </a>
+              <a href={`${API_BASE_URL}/farms/${farmId}/export/recommendations.csv`} className="rounded border px-2 py-1 hover:border-leaf">
+                ⬇ Recs CSV
+              </a>
+            </div>
+          </div>
           <ul className="space-y-2 text-sm">
             {sprays.map((s) => (
               <li key={s.id} className="flex items-start justify-between gap-2 border-b pb-2 last:border-0">
