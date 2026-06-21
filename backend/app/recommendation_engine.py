@@ -24,11 +24,18 @@ RISK_LOW = "low"
 RISK_MODERATE = "moderate"
 RISK_ELEVATED = "elevated"
 
+# Farmer-facing "next action" strings (the canonical set surfaced in the UI/report).
+ACTION_HARVEST_TIMING = "Harvest timing risk — review before picking"
+ACTION_REVIEW_AGRONOMIST = "Review with agronomist before spraying"
+ACTION_INSPECT_FIRST = "Inspect first"
+ACTION_CONTINUE_MONITORING = "Low risk — continue monitoring"
+
 
 @dataclass
 class RecommendationResult:
     """Plain result object the route layer can persist to a Recommendation row."""
     risk_level: str = RISK_LOW
+    next_action: str = ACTION_CONTINUE_MONITORING
     flags: list[str] = field(default_factory=list)
     recommendation_text: str = ""
 
@@ -68,6 +75,8 @@ def generate_recommendation(
 
     result = RecommendationResult()
     score = 0
+    overuse = False
+    phi_risk = False
 
     # --- Rule 1: over-use of the same active ingredient -----------------------------
     recent_sprays = _recent(spray_events, "application_date", today)
@@ -79,6 +88,7 @@ def generate_recommendation(
     for ai, count in ingredient_counts.items():
         if count > SAME_INGREDIENT_MAX:
             score += 2
+            overuse = True
             result.flags.append(
                 f"The active ingredient '{ai}' appears {count} times in the last "
                 f"{RECENT_WINDOW_DAYS} days. Frequent repeat use can raise resistance and "
@@ -95,6 +105,7 @@ def generate_recommendation(
                 phi_clears_on = applied + timedelta(days=phi)
                 if harvest < phi_clears_on:
                     score += 3
+                    phi_risk = True
                     product = getattr(s, "product_name", "a recent product") or "a recent product"
                     result.flags.append(
                         f"Pre-harvest interval risk: '{product}' (PHI {phi} days, applied "
@@ -119,18 +130,18 @@ def generate_recommendation(
             f"— consider a close inspection and review options with your agronomist."
         )
 
-    # --- Rule 4: weak / no evidence -> inspect first --------------------------------
-    has_any_signal = bool(result.flags)
-    weak_only = bool(recent_obs) and not high_sev and not has_any_signal
-    if not has_any_signal:
-        if weak_only or recent_obs:
+    # --- Rule 4: weak / no evidence -> inspect or keep monitoring --------------------
+    has_concern = bool(result.flags)
+    has_recent_scouting = bool(recent_obs)
+    if not has_concern:
+        if has_recent_scouting:
             result.flags.append(
-                "Evidence is currently weak or low-severity. Consider inspecting/scouting the "
-                "crop first before any spray decision, rather than spraying preventively."
+                "Recent scouting shows only low-severity issues. Continue monitoring and "
+                "inspect again before any spray decision, rather than spraying preventively."
             )
         else:
             result.flags.append(
-                "No recent sprays or scouting observations on record. Consider scouting the crop "
+                "No recent scouting observations on record. Consider scouting the crop "
                 "first to gather evidence before any spray decision."
             )
 
@@ -142,11 +153,38 @@ def generate_recommendation(
     else:
         result.risk_level = RISK_LOW
 
-    result.recommendation_text = _format_text(result.risk_level, result.flags)
+    # --- Derive the farmer-facing next action from the same rule signals ------------
+    result.next_action = _derive_next_action(
+        phi_risk=phi_risk,
+        overuse=overuse,
+        high_sev=bool(high_sev),
+        has_recent_scouting=has_recent_scouting,
+    )
+
+    result.recommendation_text = _format_text(
+        result.risk_level, result.next_action, result.flags
+    )
     return result
 
 
-def _format_text(risk_level: str, flags: list[str]) -> str:
+def _derive_next_action(
+    *, phi_risk: bool, overuse: bool, high_sev: bool, has_recent_scouting: bool
+) -> str:
+    """Map rule signals to one cautious, farmer-friendly next action.
+
+    Priority: harvest/residue safety first, then agronomist review for active concerns,
+    then monitoring vs. scouting depending on whether recent scouting data exists.
+    """
+    if phi_risk:
+        return ACTION_HARVEST_TIMING
+    if overuse or high_sev:
+        return ACTION_REVIEW_AGRONOMIST
+    if has_recent_scouting:
+        return ACTION_CONTINUE_MONITORING
+    return ACTION_INSPECT_FIRST
+
+
+def _format_text(risk_level: str, next_action: str, flags: list[str]) -> str:
     """Compose the cautious, agronomist-in-the-loop recommendation text."""
     header = {
         RISK_ELEVATED: "Risk appears elevated. Please review the points below with your agronomist.",
@@ -154,7 +192,7 @@ def _format_text(risk_level: str, flags: list[str]) -> str:
         RISK_LOW: "No elevated risk detected from current records.",
     }[risk_level]
 
-    lines = [header, ""]
+    lines = [header, f"Suggested next action: {next_action}.", ""]
     for i, flag in enumerate(flags, start=1):
         lines.append(f"{i}. {flag}")
     lines.append("")

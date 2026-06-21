@@ -129,6 +129,7 @@ def generate_and_store_recommendation(
     rec = models.Recommendation(
         farm_id=farm.id,
         risk_level=result.risk_level,
+        next_action=result.next_action,
         recommendation_text=result.recommendation_text,
         agronomist_status="pending",
     )

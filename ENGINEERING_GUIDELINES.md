@@ -58,10 +58,13 @@ Recommendations are **decision support, not prescriptions**. Always:
   dependency can be injected later.
 
 ## Milestone plan
-- **Milestone 1 (current):** models, CRUD, recommendation engine + endpoint, seed data, engine
+- **Milestone 1 (done):** models, CRUD, recommendation engine + endpoint, seed data, engine
   unit tests, and the basic frontend listed above.
-- **Milestone 2:** agronomist review UI (approve/edit/reject), cost analytics, MRL reference data.
-- **Milestone 3:** LLM weekly summaries, photo upload, basic auth.
+- **Milestone 2 (done):** agronomist review workflow (approve/edit/reject + comment, report
+  gated to approved/edited), farmer-facing next-action card, pesticide cost analytics
+  (`app/analytics.py`), lightweight weather-risk module (`app/weather.py` with a swappable
+  `WeatherService` + mock demo data), and an upgraded WhatsApp weekly report.
+- **Milestone 3 (later):** LLM weekly summaries, photo upload, basic auth, live weather API.
 
 ## How to run (quick reference)
 - Backend: `cd backend && python -m venv .venv && source .venv/bin/activate &&

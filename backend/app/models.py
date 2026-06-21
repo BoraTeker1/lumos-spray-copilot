@@ -69,6 +69,7 @@ class Recommendation(Base):
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
+    next_action: Mapped[str] = mapped_column(String(120), default="")
     recommendation_text: Mapped[str] = mapped_column(Text, nullable=False)
     # agronomist workflow: pending / approved / rejected / edited
     agronomist_status: Mapped[str] = mapped_column(String(20), default="pending")

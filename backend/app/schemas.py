@@ -89,6 +89,7 @@ class Recommendation(BaseModel):
     farm_id: int
     created_at: datetime
     risk_level: str
+    next_action: str
     recommendation_text: str
     agronomist_status: str
     agronomist_comment: str | None = None

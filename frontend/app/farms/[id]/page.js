@@ -10,6 +10,8 @@ import RecommendationPanel from "@/components/RecommendationPanel";
 import WeeklyReport from "@/components/WeeklyReport";
 import RiskBadge from "@/components/RiskBadge";
 import SeverityBadge from "@/components/SeverityBadge";
+import AnalyticsCard from "@/components/AnalyticsCard";
+import WeatherCard from "@/components/WeatherCard";
 
 // Small stat card used in the farm header.
 function Stat({ label, value }) {
@@ -90,9 +92,19 @@ export default function FarmDetailPage({ params }) {
         <RecommendationPanel
           farmId={farmId}
           latest={recommendations[0] || null}
-          onGenerated={load}
+          onChanged={load}
         />
       </section>
+
+      {/* Weather risk + cost analytics */}
+      <div className="grid gap-5 md:grid-cols-2">
+        <section className="rounded-lg border bg-white p-5 shadow-sm">
+          <WeatherCard farmId={farmId} />
+        </section>
+        <section className="rounded-lg border bg-white p-5 shadow-sm">
+          <AnalyticsCard farmId={farmId} refreshKey={sprays.length} />
+        </section>
+      </div>
 
       {/* Data-entry forms */}
       <div className="grid gap-5 md:grid-cols-2">

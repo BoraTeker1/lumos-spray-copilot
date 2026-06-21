@@ -1,10 +1,12 @@
-# Lumos Spray Copilot — 2-Minute Demo Script
+# Lumos Spray Copilot — 3-Minute Demo Script (Milestone 2)
 
 A tight, repeatable script for demoing the MVP to a farmer, agronomist, or investor.
+Milestone 2 adds: **next-action card, agronomist review workflow, pesticide cost analytics,
+weather-risk card, and an upgraded WhatsApp report.**
 
 ---
 
-## 0. Before you start (1 min, off-camera)
+## 0. Before you start (off-camera)
 
 Open two terminals.
 
@@ -22,59 +24,72 @@ cd frontend
 npm run dev                        # http://localhost:3000
 ```
 
-Open **http://localhost:3000** in your browser. Re-run `python -m app.seed` any time you
-want a fresh demo (it clears generated recommendations so the "Generate" click looks live).
+Open **http://localhost:3000**. Re-run `python -m app.seed` any time for a fresh demo (it
+clears generated recommendations so the "Generate" + "Approve" clicks look live).
 
-**One-line pitch to open with:**
+**One-line pitch:**
 > "Lumos Spray Copilot helps greenhouse tomato growers spray less, avoid residue problems at
-> harvest, and keep an agronomist in the loop — without ever telling them they *must* spray."
+> harvest, and keep an agronomist in control — it never tells a farmer they *must* spray."
 
 ---
 
-## The 2-minute flow
+## The 3-minute flow
 
-### 1. Dashboard — "Here are two greenhouses" (15s)
-- Point at the two farm cards. Each shows **pesticide spend** and a **risk badge**.
-- Say: *"Green Valley is a real-world mess; Sunrise is healthy. Let's look at the problem farm."*
+### 1. Dashboard — two greenhouses (15s)
+- Two farm cards, each with a **risk badge** and **pesticide spend**.
+- *"Green Valley is the problem farm; Sunrise is healthy. Let's open the problem farm."*
 
-### 2. Open **Green Valley Greenhouse** → the high-risk story (45s)
-- Top stats: **₺205 pesticide spend, 4 sprays, harvest in 3 days.**
+### 2. Green Valley → cost analytics (30s)
+- Top **stat cards**: ₺205 spend, 4 sprays, harvest in 3 days.
+- Scroll to **💰 Pesticide cost analytics**:
+  - Total spend ₺205, avg ₺51.25/spray, most-used **mancozeb ×3**, 4 sprays in 30 days.
+  - **Cost of repeated-ingredient sprays: ₺90.**
+  - Amber line: *"₺51.25 — potential avoidable cost if one unnecessary spray is prevented."*
+- *"We're not promising savings — we're showing where money is leaking and what's avoidable."*
+
+### 3. Weather risk (20s)
+- **🌦️ Weather risk** card: Antalya is **elevated** — *warm + humid → fungal disease pressure; inspect leaves before spraying.*
+- *"Greenhouse disease tracks weather. Warm and humid is exactly when growers over-spray out of fear — we flag it cautiously instead."*
+
+### 4. Generate recommendation → next action (30s)
 - Click **"Generate recommendation."**
-- A red **Elevated risk** panel appears with three cautious, specific flags:
-  1. **Repeated active ingredient** — "mancozeb used 3 times in 30 days → resistance/residue risk, consider rotating."
-  2. **Pre-harvest interval risk** — "a spray's PHI clears *after* the harvest date → residue risk, review harvest timing."
-  3. **High-severity scouting** — "severity 4/5 leaf spots → pressure elevated, inspect closely."
-- Key line to say: *"Notice it never says 'spray now.' It flags risks and routes the decision to the agronomist."*
+- A bold **Suggested next action** banner appears: **🌡️ "Harvest timing risk — review before picking."**
+- Below it, a red **Elevated risk** panel with three cautious flags: repeated ingredient, PHI/residue, high-severity scouting.
+- *"One glance tells the farmer the single next step. And notice — it never says 'spray now.'"*
 
-### 3. Show the data behind it (15s)
-- Scroll to **Spray history** (the three mancozeb entries + cost) and **Scouting history**
-  (the severity 4/5 badge). *"Everything is evidence-based — no black box."*
+### 5. Agronomist review (35s)
+- In the **Agronomist review** box: type a comment like *"Agree — hold harvest 3 days, rotate chemistry."*
+- Click **Approve** (or **Edit recommendation** to tweak the wording, then save → status becomes *edited*).
+- Status badge flips **pending → approved**.
+- *"Nothing reaches the grower as guidance until a human agronomist signs off. That's the trust layer."*
 
-### 4. Weekly report → WhatsApp (20s)
-- Scroll to **Weekly report** → click **"Build report"** → click **"Copy for WhatsApp."**
-- Say: *"Growers live in WhatsApp. One tap gives the agronomist a clean weekly summary to paste into a chat."*
+### 6. Build the WhatsApp report (30s)
+- Scroll to **Weekly report** → **Build report** → **Copy for WhatsApp.**
+- Point out it now bundles: weather risk, spend, sprays this cycle, risk level, **next action**,
+  the **agronomist-approved** guidance + comment, and the safety disclaimer.
+- *"Only approved or edited guidance shows up here — pending drafts never leak to the farmer."*
 
-### 5. Contrast with the healthy farm (15s)
-- Go **Back to farms → Sunrise Tomato House → Generate recommendation.**
-- A green **Low risk** panel says: *"Evidence is weak — inspect/scout first rather than spraying preventively."*
-- Say: *"Same engine, opposite advice. It actively discourages unnecessary spraying — that's the whole point."*
-
-### 6. (Optional) Live data entry (10s)
-- On either farm, use **"Log scouting note"** with severity 5, then **Re-generate** — the risk updates instantly.
+### 7. Contrast with the healthy farm (20s)
+- **Back to farms → Sunrise Tomato House → Generate recommendation.**
+- Green **Low risk** panel, next action **✅ "Low risk — continue monitoring."** Weather is calmer too.
+- *"Same engine, opposite advice — it actively discourages unnecessary spraying. That's the whole point."*
 
 ---
 
 ## Closing line
-> "So in one screen: less pesticide, no residue surprises at harvest, full cost visibility, and
-> an agronomist who stays in control. No hardware, no black-box AI — just a clear, cautious copilot."
+> "So in three minutes: less pesticide, no residue surprises at harvest, full cost visibility,
+> weather-aware caution, and an agronomist who stays in control — delivered straight to WhatsApp.
+> No hardware, no black-box AI."
 
 ---
 
 ## What to emphasise / avoid
-- ✅ Emphasise: **cautious language**, **agronomist-in-the-loop**, **PHI/residue safety**, **cost tracking**, **WhatsApp-native report**.
-- 🚫 Avoid promising: financing, marketplace, IoT/drones/sensors, or "automatic" disease diagnosis — none of that is in this MVP, by design.
+- ✅ Emphasise: **next action**, **agronomist-in-the-loop approval**, **cost analytics + avoidable cost**, **weather disease-pressure**, **WhatsApp-native report**, **cautious language**.
+- 🚫 Avoid promising: financing, marketplace, IoT/drones/sensors, payments, auth, or "automatic" disease diagnosis — none of that is in this MVP, by design.
 
 ## If something looks off
-- Cards show "Not yet assessed" / empty risk → that's expected until you click **Generate**.
-- Page shows a red "is the backend running?" banner → start the backend (Terminal 1) and refresh.
-- Want a totally clean slate → re-run `python -m app.seed` and refresh the browser.
+- Cards show "Not yet assessed" → expected until you click **Generate recommendation**.
+- Report shows "awaiting agronomist review" → expected until you **Approve/Edit** the recommendation.
+- Red "is the backend running?" banner → start the backend (Terminal 1) and refresh.
+- Weather is demo data (Antalya hot/humid, Mersin milder) — a live API can be added behind the same `WeatherService`.
+- Totally clean slate → re-run `python -m app.seed` and refresh the browser.

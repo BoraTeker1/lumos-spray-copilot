@@ -45,6 +45,15 @@ export const api = {
   listRecommendations: (farmId) => request(`/farms/${farmId}/recommendations`),
   generateRecommendation: (farmId) =>
     request(`/farms/${farmId}/recommendations`, { method: "POST" }),
+  updateRecommendation: (recId, data) =>
+    request(`/recommendations/${recId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  // Analytics & weather
+  getAnalytics: (farmId) => request(`/farms/${farmId}/analytics`),
+  getWeatherRisk: (farmId) => request(`/farms/${farmId}/weather-risk`),
 
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),

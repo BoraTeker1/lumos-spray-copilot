@@ -10,13 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
+from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
+from app.weather import default_weather_service
 
 app = FastAPI(
     title="Lumos Spray Copilot API",
     description="AI-assisted, agronomist-in-the-loop spray-decision support for "
     "greenhouse tomato growers. Decision support only — never a prescription.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # Allow the local Next.js dev server to call the API.
@@ -176,6 +178,23 @@ def patch_recommendation(
     return crud.update_recommendation(db, rec, payload)
 
 
+# ----------------------------------------------------------------- Analytics
+@app.get("/farms/{farm_id}/analytics", tags=["analytics"])
+def farm_analytics(farm_id: int, db: Session = Depends(get_db)):
+    """Pesticide cost analytics for one farm's current crop cycle."""
+    _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    return compute_cost_analytics(sprays)
+
+
+# ------------------------------------------------------------------- Weather
+@app.get("/farms/{farm_id}/weather-risk", tags=["weather"])
+def farm_weather_risk(farm_id: int, db: Session = Depends(get_db)):
+    """Lightweight weather-based disease-pressure assessment for the farm location."""
+    farm = _require_farm(db, farm_id)
+    return default_weather_service.get_weather_risk(farm.location)
+
+
 # -------------------------------------------------------------- Weekly report
 @app.get("/farms/{farm_id}/weekly-report", tags=["reports"])
 def weekly_report(farm_id: int, db: Session = Depends(get_db)):
@@ -185,31 +204,66 @@ def weekly_report(farm_id: int, db: Session = Depends(get_db)):
     observations = crud.list_scout_observations(db, farm_id)
     recs = crud.list_recommendations(db, farm_id)
     latest_rec = recs[0] if recs else None
+    analytics = compute_cost_analytics(sprays)
+    weather = default_weather_service.get_weather_risk(farm.location)
 
-    total_cost = sum(s.cost or 0 for s in sprays)
-    text = _build_weekly_report_text(farm, sprays, observations, latest_rec, total_cost)
+    text = _build_weekly_report_text(
+        farm, len(sprays), len(observations), latest_rec, analytics, weather
+    )
     return {"text": text}
 
 
-def _build_weekly_report_text(farm, sprays, observations, latest_rec, total_cost) -> str:
+# Statuses that count as agronomist-reviewed guidance for the farmer-facing report.
+REVIEWED_STATUSES = ("approved", "edited")
+
+
+def _build_weekly_report_text(
+    farm, spray_count, observation_count, latest_rec, analytics, weather
+) -> str:
     lines = [
         f"🍅 Lumos Weekly Report — {farm.name}",
         f"Date: {date.today().isoformat()}",
         "",
-        f"Sprays on record: {len(sprays)}  |  Pesticide spend: ₺{total_cost:.2f}",
-        f"Scouting notes on record: {len(observations)}",
+        f"Weather risk: {weather['risk_level'].upper()} — {weather['summary']}",
+        "",
+        f"Pesticide spend (cycle): ₺{analytics['total_spend']:.2f}  |  "
+        f"Sprays this cycle: {spray_count}  |  Last 30 days: {analytics['sprays_last_30_days']}",
+        f"Scouting notes on record: {observation_count}",
     ]
-    if latest_rec:
+
+    if latest_rec is None:
         lines += [
             "",
-            f"Latest recommendation (risk: {latest_rec.risk_level}, "
-            f"status: {latest_rec.agronomist_status}):",
+            "No recommendation generated yet — open the farm to generate one.",
+        ]
+    elif latest_rec.agronomist_status in REVIEWED_STATUSES:
+        # Agronomist-reviewed guidance: safe to share as guidance with the grower.
+        lines += [
+            "",
+            f"Risk level: {latest_rec.risk_level.upper()}",
+            f"Next action: {latest_rec.next_action}",
+            "",
+            "Agronomist-reviewed guidance "
+            f"({latest_rec.agronomist_status}):",
             latest_rec.recommendation_text,
         ]
+        if latest_rec.agronomist_comment:
+            lines += ["", f"Agronomist note: {latest_rec.agronomist_comment}"]
     else:
-        lines += ["", "No recommendation generated yet — open the farm to generate one."]
+        # Pending or rejected -> do NOT present as reviewed guidance.
+        status_note = {
+            "pending": "A recommendation is awaiting agronomist review — not yet shareable guidance.",
+            "rejected": "The latest recommendation was rejected by the agronomist; no action advised right now.",
+        }.get(latest_rec.agronomist_status, f"Status: {latest_rec.agronomist_status}.")
+        lines += [
+            "",
+            f"Risk level (draft): {latest_rec.risk_level.upper()}",
+            f"Suggested next action (draft): {latest_rec.next_action}",
+            status_note,
+        ]
+
     lines += [
         "",
-        "— Cautious decision support only. Confirm with your agronomist before acting.",
+        "— Decision support only; confirm with agronomist before acting.",
     ]
     return "\n".join(lines)

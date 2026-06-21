@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import RiskBadge from "./RiskBadge";
+import NextActionCard from "./NextActionCard";
+import AgronomistReview from "./AgronomistReview";
 import { formatDate } from "@/lib/format";
 
 const BOX_STYLES = {
@@ -11,8 +13,9 @@ const BOX_STYLES = {
   elevated: "border-red-200 bg-red-50",
 };
 
-// Shows the latest recommendation and lets the user generate a fresh one.
-export default function RecommendationPanel({ farmId, latest, onGenerated }) {
+// Shows the latest recommendation (next action + risk + agronomist review) and
+// lets the user generate a fresh one.
+export default function RecommendationPanel({ farmId, latest, onChanged }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
 
@@ -21,7 +24,7 @@ export default function RecommendationPanel({ farmId, latest, onGenerated }) {
     setError(null);
     try {
       await api.generateRecommendation(farmId);
-      onGenerated && (await onGenerated());
+      onChanged && (await onChanged());
     } catch (err) {
       setError(err.message);
     } finally {
@@ -47,20 +50,23 @@ export default function RecommendationPanel({ farmId, latest, onGenerated }) {
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       {latest ? (
-        <div className={`rounded-lg border p-4 ${boxCls}`}>
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <RiskBadge level={latest.risk_level} />
-            <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs text-gray-600">
-              status: {latest.agronomist_status}
-            </span>
-            <span className="text-xs text-gray-500">
-              generated {formatDate(latest.created_at)}
-            </span>
+        <>
+          <NextActionCard action={latest.next_action} />
+
+          <div className={`rounded-lg border p-4 ${boxCls}`}>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <RiskBadge level={latest.risk_level} />
+              <span className="text-xs text-gray-500">
+                generated {formatDate(latest.created_at)}
+              </span>
+            </div>
+            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-gray-800">
+              {latest.recommendation_text}
+            </pre>
+
+            <AgronomistReview recommendation={latest} onUpdated={onChanged} />
           </div>
-          <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-gray-800">
-            {latest.recommendation_text}
-          </pre>
-        </div>
+        </>
       ) : (
         <div className="rounded-lg border border-dashed bg-gray-50 p-4 text-sm text-gray-500">
           No recommendation yet. Click{" "}
