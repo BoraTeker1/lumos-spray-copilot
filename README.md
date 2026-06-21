@@ -64,14 +64,74 @@ The frontend talks to `http://localhost:8000` by default. To point elsewhere, co
 `.env.local.example` to `.env.local` and set `NEXT_PUBLIC_API_URL`.
 
 ## What you can do in the demo
-1. See the two seeded farms on the dashboard.
-2. Open **Green Valley Greenhouse** → generate a recommendation → it flags **elevated** risk
-   (PHI risk + repeated active ingredient + high-severity scouting).
-3. Open **Sunrise Tomato House** → recommendation suggests **inspect first** (weak evidence).
-4. Add a spray event or scouting note and regenerate to see the recommendation change.
-5. Build the **weekly report** and copy it for WhatsApp.
+1. See the two seeded farms on the dashboard (risk badge + pesticide spend per farm).
+2. Open **Green Valley Greenhouse** → see **cost analytics** and **weather risk** → generate a
+   recommendation → **Elevated** risk with next action *"Harvest timing risk — review before
+   picking"* (PHI risk + repeated active ingredient + high-severity scouting).
+3. As an agronomist, **Approve / Edit / Reject** the recommendation and add a comment.
+4. Build the **weekly report** and **Copy for WhatsApp** (only approved/edited guidance is shared).
+5. Open **Sunrise Tomato House** → **Low risk — continue monitoring** (the healthy contrast).
+
+Full timed walkthrough: see **[DEMO_SCRIPT.md](DEMO_SCRIPT.md)**. What the seed data means:
+**[DEMO_DATA.md](DEMO_DATA.md)**. Interviewing growers: **[CUSTOMER_DISCOVERY.md](CUSTOMER_DISCOVERY.md)**.
 
 ## Scope (MVP)
-**In:** spray & scouting logging, rule-based cautious recommendations, cost tracking, weekly
-report. **Out (deliberately):** financing, marketplace, IoT/drones, autonomous "must spray"
-advice, definitive disease diagnosis, authentication. See `ENGINEERING_GUIDELINES.md`.
+**In:** spray & scouting logging, rule-based cautious recommendations, next-action guidance,
+agronomist review workflow, pesticide cost analytics, lightweight weather-risk, weekly report.
+**Out (deliberately):** financing, marketplace, payments, IoT/drones, computer vision,
+complex AI, autonomous "must spray" advice, definitive disease diagnosis, authentication.
+See `ENGINEERING_GUIDELINES.md`.
+
+---
+
+## 🚜 Pilot Mode checklist
+
+A short operational checklist for running Lumos in front of, or with, a real grower.
+
+### Run it locally
+```bash
+# Terminal 1 — backend
+cd backend && source .venv/bin/activate
+python -m app.seed                 # only the first time / when you want demo data
+uvicorn app.main:app --reload      # http://localhost:8000
+
+# Terminal 2 — frontend
+cd frontend && npm run dev          # http://localhost:3000
+```
+Tests (run before any demo): `cd backend && source .venv/bin/activate && pytest` → expect **41 passing**.
+
+### Reset demo data (clean slate)
+```bash
+cd backend && source .venv/bin/activate
+python -m app.seed                 # wipes farms/sprays/scouting/recommendations, reloads the 2 demo farms
+```
+If the schema ever looks stale, delete the DB and re-seed: `rm -f backend/lumos.db && python -m app.seed`.
+Tip: re-seed **right before** a live demo so your "Generate" and "Approve" clicks look fresh.
+
+### Add a REAL farm (during a pilot)
+1. Dashboard is read-only for creation in the UI; create the farm via the API (or `/docs`):
+   ```bash
+   curl -X POST localhost:8000/farms -H 'Content-Type: application/json' \
+     -d '{"name":"<grower name>","location":"Antalya, Türkiye",
+          "greenhouse_area":3000,"expected_harvest_date":"2026-08-15"}'
+   ```
+   (Interactive form: open **http://localhost:8000/docs** → `POST /farms`.)
+2. Open the farm in the UI and log their **real sprays** ("Log spray event") and
+   **scouting notes** — enter active ingredient, cost, and pre-harvest interval honestly.
+3. Click **Generate recommendation**, then have the **agronomist approve/edit** it.
+4. ⚠️ This is a **local single-user demo build** — no auth, SQLite only. Don't store data you
+   wouldn't want on that laptop; treat real grower data as confidential.
+
+### Export / copy the weekly report
+- In the farm page: **Weekly report → Build report → Copy for WhatsApp**, then paste into chat.
+- Or fetch the text directly:
+  ```bash
+  curl -s localhost:8000/farms/1/weekly-report | python3 -c "import sys,json;print(json.load(sys.stdin)['text'])"
+  ```
+
+### What NOT to claim during demos
+- ❌ It does **not** diagnose disease — it flags pressure cautiously.
+- ❌ It does **not** tell anyone to spray — it never says "must spray."
+- ❌ No **guaranteed savings** — only *"potential avoidable cost if one unnecessary spray is prevented."*
+- ❌ No financing, marketplace, payments, drones, IoT, sensors, or AI vision — none of that exists here.
+- ✅ Always frame it as **cautious decision support with an agronomist in the loop.**
