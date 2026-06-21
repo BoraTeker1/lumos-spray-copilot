@@ -1,0 +1,8 @@
+# Lower bounds chosen for broad Python-version compatibility (incl. 3.13).
+# Pip will resolve to the newest compatible wheels.
+fastapi>=0.111
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0.30
+pydantic>=2.8
+httpx>=0.27
+pytest>=8.2
