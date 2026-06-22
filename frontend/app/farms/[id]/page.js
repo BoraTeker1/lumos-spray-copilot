@@ -13,6 +13,7 @@ import SeverityBadge from "@/components/SeverityBadge";
 import AnalyticsCard from "@/components/AnalyticsCard";
 import WeatherCard from "@/components/WeatherCard";
 import ComplianceCard from "@/components/ComplianceCard";
+import PilotEvidenceCard from "@/components/PilotEvidenceCard";
 
 // Small stat card used in the farm header.
 function Stat({ label, value }) {
@@ -101,6 +102,15 @@ export default function FarmDetailPage({ params }) {
       {/* Compliance snapshot (PHI / REI / resistance / scouting / weather / review) */}
       <section className="rounded-lg border bg-white p-5 shadow-sm">
         <ComplianceCard farmId={farmId} refreshKey={`${sprays.length}-${recommendations[0]?.agronomist_status || ""}`} />
+      </section>
+
+      {/* Pilot evidence + audit packet */}
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <PilotEvidenceCard
+          farmId={farmId}
+          country={farm.country}
+          refreshKey={`${sprays.length}-${observations.length}-${recommendations.length}-${recommendations[0]?.agronomist_status || ""}`}
+        />
       </section>
 
       {/* Weather risk + cost analytics */}

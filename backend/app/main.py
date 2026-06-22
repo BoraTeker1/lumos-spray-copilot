@@ -5,7 +5,7 @@ No auth in v1, but handlers are kept stateless so an auth dependency can be adde
 """
 import csv
 import io
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app import crud, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
+from app.pilot_evidence import build_pilot_evidence
 from app.recommendation_engine import generate_recommendation
 from app.weather import default_weather_service
 
@@ -343,6 +344,136 @@ def _build_weekly_report_text(
 
     lines += ["", _report_disclaimer(farm)]
     return "\n".join(lines)
+
+
+# --------------------------------------------------- Pilot evidence + audit packet
+@app.get("/farms/{farm_id}/pilot-evidence", tags=["pilot"])
+def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
+    """Descriptive pilot-evidence summary for the farm (metrics + investor talking points).
+
+    Aggregates existing records only — it is decision support evidence, never a claim of
+    guaranteed pesticide reduction (see the `limitations` block in the response).
+    """
+    farm = _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    observations = crud.list_scout_observations(db, farm_id)
+    recs = crud.list_recommendations(db, farm_id)
+    analytics = compute_cost_analytics(sprays)
+    weather = default_weather_service.get_weather_risk(farm.location)
+    return build_pilot_evidence(
+        farm,
+        sprays,
+        observations,
+        recs,
+        analytics,
+        weather["risk_level"],
+        advisor_label=_advisor_label(farm),
+    )
+
+
+AUDIT_DISCLAIMER = (
+    "Decision support only. Final pesticide decisions must be made by the grower/PCA "
+    "according to the product label and applicable regulations."
+)
+
+
+@app.get("/farms/{farm_id}/audit-packet", tags=["reports"])
+def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
+    """Consolidated, audit-ready record for one farm (profile + logs + flags + review trail)."""
+    farm = _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    observations = crud.list_scout_observations(db, farm_id)
+    recs = crud.list_recommendations(db, farm_id)
+    analytics = compute_cost_analytics(sprays)
+    weather = default_weather_service.get_weather_risk(farm.location)
+    result = generate_recommendation(farm, sprays, observations)
+    latest_rec = recs[0] if recs else None
+    report_text = _build_weekly_report_text(
+        farm, len(sprays), len(observations), latest_rec, analytics, weather, result.signals
+    )
+
+    return {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "advisor_label": _advisor_label(farm),
+        "farm_profile": {
+            "id": farm.id,
+            "name": farm.name,
+            "location": farm.location,
+            "country": farm.country,
+            "crop_type": farm.crop_type,
+            "area": farm.greenhouse_area,
+            "planting_date": _iso(farm.planting_date),
+            "expected_harvest_date": _iso(farm.expected_harvest_date),
+            "advisor_involved": farm.advisor_involved,
+        },
+        "spray_events": [
+            {
+                "id": s.id,
+                "product_name": s.product_name,
+                "active_ingredient": s.active_ingredient,
+                "pesticide_class": s.pesticide_class,
+                "target_pest_or_disease": s.target_pest_or_disease,
+                "dose": s.dose,
+                "application_date": _iso(s.application_date),
+                "cost": s.cost,
+                "pre_harvest_interval_days": s.pre_harvest_interval_days,
+                "re_entry_interval_hours": s.re_entry_interval_hours,
+                "notes": s.notes,
+            }
+            for s in sprays
+        ],
+        "scout_observations": [
+            {
+                "id": o.id,
+                "observation_date": _iso(o.observation_date),
+                "crop_stage": o.crop_stage,
+                "visible_issue": o.visible_issue,
+                "severity_1_to_5": o.severity_1_to_5,
+                "notes": o.notes,
+            }
+            for o in observations
+        ],
+        "recommendations": [
+            {
+                "id": r.id,
+                "created_at": _iso(r.created_at),
+                "risk_level": r.risk_level,
+                "next_action": r.next_action,
+                "agronomist_status": r.agronomist_status,
+                "agronomist_comment": r.agronomist_comment,
+                "recommendation_text": r.recommendation_text,
+            }
+            for r in recs
+        ],
+        "compliance_flags": {
+            "risk_level": result.risk_level,
+            "next_action": result.next_action,
+            "phi_risk": result.signals.get("phi_risk", False),
+            "rei_risk": result.signals.get("rei_risk", False),
+            "high_severity_scouting": result.signals.get("high_severity_scouting", False),
+            "max_recent_severity": result.signals.get("max_recent_severity", 0),
+            "weather_risk_level": weather["risk_level"],
+        },
+        "resistance_flags": {
+            "repeated_active_ingredient_risk": result.signals.get(
+                "repeated_active_ingredient_risk", False
+            ),
+            "most_used_active_ingredient": analytics["most_used_active_ingredient"],
+            "most_used_count": analytics["most_used_count"],
+        },
+        "review_status": {
+            "latest_status": latest_rec.agronomist_status if latest_rec else "none",
+            "latest_comment": latest_rec.agronomist_comment if latest_rec else None,
+            "all_statuses": [r.agronomist_status for r in recs],
+        },
+        "weekly_report_text": report_text,
+        "disclaimer": AUDIT_DISCLAIMER,
+    }
+
+
+def _iso(value):
+    """ISO-format a date/datetime, passing through None."""
+    return value.isoformat() if value is not None else None
 
 
 # ---------------------------------------------------------------- Pilot intake

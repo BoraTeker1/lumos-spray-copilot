@@ -1,0 +1,115 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { api, API_BASE_URL } from "@/lib/api";
+import { formatCost } from "@/lib/format";
+
+// One labelled metric tile.
+function Metric({ label, value, hint }) {
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="mt-0.5 text-lg font-semibold">{value}</div>
+      {hint && <div className="text-[11px] text-gray-400">{hint}</div>}
+    </div>
+  );
+}
+
+// Pilot Evidence: a descriptive snapshot of what the pilot has logged so far, plus a
+// link/copy for the consolidated audit packet. Framed as evidence, not a guarantee.
+// `refreshKey` re-fetches when records change.
+export default function PilotEvidenceCard({ farmId, country, refreshKey }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    api
+      .getPilotEvidence(farmId)
+      .then(setData)
+      .catch((err) => setError(err.message));
+  }, [farmId, refreshKey]);
+
+  async function copyPacket() {
+    try {
+      const packet = await api.getAuditPacket(farmId);
+      await navigator.clipboard.writeText(JSON.stringify(packet, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Could not copy the audit packet — open it with the link instead.");
+    }
+  }
+
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!data) return <p className="text-sm text-gray-500">Loading pilot evidence…</p>;
+
+  const reviewSummary = `${data.pca_approved_count} approved · ${data.pca_pending_count} pending · ${data.pca_changes_requested_count} changes`;
+  const avoidable =
+    data.estimated_avoidable_cost_usd != null
+      ? formatCost(data.estimated_avoidable_cost_usd, country)
+      : "—";
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-semibold">📋 Pilot evidence</h2>
+        <div className="flex gap-2 text-xs">
+          <a
+            href={`${API_BASE_URL}/farms/${farmId}/audit-packet`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded border px-2 py-1 hover:border-leaf"
+          >
+            ↗ View audit packet
+          </a>
+          <button
+            onClick={copyPacket}
+            className="rounded border px-2 py-1 hover:border-leaf"
+          >
+            {copied ? "Copied ✓" : "⧉ Copy audit packet"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Metric label="Sprays logged" value={data.total_spray_events} />
+        <Metric
+          label="Scouting-backed sprays"
+          value={`${data.sprays_with_recent_scouting_count} / ${data.total_spray_events}`}
+          hint={`${data.sprays_without_recent_scouting_count} scouting-light`}
+        />
+        <Metric label="PHI / REI flags" value={data.phi_rei_risk_flags_count} />
+        <Metric
+          label="Resistance flags"
+          value={data.resistance_or_repeated_active_ingredient_flags_count}
+          hint="repeated active ingredient"
+        />
+        <Metric label="PCA review" value={reviewSummary} />
+        <Metric
+          label="Avoidable cost (est.)"
+          value={avoidable}
+          hint="per prevented spray"
+        />
+      </div>
+
+      {data.evidence_summary?.length > 0 && (
+        <ul className="mt-3 space-y-1 text-sm text-gray-700">
+          {data.evidence_summary.map((line, i) => (
+            <li key={i} className="flex gap-2">
+              <span className="text-leaf">•</span>
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        This is <strong>pilot evidence</strong> — a descriptive record of what was logged. It is
+        <strong> not</strong> a guarantee of pesticide reduction, not a compliance/legal
+        guarantee, and never an autonomous spray instruction. Real reduction must be measured
+        against a baseline over a full crop cycle with the grower/PCA.
+      </p>
+    </div>
+  );
+}

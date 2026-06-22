@@ -59,6 +59,10 @@ export const api = {
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
 
+  // Pilot evidence & audit packet
+  getPilotEvidence: (farmId) => request(`/farms/${farmId}/pilot-evidence`),
+  getAuditPacket: (farmId) => request(`/farms/${farmId}/audit-packet`),
+
   // Pilot feedback & intake
   listPilotFeedback: () => request("/pilot-feedback"),
   createPilotFeedback: (data) =>
