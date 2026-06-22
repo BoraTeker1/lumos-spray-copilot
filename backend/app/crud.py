@@ -192,6 +192,80 @@ def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm
     return farm
 
 
+# --------------------------------------------------- Concierge pilot import
+def import_pilot_data(
+    db: Session, farm: models.Farm, data: schemas.PilotImport
+) -> models.PilotImportBatch:
+    """Create a PilotImportBatch plus its spray + scouting records from a concierge import.
+
+    Every created record is tagged with the import's `data_source`/`data_confidence` and linked
+    to the batch via `pilot_import_batch_id`, so the audit trail is complete. Returns the batch
+    (with its counts populated).
+    """
+    batch = models.PilotImportBatch(
+        farm_id=farm.id,
+        source_label=data.source_label,
+        imported_by=data.imported_by,
+        notes=data.notes,
+        data_source=data.data_source,
+        data_confidence=data.data_confidence,
+    )
+    db.add(batch)
+    db.flush()  # assign batch.id so records can reference it
+
+    spray_count = 0
+    for sp in data.spray_events:
+        if not sp.product_name:
+            continue
+        db.add(models.SprayEvent(
+            farm_id=farm.id,
+            product_name=sp.product_name,
+            active_ingredient=sp.active_ingredient,
+            target_pest_or_disease=sp.target_pest_or_disease,
+            application_date=sp.application_date or date.today(),
+            cost=sp.cost,
+            pre_harvest_interval_days=sp.pre_harvest_interval_days,
+            re_entry_interval_hours=sp.re_entry_interval_hours,
+            notes=sp.notes,
+            data_source=data.data_source,
+            data_confidence=data.data_confidence,
+            pilot_import_batch_id=batch.id,
+        ))
+        spray_count += 1
+
+    scouting_count = 0
+    for ob in data.scouting_observations:
+        db.add(models.ScoutObservation(
+            farm_id=farm.id,
+            observation_date=ob.observation_date or date.today(),
+            crop_stage=ob.crop_stage,
+            visible_issue=ob.visible_issue,
+            severity_1_to_5=ob.severity_1_to_5,
+            notes=ob.notes,
+            data_source=data.data_source,
+            data_confidence=data.data_confidence,
+            pilot_import_batch_id=batch.id,
+        ))
+        scouting_count += 1
+
+    batch.spray_event_count = spray_count
+    batch.scouting_observation_count = scouting_count
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def list_pilot_import_batches(db: Session, farm_id: int) -> list[models.PilotImportBatch]:
+    """Newest-first import batches for a farm (for the case study + audit packet)."""
+    return list(
+        db.scalars(
+            select(models.PilotImportBatch)
+            .where(models.PilotImportBatch.farm_id == farm_id)
+            .order_by(models.PilotImportBatch.created_at.desc(), models.PilotImportBatch.id.desc())
+        )
+    )
+
+
 # ------------------------------------------------------------- Pilot feedback
 def list_pilot_feedback(db: Session) -> list[models.PilotFeedback]:
     return list(

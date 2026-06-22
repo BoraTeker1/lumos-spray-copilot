@@ -19,6 +19,13 @@ from app.recommendation_engine import RECENT_WINDOW_DAYS, generate_recommendatio
 # Recommendation statuses that represent a recorded advisor decision (an audit trail entry).
 _REVIEWED_STATUSES = ("approved", "edited", "rejected")
 
+# Shared honest-framing disclaimer for the concierge case study.
+CASE_STUDY_DISCLAIMER = (
+    "Decision support only — not a guarantee of pesticide reduction and not a compliance or "
+    "legal guarantee. Confirm PHI, REI, and label requirements with a licensed advisor and the "
+    "product label."
+)
+
 
 def _all_record_dates(spray_events, scout_observations) -> list[date]:
     dates: list[date] = []
@@ -161,6 +168,117 @@ def build_pilot_evidence(
         "investor_summary": investor_summary,
         "limitations": limitations,
     }
+
+
+def _iso_dt(value):
+    """ISO-format a datetime/date, passing through None."""
+    return value.isoformat() if value is not None else None
+
+
+def build_pilot_case_study(
+    evidence: dict,
+    data_sources: list[str],
+    data_confidences: list[str],
+    advisor_label: str = "agronomist",
+    import_batches=None,
+) -> dict:
+    """Shape a concise, one-page case study from an already-built pilot-evidence dict.
+
+    `data_sources` / `data_confidences` are the distinct provenance tags found on the
+    farm's records (e.g. ["spreadsheet", "whatsapp"]). `import_batches` is an optional
+    newest-first list of concierge import batches (duck-typed). Reuses the evidence metrics
+    rather than recomputing them.
+    """
+    pilot_data_source = data_sources or ["demo"]
+    surfaced = _what_lumos_surfaced(evidence, advisor_label)
+    unknown = _what_is_still_unknown(evidence, data_confidences)
+
+    import_batches = list(import_batches or [])
+    latest = import_batches[0] if import_batches else None
+
+    return {
+        "farm_name": evidence["farm_name"],
+        "crop": evidence["crop"],
+        "location": evidence["location"],
+        "pilot_data_source": pilot_data_source,
+        "data_confidence_levels": data_confidences or ["simulated"],
+        "pilot_import_batches_count": len(import_batches),
+        "latest_import_source_label": getattr(latest, "source_label", None),
+        "latest_imported_by": getattr(latest, "imported_by", None),
+        "latest_import_notes": getattr(latest, "notes", None),
+        "latest_imported_at": _iso_dt(getattr(latest, "created_at", None)),
+        "pilot_period_start": evidence["pilot_period_start"],
+        "pilot_period_end": evidence["pilot_period_end"],
+        "spray_events_analyzed": evidence["total_spray_events"],
+        "scouting_observations_analyzed": evidence["total_scouting_observations"],
+        "scouting_backed_sprays": evidence["sprays_with_recent_scouting_count"],
+        "sprays_without_recent_scouting": evidence["sprays_without_recent_scouting_count"],
+        "phi_rei_flags": evidence["phi_rei_risk_flags_count"],
+        "resistance_flags": evidence["resistance_or_repeated_active_ingredient_flags_count"],
+        "weather_risk_flags": evidence["weather_risk_flags_count"],
+        "pca_review_status_summary": (
+            f"{evidence['pca_approved_count']} approved · "
+            f"{evidence['pca_pending_count']} pending · "
+            f"{evidence['pca_changes_requested_count']} changes requested "
+            f"(of {evidence['total_recommendations']} recommendation(s))"
+        ),
+        "estimated_avoidable_cost_usd": evidence["estimated_avoidable_cost_usd"],
+        "what_lumos_helped_surface": surfaced,
+        "what_is_still_unknown": unknown,
+        "quote_placeholder": (
+            "\"<Add a short grower/PCA quote from your pilot call here — e.g. what surprised "
+            "them or what they'd want next.>\""
+        ),
+        "disclaimer": CASE_STUDY_DISCLAIMER,
+    }
+
+
+def _what_lumos_surfaced(evidence: dict, advisor_label: str) -> list[str]:
+    out: list[str] = []
+    if evidence["phi_rei_risk_flags_count"]:
+        out.append(
+            f"Surfaced {evidence['phi_rei_risk_flags_count']} PHI/REI timing risk(s) before "
+            f"harvest or worker re-entry."
+        )
+    if evidence["resistance_or_repeated_active_ingredient_flags_count"]:
+        out.append("Flagged repeated active-ingredient (resistance) pressure for rotation.")
+    if evidence["sprays_without_recent_scouting_count"]:
+        out.append(
+            f"Identified {evidence['sprays_without_recent_scouting_count']} spray(s) made "
+            f"without recent scouting evidence — candidate calendar-habit sprays."
+        )
+    if evidence["weather_risk_flags_count"]:
+        out.append("Flagged weather-driven disease pressure where over-spraying often happens.")
+    if evidence["total_agronomist_reviews"]:
+        out.append(
+            f"Recorded {evidence['total_agronomist_reviews']} {advisor_label} review "
+            f"decision(s) as an audit trail."
+        )
+    if not out:
+        out.append(
+            f"Captured a clean baseline of {evidence['total_spray_events']} spray(s) and "
+            f"{evidence['total_scouting_observations']} scouting note(s) for {advisor_label} review."
+        )
+    return out
+
+
+def _what_is_still_unknown(evidence: dict, data_confidences: list[str]) -> list[str]:
+    out = [
+        "Pre-Lumos baseline spray count is not captured yet, so actual reduction cannot be "
+        "computed — this is a starting picture, not a before/after result.",
+    ]
+    if any(c in ("simulated", "incomplete") for c in data_confidences):
+        out.append(
+            "Some records are simulated or incomplete — treat the numbers as illustrative until "
+            "confirmed with the grower/PCA."
+        )
+    if not evidence["total_recommendations"]:
+        out.append("No recommendation has been reviewed yet — the approval trail is empty.")
+    if evidence["estimated_avoidable_cost_usd"] is None:
+        out.append("Avoidable cost not estimated (no USD cost data, or a non-USD farm).")
+    # Carry through the evidence-level limitations so the one-pager stays honest.
+    out.extend(evidence.get("limitations", [])[:2])
+    return out
 
 
 def _evidence_summary(

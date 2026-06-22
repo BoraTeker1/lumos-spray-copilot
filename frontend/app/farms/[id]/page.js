@@ -14,6 +14,7 @@ import AnalyticsCard from "@/components/AnalyticsCard";
 import WeatherCard from "@/components/WeatherCard";
 import ComplianceCard from "@/components/ComplianceCard";
 import PilotEvidenceCard from "@/components/PilotEvidenceCard";
+import ConciergePilotCard from "@/components/ConciergePilotCard";
 
 // Small stat card used in the farm header.
 function Stat({ label, value }) {
@@ -111,6 +112,11 @@ export default function FarmDetailPage({ params }) {
           country={farm.country}
           refreshKey={`${sprays.length}-${observations.length}-${recommendations.length}-${recommendations[0]?.agronomist_status || ""}`}
         />
+      </section>
+
+      {/* Concierge pilot: manual import + one-page case study */}
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <ConciergePilotCard farmId={farmId} country={farm.country} onImported={load} />
       </section>
 
       {/* Weather risk + cost analytics */}

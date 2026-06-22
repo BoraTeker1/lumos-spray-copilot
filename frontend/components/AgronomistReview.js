@@ -42,7 +42,7 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
   return (
     <div className="mt-4 rounded-md border bg-white/60 p-3">
       <div className="mb-2 flex items-center gap-2">
-        <span className="text-sm font-medium">Agronomist review</span>
+        <span className="text-sm font-medium">PCA / agronomist review</span>
         <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusCls}`}>
           {status}
         </span>
@@ -80,7 +80,7 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
           <textarea
             className="w-full rounded border p-2 text-sm"
             rows={2}
-            placeholder="Add an agronomist comment (optional)…"
+            placeholder="Add a PCA / agronomist comment (optional)…"
             value={comment}
             onChange={(e) => setComment(e.target.value)}
           />

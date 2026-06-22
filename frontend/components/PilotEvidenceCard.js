@@ -87,9 +87,9 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey }) {
         />
         <Metric label="PCA review" value={reviewSummary} />
         <Metric
-          label="Avoidable cost (est.)"
+          label="Potential avoidable cost"
           value={avoidable}
-          hint="per prevented spray"
+          hint="if one spray is avoided"
         />
       </div>
 

@@ -14,6 +14,17 @@ function countryFlag(country) {
   return (country || "").toUpperCase() === "TR" ? "🇹🇷" : "🇺🇸";
 }
 
+// Demo ordering: lead with the U.S. strawberry wedge demo, keep Türkiye tomato farms
+// secondary. Rank = (Türkiye after U.S.) + (non-strawberry after strawberry), id as tiebreaker.
+function sortForDemo(farms) {
+  const rank = (f) => {
+    const isTR = (f.country || "").toUpperCase() === "TR";
+    const isStrawberry = (f.crop_type || "").toLowerCase().startsWith("straw");
+    return (isTR ? 10 : 0) + (isStrawberry ? 0 : 1);
+  };
+  return [...farms].sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+}
+
 // Dashboard: lists all farms with a quick summary (risk + pesticide spend).
 export default function DashboardPage() {
   const [farms, setFarms] = useState([]);
@@ -39,7 +50,7 @@ export default function DashboardPage() {
             };
           })
         );
-        setFarms(enriched);
+        setFarms(sortForDemo(enriched));
       } catch (err) {
         setError(err.message);
       } finally {
@@ -64,15 +75,16 @@ export default function DashboardPage() {
           For <span className="font-medium">specialty-crop growers and their PCAs / agronomists</span>.
           Spray decisions are risky and records are messy — pre-harvest intervals, worker
           re-entry intervals, repeated active ingredients, residue limits, and buyer audits.
-          Lumos helps you <span className="font-medium">spray less, avoid PHI/REI mistakes, and
-          keep clean, PCA-reviewed records</span> — the decision layer <em>before</em> the spray.
+          Lumos helps you <span className="font-medium">catch avoidable spray decisions, avoid
+          PHI/REI mistakes, and keep clean, PCA-reviewed records</span> — the decision layer
+          <em>before</em> the spray.
         </p>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           {[
             ["👩‍🌾 Who it's for", "Specialty-crop growers + PCAs / agronomists"],
             ["⚠️ The pain", "PHI / REI risk, repeated chemistry, messy records, audits"],
-            ["✅ The outcome", "Fewer sprays, cleaner compliance, a clear PCA review trail"],
+            ["✅ The outcome", "Fewer unnecessary sprays, cleaner compliance, a clear PCA review trail"],
           ].map(([h, b]) => (
             <div key={h} className="rounded-lg bg-gray-50 p-3">
               <div className="text-sm font-semibold">{h}</div>
@@ -117,7 +129,7 @@ export default function DashboardPage() {
         <h2 className="text-xl font-semibold">Farms</h2>
         <p className="mt-1 text-sm text-gray-500">
           Open a farm to log sprays &amp; scouting, run compliance checks, and generate a
-          cautious recommendation with PHI/REI checks and agronomist/PCA review.
+          cautious recommendation with PHI/REI checks and PCA / agronomist review.
         </p>
       </div>
 

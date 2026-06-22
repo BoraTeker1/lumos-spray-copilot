@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import crud, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
-from app.pilot_evidence import build_pilot_evidence
+from app.pilot_evidence import build_pilot_case_study, build_pilot_evidence
 from app.recommendation_engine import generate_recommendation
 from app.weather import default_weather_service
 
@@ -371,6 +371,58 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
     )
 
 
+@app.post("/farms/{farm_id}/pilot-import", status_code=201, tags=["pilot"])
+def pilot_import(
+    farm_id: int, payload: schemas.PilotImport, db: Session = Depends(get_db)
+):
+    """Manual/concierge import of pilot data collected from a call/WhatsApp/spreadsheet/email.
+
+    Not an automated integration — a human transcribes the records. Every imported row is
+    tagged with the provided data_source + data_confidence for honest downstream metrics.
+    """
+    farm = _require_farm(db, farm_id)
+    batch = crud.import_pilot_data(db, farm, payload)
+    return {
+        "farm_id": farm.id,
+        "batch_id": batch.id,
+        "source_label": batch.source_label,
+        "data_source": batch.data_source,
+        "data_confidence": batch.data_confidence,
+        "imported_by": batch.imported_by,
+        "notes": batch.notes,
+        "imported_spray_events": batch.spray_event_count,
+        "imported_scouting_observations": batch.scouting_observation_count,
+        "imported_at": _iso(batch.created_at),
+    }
+
+
+def _distinct_provenance(records, attr: str) -> list[str]:
+    """Sorted distinct, non-empty provenance values across a record list."""
+    return sorted({getattr(r, attr) for r in records if getattr(r, attr, None)})
+
+
+@app.get("/farms/{farm_id}/pilot-case-study", tags=["pilot"])
+def farm_pilot_case_study(farm_id: int, db: Session = Depends(get_db)):
+    """One-page concierge-pilot case study (reuses the pilot-evidence aggregation)."""
+    farm = _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    observations = crud.list_scout_observations(db, farm_id)
+    recs = crud.list_recommendations(db, farm_id)
+    analytics = compute_cost_analytics(sprays)
+    weather = default_weather_service.get_weather_risk(farm.location)
+    advisor = _advisor_label(farm)
+    evidence = build_pilot_evidence(
+        farm, sprays, observations, recs, analytics, weather["risk_level"], advisor_label=advisor
+    )
+    records = list(sprays) + list(observations)
+    data_sources = _distinct_provenance(records, "data_source")
+    data_confidences = _distinct_provenance(records, "data_confidence")
+    batches = crud.list_pilot_import_batches(db, farm_id)
+    return build_pilot_case_study(
+        evidence, data_sources, data_confidences, advisor_label=advisor, import_batches=batches
+    )
+
+
 AUDIT_DISCLAIMER = (
     "Decision support only. Final pesticide decisions must be made by the grower/PCA "
     "according to the product label and applicable regulations."
@@ -387,6 +439,7 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
     analytics = compute_cost_analytics(sprays)
     weather = default_weather_service.get_weather_risk(farm.location)
     result = generate_recommendation(farm, sprays, observations)
+    batches = crud.list_pilot_import_batches(db, farm_id)
     latest_rec = recs[0] if recs else None
     report_text = _build_weekly_report_text(
         farm, len(sprays), len(observations), latest_rec, analytics, weather, result.signals
@@ -419,6 +472,8 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
                 "pre_harvest_interval_days": s.pre_harvest_interval_days,
                 "re_entry_interval_hours": s.re_entry_interval_hours,
                 "notes": s.notes,
+                "data_source": s.data_source,
+                "data_confidence": s.data_confidence,
             }
             for s in sprays
         ],
@@ -430,6 +485,8 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
                 "visible_issue": o.visible_issue,
                 "severity_1_to_5": o.severity_1_to_5,
                 "notes": o.notes,
+                "data_source": o.data_source,
+                "data_confidence": o.data_confidence,
             }
             for o in observations
         ],
@@ -466,6 +523,20 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
             "latest_comment": latest_rec.agronomist_comment if latest_rec else None,
             "all_statuses": [r.agronomist_status for r in recs],
         },
+        "pilot_import_batches": [
+            {
+                "id": b.id,
+                "source_label": b.source_label,
+                "imported_by": b.imported_by,
+                "notes": b.notes,
+                "data_source": b.data_source,
+                "data_confidence": b.data_confidence,
+                "spray_event_count": b.spray_event_count,
+                "scouting_observation_count": b.scouting_observation_count,
+                "imported_at": _iso(b.created_at),
+            }
+            for b in batches
+        ],
         "weekly_report_text": report_text,
         "disclaimer": AUDIT_DISCLAIMER,
     }

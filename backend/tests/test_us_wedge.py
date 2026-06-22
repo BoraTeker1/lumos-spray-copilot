@@ -27,6 +27,23 @@ def spray(ai="captan", days_ago=1, phi=None, rei=None, product="Captan 80 WDG", 
     )
 
 
+# ------------------------------------------------ Harvest-date consistency
+def test_phi_flag_text_uses_the_farm_expected_harvest_date():
+    # The header and the recommendation both read farm.expected_harvest_date, so the date
+    # shown in the header must appear verbatim in the PHI flag text. Deterministic guard.
+    harvest_farm = farm(harvest_offset_days=2)        # harvest = TODAY + 2
+    sprays = [spray(days_ago=1, phi=4)]               # clears TODAY + 3 -> after harvest
+    result = generate_recommendation(harvest_farm, sprays, [], today=TODAY)
+    assert result.signals["phi_risk"] is True
+    expected = harvest_farm.expected_harvest_date.isoformat()
+    assert expected == (TODAY + timedelta(days=2)).isoformat()
+    assert expected in result.recommendation_text
+    # And no autonomous / overclaiming language sneaks into the generated text.
+    lowered = result.recommendation_text.lower()
+    assert "must spray" not in lowered
+    assert "guaranteed" not in lowered and "always reduces" not in lowered
+
+
 # ----------------------------------------------------------------- REI logic
 def test_active_rei_is_flagged():
     # REI 24h applied today -> clears ~tomorrow -> still active today.

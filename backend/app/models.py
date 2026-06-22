@@ -31,6 +31,9 @@ class Farm(Base):
     recommendations: Mapped[list["Recommendation"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
+    pilot_import_batches: Mapped[list["PilotImportBatch"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
 
 
 class SprayEvent(Base):
@@ -48,6 +51,15 @@ class SprayEvent(Base):
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
     re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Concierge-pilot provenance: where this record came from and how trustworthy it is.
+    # data_source: demo / grower_interview / spreadsheet / whatsapp / email / manual_entry / unknown
+    data_source: Mapped[str | None] = mapped_column(String(40), default="demo")
+    # data_confidence: simulated / user_provided / pca_reviewed / incomplete
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="simulated")
+    # Links the record to the concierge import batch it arrived in (audit trail).
+    pilot_import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pilot_import_batches.id")
+    )
 
     farm: Mapped["Farm"] = relationship(back_populates="spray_events")
 
@@ -63,6 +75,12 @@ class ScoutObservation(Base):
     severity_1_to_5: Mapped[int | None] = mapped_column(Integer)
     image_url_optional: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(Text)
+    # Concierge-pilot provenance (see SprayEvent for the allowed values).
+    data_source: Mapped[str | None] = mapped_column(String(40), default="demo")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="simulated")
+    pilot_import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pilot_import_batches.id")
+    )
 
     farm: Mapped["Farm"] = relationship(back_populates="scout_observations")
 
@@ -104,3 +122,25 @@ class PilotFeedback(Base):
     would_pay: Mapped[str | None] = mapped_column(String(10))            # yes / no / maybe
     requested_pilot: Mapped[bool | None] = mapped_column(Boolean)
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class PilotImportBatch(Base):
+    """Audit-trail record of one concierge import (a batch of manually transcribed records).
+
+    Persists the human provenance (who/where/notes) that the imported SprayEvent /
+    ScoutObservation rows link back to via `pilot_import_batch_id`.
+    """
+    __tablename__ = "pilot_import_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+    source_label: Mapped[str] = mapped_column(String(200), nullable=False)
+    imported_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40))
+    data_confidence: Mapped[str | None] = mapped_column(String(40))
+    spray_event_count: Mapped[int] = mapped_column(Integer, default=0)
+    scouting_observation_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    farm: Mapped["Farm"] = relationship(back_populates="pilot_import_batches")

@@ -51,7 +51,7 @@ export default function AnalyticsCard({ farmId, country, refreshKey }) {
         <span className="font-medium">
           {formatCost(data.potential_avoidable_cost, country)}
         </span>{" "}
-        — potential avoidable cost if one unnecessary spray is prevented (based on your
+        — potential avoidable cost if one unnecessary spray is avoided (based on your
         average spray cost). This is an estimate, not a guaranteed saving.
       </div>
     </div>

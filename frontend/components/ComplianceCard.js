@@ -82,8 +82,8 @@ export default function ComplianceCard({ farmId, refreshKey }) {
         </div>
       </div>
       <p className="mt-2 text-xs text-gray-500">
-        Cautious decision support. Confirm PHI, REI, and label requirements with a licensed{" "}
-        {data.advisor_label} and the product label.
+        Decision support only. Always confirm PHI, REI, rates, crop use, and restrictions with
+        the product label and a licensed {data.advisor_label}.
       </p>
     </div>
   );

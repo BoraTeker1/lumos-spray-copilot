@@ -17,19 +17,16 @@ Idempotent: clears existing rows first so re-running gives a clean demo state.
 from datetime import date, timedelta
 
 from app import models
-from app.database import SessionLocal, init_db
+from app.database import Base, SessionLocal, engine, init_db
 
 
 def run() -> None:
+    # Recreate the schema so a clean demo always matches the current models
+    # (there is no migration tooling; the SQLite file is disposable demo data).
+    Base.metadata.drop_all(bind=engine)
     init_db()
     db = SessionLocal()
     try:
-        # Reset for a clean, repeatable demo.
-        db.query(models.Recommendation).delete()
-        db.query(models.SprayEvent).delete()
-        db.query(models.ScoutObservation).delete()
-        db.query(models.Farm).delete()
-        db.commit()
 
         today = date.today()
 

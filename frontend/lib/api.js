@@ -63,6 +63,14 @@ export const api = {
   getPilotEvidence: (farmId) => request(`/farms/${farmId}/pilot-evidence`),
   getAuditPacket: (farmId) => request(`/farms/${farmId}/audit-packet`),
 
+  // Concierge pilot mode
+  importPilotData: (farmId, data) =>
+    request(`/farms/${farmId}/pilot-import`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getPilotCaseStudy: (farmId) => request(`/farms/${farmId}/pilot-case-study`),
+
   // Pilot feedback & intake
   listPilotFeedback: () => request("/pilot-feedback"),
   createPilotFeedback: (data) =>

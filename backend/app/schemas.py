@@ -1,7 +1,14 @@
 """Pydantic schemas (request/response contracts), separate from ORM models."""
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
+DataSource = Literal[
+    "demo", "grower_interview", "spreadsheet", "whatsapp", "email", "manual_entry", "unknown"
+]
+DataConfidence = Literal["simulated", "user_provided", "pca_reviewed", "incomplete"]
 
 
 # --------------------------------------------------------------------------- Farm
@@ -48,6 +55,9 @@ class SprayEventBase(BaseModel):
     pre_harvest_interval_days: int | None = None
     re_entry_interval_hours: int | None = None
     notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    pilot_import_batch_id: int | None = None
 
 
 class SprayEventCreate(SprayEventBase):
@@ -68,6 +78,9 @@ class ScoutObservationBase(BaseModel):
     severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
     image_url_optional: str | None = None
     notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    pilot_import_batch_id: int | None = None
 
 
 class ScoutObservationCreate(ScoutObservationBase):
@@ -123,6 +136,42 @@ class PilotFarmIntake(BaseModel):
     spray_events: list[PilotSprayEvent] = Field(default_factory=list)
     scouting_concern: str | None = None
     scouting_severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
+
+
+# ----------------------------------------------------- Concierge pilot import
+class PilotImportSpray(BaseModel):
+    """A spray line in a concierge import (manually transcribed from a call/sheet/chat)."""
+    product_name: str
+    active_ingredient: str | None = None
+    application_date: date | None = None
+    cost: float | None = None
+    pre_harvest_interval_days: int | None = None
+    re_entry_interval_hours: int | None = None
+    target_pest_or_disease: str | None = None
+    notes: str | None = None
+
+
+class PilotImportScouting(BaseModel):
+    """A scouting line in a concierge import."""
+    observation_date: date | None = None
+    crop_stage: str | None = None
+    visible_issue: str | None = None
+    severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
+    notes: str | None = None
+
+
+class PilotImport(BaseModel):
+    """Manual/concierge pilot data captured from grower/PCA conversations.
+
+    Not an automated integration — a human transcribes what they heard/collected.
+    """
+    source_label: str
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+    imported_by: str | None = None
+    notes: str | None = None
+    spray_events: list[PilotImportSpray] = Field(default_factory=list)
+    scouting_observations: list[PilotImportScouting] = Field(default_factory=list)
 
 
 # -------------------------------------------------------------- Pilot feedback

@@ -74,6 +74,11 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
           the farm&apos;s current sprays and scouting.
         </div>
       )}
+
+      <p className="text-xs text-gray-500">
+        Decision support only — not a prescription. Always confirm PHI, REI, rates, crop use, and
+        restrictions with the product label and a licensed PCA / agronomist.
+      </p>
     </div>
   );
 }
