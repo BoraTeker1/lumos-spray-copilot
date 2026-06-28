@@ -17,6 +17,7 @@ from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
 from app.pilot_evidence import build_pilot_case_study, build_pilot_evidence
 from app.recommendation_engine import generate_recommendation
+from app.reduction import compute_reduction
 from app.weather import default_weather_service
 
 app = FastAPI(
@@ -346,6 +347,44 @@ def _build_weekly_report_text(
     return "\n".join(lines)
 
 
+# ------------------------------------------------------ Reduction measurement
+def _farm_reduction(db: Session, farm, sprays) -> dict:
+    """Measure spray reduction for a farm against its current baseline (if any)."""
+    baseline = crud.get_spray_baseline(db, farm.id)
+    return compute_reduction(farm, sprays, baseline)
+
+
+@app.get("/farms/{farm_id}/spray-baseline", tags=["reduction"])
+def get_spray_baseline(farm_id: int, db: Session = Depends(get_db)):
+    """The farm's current declared spray baseline, or null if none is set yet."""
+    _require_farm(db, farm_id)
+    baseline = crud.get_spray_baseline(db, farm_id)
+    if baseline is None:
+        return None
+    return schemas.SprayBaseline.model_validate(baseline)
+
+
+@app.put(
+    "/farms/{farm_id}/spray-baseline",
+    response_model=schemas.SprayBaseline,
+    tags=["reduction"],
+)
+def put_spray_baseline(
+    farm_id: int, payload: schemas.SprayBaselineCreate, db: Session = Depends(get_db)
+):
+    """Declare/update the grower-or-PCA spray baseline used to measure reduction against."""
+    _require_farm(db, farm_id)
+    return crud.set_spray_baseline(db, farm_id, payload)
+
+
+@app.get("/farms/{farm_id}/reduction", tags=["reduction"])
+def farm_reduction(farm_id: int, db: Session = Depends(get_db)):
+    """Measured sprays-vs-baseline reduction for the farm (honest, baseline-gated)."""
+    farm = _require_farm(db, farm_id)
+    sprays = crud.list_spray_events(db, farm_id)
+    return _farm_reduction(db, farm, sprays)
+
+
 # --------------------------------------------------- Pilot evidence + audit packet
 @app.get("/farms/{farm_id}/pilot-evidence", tags=["pilot"])
 def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
@@ -368,6 +407,7 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
         analytics,
         weather["risk_level"],
         advisor_label=_advisor_label(farm),
+        reduction=_farm_reduction(db, farm, sprays),
     )
 
 
@@ -412,7 +452,8 @@ def farm_pilot_case_study(farm_id: int, db: Session = Depends(get_db)):
     weather = default_weather_service.get_weather_risk(farm.location)
     advisor = _advisor_label(farm)
     evidence = build_pilot_evidence(
-        farm, sprays, observations, recs, analytics, weather["risk_level"], advisor_label=advisor
+        farm, sprays, observations, recs, analytics, weather["risk_level"],
+        advisor_label=advisor, reduction=_farm_reduction(db, farm, sprays),
     )
     records = list(sprays) + list(observations)
     data_sources = _distinct_provenance(records, "data_source")
@@ -523,6 +564,7 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
             "latest_comment": latest_rec.agronomist_comment if latest_rec else None,
             "all_statuses": [r.agronomist_status for r in recs],
         },
+        "reduction_measurement": _farm_reduction(db, farm, sprays),
         "pilot_import_batches": [
             {
                 "id": b.id,

@@ -14,6 +14,7 @@ import AnalyticsCard from "@/components/AnalyticsCard";
 import WeatherCard from "@/components/WeatherCard";
 import ComplianceCard from "@/components/ComplianceCard";
 import PilotEvidenceCard from "@/components/PilotEvidenceCard";
+import ReductionCard from "@/components/ReductionCard";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
 
 // Small stat card used in the farm header.
@@ -103,6 +104,11 @@ export default function FarmDetailPage({ params }) {
       {/* Compliance snapshot (PHI / REI / resistance / scouting / weather / review) */}
       <section className="rounded-lg border bg-white p-5 shadow-sm">
         <ComplianceCard farmId={farmId} refreshKey={`${sprays.length}-${recommendations[0]?.agronomist_status || ""}`} />
+      </section>
+
+      {/* Measured spray reduction vs. a declared baseline */}
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <ReductionCard farmId={farmId} refreshKey={sprays.length} />
       </section>
 
       {/* Pilot evidence + audit packet */}

@@ -174,6 +174,34 @@ class PilotImport(BaseModel):
     scouting_observations: list[PilotImportScouting] = Field(default_factory=list)
 
 
+# --------------------------------------------------------------- Spray baseline
+BaselineMethod = Literal["stated_cadence", "prior_period", "calendar_program"]
+CalendarProgram = Literal[
+    "weekly", "every_10_days", "biweekly", "every_3_weeks", "monthly"
+]
+
+
+class SprayBaselineCreate(BaseModel):
+    """A grower/PCA-declared baseline to measure reduction against (one per farm)."""
+    method: BaselineMethod
+    cadence_days: int | None = Field(default=None, gt=0)
+    season_spray_count: int | None = Field(default=None, gt=0)
+    baseline_period_start: date | None = None
+    baseline_period_end: date | None = None
+    calendar_program: CalendarProgram | None = None
+    data_source: DataSource = "grower_interview"
+    data_confidence: DataConfidence = "user_provided"
+    declared_by: str | None = None
+    notes: str | None = None
+
+
+class SprayBaseline(SprayBaselineCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    created_at: datetime
+
+
 # -------------------------------------------------------------- Pilot feedback
 class PilotFeedbackCreate(BaseModel):
     person_type: str  # grower / PCA / agronomist / exporter / input_supplier / other

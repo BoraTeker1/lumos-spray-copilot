@@ -34,6 +34,9 @@ class Farm(Base):
     pilot_import_batches: Mapped[list["PilotImportBatch"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
+    spray_baselines: Mapped[list["SprayBaseline"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
 
 
 class SprayEvent(Base):
@@ -99,6 +102,36 @@ class Recommendation(Base):
     agronomist_comment: Mapped[str | None] = mapped_column(Text)
 
     farm: Mapped["Farm"] = relationship(back_populates="recommendations")
+
+
+class SprayBaseline(Base):
+    """A grower/PCA-declared spray baseline used to measure reduction against (one per farm).
+
+    A reduction figure is only as honest as its baseline, so this carries the same provenance
+    fields as a concierge import (who declared it, how trustworthy it is). See `reduction.py`.
+    """
+    __tablename__ = "spray_baselines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+    # method: stated_cadence / prior_period / calendar_program
+    method: Mapped[str] = mapped_column(String(40), nullable=False)
+    # stated_cadence: one of these two
+    cadence_days: Mapped[int | None] = mapped_column(Integer)
+    season_spray_count: Mapped[int | None] = mapped_column(Integer)
+    # prior_period: a dated pre-Lumos window on this farm's own records
+    baseline_period_start: Mapped[date | None] = mapped_column(Date)
+    baseline_period_end: Mapped[date | None] = mapped_column(Date)
+    # calendar_program: a named schedule (weekly / biweekly / ...)
+    calendar_program: Mapped[str | None] = mapped_column(String(40))
+    # provenance (mirrors SprayEvent)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="grower_interview")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    declared_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    farm: Mapped["Farm"] = relationship(back_populates="spray_baselines")
 
 
 class PilotFeedback(Base):

@@ -242,6 +242,21 @@ def run() -> None:
             )
         )
 
+        # Declared spray baseline so the U.S. demo shows *measured* reduction, not just
+        # descriptive metrics. Kept demo/simulated so the engine correctly flags the number as
+        # illustrative (never present seed data as a real reduction result — see ENGINEERING_GUIDELINES.md §9).
+        db.add(
+            models.SprayBaseline(
+                farm_id=farm3.id,
+                method="stated_cadence",
+                cadence_days=4,  # typical peak-season cover-spray cadence
+                data_source="demo",
+                data_confidence="simulated",
+                declared_by="Grower (demo)",
+                notes="Demo baseline: stated peak-botrytis cover-spray cadence. Illustrative only.",
+            )
+        )
+
         db.commit()
         print(f"Seeded HIGH-risk farm:  {farm1.name} (id={farm1.id}, {farm1.country})")
         print(f"Seeded LOW-risk  farm:  {farm2.name} (id={farm2.id}, {farm2.country})")

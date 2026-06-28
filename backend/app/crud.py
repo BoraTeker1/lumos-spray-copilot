@@ -266,6 +266,27 @@ def list_pilot_import_batches(db: Session, farm_id: int) -> list[models.PilotImp
     )
 
 
+# --------------------------------------------------------------- Spray baseline
+def get_spray_baseline(db: Session, farm_id: int) -> models.SprayBaseline | None:
+    """The farm's current baseline (newest wins — we keep history but use the latest)."""
+    return db.scalars(
+        select(models.SprayBaseline)
+        .where(models.SprayBaseline.farm_id == farm_id)
+        .order_by(models.SprayBaseline.created_at.desc(), models.SprayBaseline.id.desc())
+    ).first()
+
+
+def set_spray_baseline(
+    db: Session, farm_id: int, data: schemas.SprayBaselineCreate
+) -> models.SprayBaseline:
+    """Record a new baseline for the farm (latest one is the one reduction uses)."""
+    baseline = models.SprayBaseline(farm_id=farm_id, **data.model_dump())
+    db.add(baseline)
+    db.commit()
+    db.refresh(baseline)
+    return baseline
+
+
 # ------------------------------------------------------------- Pilot feedback
 def list_pilot_feedback(db: Session) -> list[models.PilotFeedback]:
     return list(

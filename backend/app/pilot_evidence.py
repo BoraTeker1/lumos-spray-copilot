@@ -63,11 +63,14 @@ def build_pilot_evidence(
     weather_risk_level: str,
     advisor_label: str = "agronomist",
     today: date | None = None,
+    reduction: dict | None = None,
 ) -> dict:
     """Aggregate descriptive pilot evidence for one farm.
 
     `analytics` is the output of `compute_cost_analytics`; `weather_risk_level` is the
-    weather module's risk_level string ("low" / "moderate" / "elevated").
+    weather module's risk_level string ("low" / "moderate" / "elevated"). `reduction` is the
+    optional output of `compute_reduction` — when a baseline exists it adds a measured
+    sprays-vs-baseline bullet instead of only the descriptive picture.
     """
     if today is None:
         today = date.today()
@@ -114,6 +117,10 @@ def build_pilot_evidence(
 
     advisor_cap = advisor_label[:1].upper() + advisor_label[1:]
 
+    has_measured_reduction = bool(
+        reduction and reduction.get("has_baseline") and reduction.get("reduction_pct") is not None
+    )
+
     evidence_summary = _evidence_summary(
         advisor_cap=advisor_cap,
         total_sprays=total_sprays,
@@ -144,6 +151,16 @@ def build_pilot_evidence(
         estimated_avoidable_cost_usd=estimated_avoidable_cost_usd,
     )
 
+    if has_measured_reduction:
+        evidence_summary.append(reduction["reduction_statement"])
+        investor_summary.insert(0, reduction["reduction_statement"])
+    else:
+        limitations.insert(
+            0,
+            "No baseline captured yet, so actual spray reduction is not computed — this is a "
+            "descriptive picture, not a before/after result.",
+        )
+
     return {
         "farm_id": getattr(farm, "id", None),
         "farm_name": getattr(farm, "name", None),
@@ -164,6 +181,8 @@ def build_pilot_evidence(
         "pca_approved_count": pca_approved,
         "pca_changes_requested_count": pca_changes_requested,
         "estimated_avoidable_cost_usd": estimated_avoidable_cost_usd,
+        "has_measured_reduction": has_measured_reduction,
+        "reduction": reduction,
         "evidence_summary": evidence_summary,
         "investor_summary": investor_summary,
         "limitations": limitations,
@@ -223,6 +242,7 @@ def build_pilot_case_study(
             f"(of {evidence['total_recommendations']} recommendation(s))"
         ),
         "estimated_avoidable_cost_usd": evidence["estimated_avoidable_cost_usd"],
+        "measured_reduction": _measured_reduction_block(evidence),
         "what_lumos_helped_surface": surfaced,
         "what_is_still_unknown": unknown,
         "quote_placeholder": (
@@ -262,11 +282,35 @@ def _what_lumos_surfaced(evidence: dict, advisor_label: str) -> list[str]:
     return out
 
 
+def _measured_reduction_block(evidence: dict) -> dict | None:
+    """Compact reduction summary for the one-pager, or None if no baseline is set."""
+    reduction = evidence.get("reduction")
+    if not reduction or not reduction.get("has_baseline"):
+        return None
+    return {
+        "baseline_method": reduction.get("baseline_method"),
+        "baseline_confidence": reduction.get("baseline_confidence"),
+        "baseline_expected_sprays": reduction.get("baseline_expected_sprays"),
+        "actual_sprays": reduction.get("actual_sprays"),
+        "sprays_avoided": reduction.get("sprays_avoided"),
+        "reduction_pct": reduction.get("reduction_pct"),
+        "is_headline_safe": reduction.get("is_headline_safe"),
+        "statement": reduction.get("reduction_statement"),
+        "caveats": reduction.get("confidence_caveats", []),
+    }
+
+
 def _what_is_still_unknown(evidence: dict, data_confidences: list[str]) -> list[str]:
-    out = [
-        "Pre-Lumos baseline spray count is not captured yet, so actual reduction cannot be "
-        "computed — this is a starting picture, not a before/after result.",
-    ]
+    if evidence.get("has_measured_reduction"):
+        out = [
+            "Reduction is measured against a stated baseline, not a controlled trial — confirm "
+            "the baseline with the grower/PCA and re-measure over a full crop cycle.",
+        ]
+    else:
+        out = [
+            "Pre-Lumos baseline spray count is not captured yet, so actual reduction cannot be "
+            "computed — this is a starting picture, not a before/after result.",
+        ]
     if any(c in ("simulated", "incomplete") for c in data_confidences):
         out.append(
             "Some records are simulated or incomplete — treat the numbers as illustrative until "

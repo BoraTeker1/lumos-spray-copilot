@@ -59,6 +59,15 @@ export const api = {
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
 
+  // Reduction measurement
+  getReduction: (farmId) => request(`/farms/${farmId}/reduction`),
+  getSprayBaseline: (farmId) => request(`/farms/${farmId}/spray-baseline`),
+  setSprayBaseline: (farmId, data) =>
+    request(`/farms/${farmId}/spray-baseline`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
   // Pilot evidence & audit packet
   getPilotEvidence: (farmId) => request(`/farms/${farmId}/pilot-evidence`),
   getAuditPacket: (farmId) => request(`/farms/${farmId}/audit-packet`),
