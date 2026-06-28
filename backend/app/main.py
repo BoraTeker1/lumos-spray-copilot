@@ -7,7 +7,7 @@ import csv
 import io
 from datetime import date, datetime
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -18,6 +18,12 @@ from app.database import get_db, init_db
 from app.pilot_evidence import build_pilot_case_study, build_pilot_evidence
 from app.recommendation_engine import generate_recommendation
 from app.reduction import compute_reduction
+from app.vision import (
+    ALLOWED_MEDIA_TYPES,
+    MAX_IMAGE_BYTES,
+    build_analysis_result,
+    default_vision_service,
+)
 from app.weather import default_weather_service
 
 app = FastAPI(
@@ -144,6 +150,48 @@ def remove_scout_observation(obs_id: int, db: Session = Depends(get_db)):
     if obs is None:
         raise HTTPException(status_code=404, detail="Scout observation not found")
     crud.delete_scout_observation(db, obs)
+
+
+# --------------------------------------------------------------- Photo analysis
+@app.post(
+    "/farms/{farm_id}/photo-analysis",
+    response_model=schemas.PhotoAnalysisResult,
+    tags=["scout-observations"],
+)
+async def analyze_field_photo(
+    farm_id: int,
+    file: UploadFile = File(...),
+    concern: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Analyse one uploaded field photo with a multimodal model (decision support only).
+
+    The result is NOT saved as a recommendation or a scouting note — it returns a *draft*
+    scouting observation a grower/PCA reviews and confirms. CV is an input to the rule
+    engine, never the decider, and the model never tells anyone to spray.
+    """
+    farm = _require_farm(db, farm_id)
+
+    media_type = (file.content_type or "").lower()
+    if media_type not in ALLOWED_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type '{media_type}'. Use JPEG, PNG, WebP, or GIF.",
+        )
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty image upload.")
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Image too large (max 8 MB).")
+
+    try:
+        finding = default_vision_service.analyze(
+            image_bytes, media_type, crop_type=farm.crop_type, context=concern
+        )
+    except Exception as exc:  # surface model/transport failures cleanly, never 500-crash the demo
+        raise HTTPException(status_code=502, detail=f"Photo analysis failed: {exc}") from exc
+
+    return build_analysis_result(finding)
 
 
 # -------------------------------------------------------------- Recommendations

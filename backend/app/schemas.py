@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
 DataSource = Literal[
-    "demo", "grower_interview", "spreadsheet", "whatsapp", "email", "manual_entry", "unknown"
+    "demo", "grower_interview", "spreadsheet", "whatsapp", "email", "manual_entry",
+    "photo_ai", "unknown"
 ]
 DataConfidence = Literal["simulated", "user_provided", "pca_reviewed", "incomplete"]
 
@@ -91,6 +92,32 @@ class ScoutObservation(ScoutObservationBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     farm_id: int
+
+
+# ------------------------------------------------------------- Photo analysis
+class PhotoObservationSuggestion(BaseModel):
+    """A draft scouting observation pre-filled from a photo, for human confirmation."""
+    observation_date: str
+    visible_issue: str | None = None
+    severity_1_to_5: int | None = None
+    crop_stage: str | None = None
+    notes: str | None = None
+    data_source: str = "photo_ai"
+    data_confidence: str = "user_provided"
+
+
+class PhotoAnalysisResult(BaseModel):
+    """Result of analysing one uploaded field photo (decision support, not a diagnosis)."""
+    detected_issue: str | None = None
+    suggested_severity: int | None = None
+    confidence: str = "low"
+    observations: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+    model: str = ""
+    is_ai_generated: bool = True
+    is_mock: bool = False
+    disclaimer: str = ""
+    suggested_observation: PhotoObservationSuggestion
 
 
 # ---------------------------------------------------------------- Recommendation

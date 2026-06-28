@@ -61,7 +61,10 @@ Do **NOT** build any of the following unless the user explicitly instructs it in
 - financing / revenue-sharing / credit
 - drones / IoT / sensors / hardware / weather-station hookups
 - robotics / autonomous spray equipment
-- computer vision / image-based disease diagnosis
+- ~~computer vision / image-based disease diagnosis~~ — **guardrail lifted (2026-06-28)**: a
+  photo-analysis copilot is now built (multimodal Claude, see §5). Still NOT allowed: autonomous
+  image *diagnosis* or any photo-driven "spray now" output — the model only *suggests* a draft
+  scouting note a human must confirm; it never diagnoses or prescribes.
 - chatbot / conversational LLM agent
 - autonomous pesticide prescriptions ("you must spray")
 - guaranteed pesticide-reduction claims
@@ -91,6 +94,13 @@ Backend + frontend both implement:
 - **Weather risk** module (mock disease-pressure from temp/humidity/rain; swappable service).
 - **PCA / agronomist review workflow** — approve / edit / reject + comment; only reviewed
   guidance reaches the grower/report.
+- **Photo-scouting copilot** (`POST /farms/{id}/photo-analysis`) — the "do I really need to
+  spray?" CV feature. A grower/PCA uploads a field photo; a **multimodal model (Claude
+  `claude-opus-4-8`)** describes what it *appears* to see + a confidence + caveats, and pre-fills
+  a **draft scouting observation the human must review/confirm** (it then feeds the rule engine).
+  Real AI, clearly labelled *AI-suggested, not confirmed*; never diagnoses, never says "spray".
+  Falls back to a deterministic `MockVisionService` when no `ANTHROPIC_API_KEY` is set (demo/tests
+  work offline). Confirmed notes carry `data_source="photo_ai"`. See `app/vision.py`.
 - **Compliance snapshot** card/endpoint (PHI/REI/resistance/scouting/weather/review status).
 - **Pesticide cost analytics** — total/avg spend, most-used AI, repeated-ingredient cost,
   *potential* avoidable cost.
@@ -138,6 +148,10 @@ Backend + frontend both implement:
   - `app/analytics.py` — `compute_cost_analytics`.
   - `app/reduction.py` — `compute_reduction` (pure, framework-free). Baseline methods +
     `CALENDAR_PROGRAMS`, `is_headline_safe` gate, honest caveats. Consumed by `pilot_evidence`.
+  - `app/vision.py` — photo analysis. `build_observation_suggestion` / `build_analysis_result`
+    (pure), `VisionService` ABC, `ClaudeVisionService` (multimodal Claude, lazy-imports
+    `anthropic`), `MockVisionService`, `default_vision_service` (real iff `ANTHROPIC_API_KEY` +
+    `anthropic` present, else mock). Never imports FastAPI/SQLAlchemy.
   - `app/weather.py` — `compute_disease_pressure`, `WeatherService` ABC, `MockWeatherService`,
     `default_weather_service`.
   - `app/pilot_evidence.py` — `build_pilot_evidence` + `build_pilot_case_study`.
@@ -150,6 +164,7 @@ Backend + frontend both implement:
   - Sprays: `GET/POST /farms/{id}/spray-events`, `DELETE /spray-events/{id}`
   - Scouting: `GET/POST /farms/{id}/scout-observations`, `DELETE /scout-observations/{id}`
   - Recs: `GET/POST /farms/{id}/recommendations`, `PATCH /recommendations/{id}` (review action)
+  - Photo: `POST /farms/{id}/photo-analysis` (multipart image upload → draft scouting suggestion)
   - `GET /farms/{id}/analytics`, `/weather-risk`, `/compliance`, `/weekly-report`
   - Reduction: `GET/PUT /farms/{id}/spray-baseline`, `GET /farms/{id}/reduction`
   - Pilot: `/pilot-evidence`, `POST /pilot-import`, `/pilot-case-study`, `/audit-packet`,
@@ -175,7 +190,7 @@ Backend + frontend both implement:
   - `layout.js`, `globals.css`.
 - **Components (`frontend/components/`):** `AnalyticsCard`, `WeatherCard`, `ComplianceCard`,
   `RecommendationPanel`, `AgronomistReview`, `NextActionCard`, `WeeklyReport`,
-  `PilotEvidenceCard`, `ReductionCard`, `ConciergePilotCard`, `SprayEventForm`,
+  `PilotEvidenceCard`, `ReductionCard`, `ConciergePilotCard`, `PhotoScoutCard`, `SprayEventForm`,
   `ScoutObservationForm`, `RiskBadge`, `SeverityBadge`.
 - **API client:** `frontend/lib/api.js` — single `api` object wrapping all backend calls; base
   URL from `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). `lib/format.js` for
@@ -209,7 +224,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **97 passing** (README's "41" is STALE — ignore
+- **Passing test count:** repo currently shows **107 passing** (README's "41" is STALE — ignore
   it). **Always re-run `pytest` to confirm; do not trust this number.** Known harmless
   `datetime.utcnow()` deprecation warnings.
 
@@ -225,7 +240,11 @@ npm run dev        # http://localhost:3000
   - **Sunrise Tomato House** (Mersin, TR, ₺) — secondary low-risk/healthy contrast.
 - **Never present seed data as traction.** It is illustrative, not real usage.
 - **Never imply real pilots** unless a validation doc proves it (none currently do — see §11).
-- **Avoid fake AI claims.** The engine is a deterministic **rule engine**, not ML. Say so.
+- **Avoid fake AI claims.** The recommendation/compliance **engine is a deterministic rule
+  engine, not ML** — say so. The **photo-scouting copilot IS real AI** (multimodal Claude), but
+  describe it honestly: it *suggests* what it appears to see for a human to confirm; it does not
+  diagnose disease, is not the decider, and never says "spray." Don't blur the two — the spray
+  decision is still the rule engine + PCA, not the photo model.
 - Always use **"decision support only"** language; never "diagnoses," never "tells you to spray."
 
 ---

@@ -6,6 +6,7 @@ import { api, API_BASE_URL } from "@/lib/api";
 import { formatCost, formatDate, formatArea } from "@/lib/format";
 import SprayEventForm from "@/components/SprayEventForm";
 import ScoutObservationForm from "@/components/ScoutObservationForm";
+import PhotoScoutCard from "@/components/PhotoScoutCard";
 import RecommendationPanel from "@/components/RecommendationPanel";
 import WeeklyReport from "@/components/WeeklyReport";
 import RiskBadge from "@/components/RiskBadge";
@@ -134,6 +135,11 @@ export default function FarmDetailPage({ params }) {
           <AnalyticsCard farmId={farmId} country={farm.country} refreshKey={sprays.length} />
         </section>
       </div>
+
+      {/* Photo scouting copilot: "do I really need to spray?" — AI photo -> draft scouting note */}
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <PhotoScoutCard farmId={farmId} onCreated={load} />
+      </section>
 
       {/* Data-entry forms */}
       <div className="grid gap-5 md:grid-cols-2">

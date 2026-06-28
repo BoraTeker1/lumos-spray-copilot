@@ -59,6 +59,23 @@ export const api = {
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
 
+  // Field-photo analysis (multimodal CV). Uses multipart, so it bypasses the JSON helper.
+  analyzePhoto: async (farmId, file, concern) => {
+    const body = new FormData();
+    body.append("file", file);
+    const qs = concern ? `?concern=${encodeURIComponent(concern)}` : "";
+    const res = await fetch(`${BASE_URL}/farms/${farmId}/photo-analysis${qs}`, {
+      method: "POST",
+      cache: "no-store",
+      body, // browser sets the multipart boundary; do NOT set Content-Type
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
+
   // Reduction measurement
   getReduction: (farmId) => request(`/farms/${farmId}/reduction`),
   getSprayBaseline: (farmId) => request(`/farms/${farmId}/spray-baseline`),
