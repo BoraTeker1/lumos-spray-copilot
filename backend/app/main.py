@@ -194,6 +194,65 @@ async def analyze_field_photo(
     return build_analysis_result(finding)
 
 
+# --------------------------------------------------------------- Planned sprays
+@app.get(
+    "/farms/{farm_id}/planned-sprays",
+    response_model=list[schemas.PlannedSpray],
+    tags=["planned-sprays"],
+)
+def get_planned_sprays(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_planned_sprays(db, farm_id)
+
+
+@app.post(
+    "/farms/{farm_id}/planned-sprays",
+    response_model=schemas.PlannedSpray,
+    status_code=201,
+    tags=["planned-sprays"],
+)
+def post_planned_spray(
+    farm_id: int, payload: schemas.PlannedSprayCreate, db: Session = Depends(get_db)
+):
+    """Check an *intended* spray before it happens (the pre-spray decision point).
+
+    Runs three conservative checks (repeated active ingredient, entered-PHI vs. expected
+    harvest, explicitly linked scouting evidence) and stores the result as a snapshot.
+    Decision support only — the outcome is the grower/PCA's decision, recorded separately.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.create_planned_spray(db, farm, payload)
+
+
+def _require_planned_spray(db: Session, planned_id: int):
+    planned = crud.get_planned_spray(db, planned_id)
+    if planned is None:
+        raise HTTPException(status_code=404, detail="Planned spray not found")
+    return planned
+
+
+@app.patch(
+    "/planned-sprays/{planned_id}/outcome",
+    response_model=schemas.PlannedSpray,
+    tags=["planned-sprays"],
+)
+def patch_planned_spray_outcome(
+    planned_id: int, payload: schemas.PlannedSprayOutcomeUpdate, db: Session = Depends(get_db)
+):
+    """Record the grower/PCA's decision (sprayed / skipped / postponed + stated reason).
+
+    A 'sprayed' outcome creates and links the real spray event.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    return crud.record_planned_spray_outcome(db, planned, payload)
+
+
+@app.delete("/planned-sprays/{planned_id}", status_code=204, tags=["planned-sprays"])
+def remove_planned_spray(planned_id: int, db: Session = Depends(get_db)):
+    planned = _require_planned_spray(db, planned_id)
+    crud.delete_planned_spray(db, planned)
+
+
 # -------------------------------------------------------------- Recommendations
 @app.get(
     "/farms/{farm_id}/recommendations",
@@ -456,6 +515,7 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
         weather["risk_level"],
         advisor_label=_advisor_label(farm),
         reduction=_farm_reduction(db, farm, sprays),
+        planned_sprays=crud.list_planned_sprays(db, farm_id),
     )
 
 

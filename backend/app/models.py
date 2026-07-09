@@ -37,6 +37,9 @@ class Farm(Base):
     spray_baselines: Mapped[list["SprayBaseline"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
+    planned_sprays: Mapped[list["PlannedSpray"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
 
 
 class SprayEvent(Base):
@@ -86,6 +89,43 @@ class ScoutObservation(Base):
     )
 
     farm: Mapped["Farm"] = relationship(back_populates="scout_observations")
+
+
+class PlannedSpray(Base):
+    """An *intended* spray checked before it happens — the pre-spray decision point.
+
+    The check result is snapshotted at creation time (`check_risk_level` / `check_text`)
+    so the record reflects what the grower/PCA actually saw when deciding. The outcome
+    (`sprayed` / `skipped` / `postponed`) is the grower/PCA's decision, recorded with their
+    stated reason — never a claim that the check caused it. PHI/REI values are user-entered
+    and not verified against the current pesticide label.
+    """
+    __tablename__ = "planned_sprays"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+    intended_date: Mapped[date] = mapped_column(Date, nullable=False)
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    active_ingredient: Mapped[str | None] = mapped_column(String(200))
+    target_pest_or_disease: Mapped[str | None] = mapped_column(String(200))
+    pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
+    re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)  # stored, not checked
+    estimated_cost: Mapped[float | None] = mapped_column(Float)
+    # Check snapshot (what the rule engine said at creation time).
+    check_risk_level: Mapped[str] = mapped_column(String(20), default="low")
+    check_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # outcome: planned / sprayed / skipped / postponed
+    outcome: Mapped[str] = mapped_column(String(20), default="planned")
+    outcome_reason: Mapped[str | None] = mapped_column(Text)
+    outcome_date: Mapped[date | None] = mapped_column(Date)
+    # Set when outcome "sprayed" creates the real SprayEvent.
+    spray_event_id: Mapped[int | None] = mapped_column(ForeignKey("spray_events.id"))
+    # Concierge-pilot provenance (see SprayEvent for the allowed values).
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    farm: Mapped["Farm"] = relationship(back_populates="planned_sprays")
 
 
 class Recommendation(Base):

@@ -54,6 +54,37 @@ def _scouting_backed(spray, scout_observations) -> bool:
     return False
 
 
+def _pre_spray_decisions(planned_sprays) -> dict:
+    """Minimal pre-spray decision counts for the evidence block.
+
+    Demo/simulated records are excluded — these counts are meant to reflect real pilot
+    decisions only. Outcomes are the grower/PCA's decisions that the check documented;
+    no causation is claimed and no cost/savings figure is derived.
+    """
+    real = [
+        p for p in (planned_sprays or [])
+        if getattr(p, "data_source", None) != "demo"
+        and getattr(p, "data_confidence", None) != "simulated"
+    ]
+    outcomes = [getattr(p, "outcome", "planned") for p in real]
+    reasons = [
+        {"outcome": getattr(p, "outcome", None), "reason": getattr(p, "outcome_reason", None)}
+        for p in real
+        if getattr(p, "outcome_reason", None)
+    ]
+    return {
+        "checked": len(real),
+        "sprayed": sum(1 for o in outcomes if o == "sprayed"),
+        "skipped": sum(1 for o in outcomes if o == "skipped"),
+        "postponed": sum(1 for o in outcomes if o == "postponed"),
+        "outcome_reasons": reasons,
+        "note": (
+            "Outcomes are grower/PCA decisions that the pre-spray check documented — not "
+            "outcomes the check caused. Demo/simulated planned sprays are excluded."
+        ),
+    }
+
+
 def build_pilot_evidence(
     farm,
     spray_events,
@@ -64,6 +95,7 @@ def build_pilot_evidence(
     advisor_label: str = "agronomist",
     today: date | None = None,
     reduction: dict | None = None,
+    planned_sprays=None,
 ) -> dict:
     """Aggregate descriptive pilot evidence for one farm.
 
@@ -183,6 +215,7 @@ def build_pilot_evidence(
         "estimated_avoidable_cost_usd": estimated_avoidable_cost_usd,
         "has_measured_reduction": has_measured_reduction,
         "reduction": reduction,
+        "pre_spray_decisions": _pre_spray_decisions(planned_sprays),
         "evidence_summary": evidence_summary,
         "investor_summary": investor_summary,
         "limitations": limitations,

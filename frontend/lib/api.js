@@ -41,6 +41,21 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // Planned sprays (pre-spray decision check)
+  listPlannedSprays: (farmId) => request(`/farms/${farmId}/planned-sprays`),
+  createPlannedSpray: (farmId, data) =>
+    request(`/farms/${farmId}/planned-sprays`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updatePlannedSprayOutcome: (plannedId, data) =>
+    request(`/planned-sprays/${plannedId}/outcome`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deletePlannedSpray: (plannedId) =>
+    request(`/planned-sprays/${plannedId}`, { method: "DELETE" }),
+
   // Recommendations
   listRecommendations: (farmId) => request(`/farms/${farmId}/recommendations`),
   generateRecommendation: (farmId) =>

@@ -17,6 +17,7 @@ import ComplianceCard from "@/components/ComplianceCard";
 import PilotEvidenceCard from "@/components/PilotEvidenceCard";
 import ReductionCard from "@/components/ReductionCard";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
+import PreSprayCheckCard from "@/components/PreSprayCheckCard";
 
 // Small stat card used in the farm header.
 function Stat({ label, value }) {
@@ -92,6 +93,11 @@ export default function FarmDetailPage({ params }) {
         <Stat label="Scouting notes" value={observations.length} />
         <Stat label="Expected harvest" value={formatDate(farm.expected_harvest_date)} />
       </div>
+
+      {/* Pre-spray decision check: flag risks BEFORE an intended spray happens */}
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <PreSprayCheckCard farmId={farmId} onChanged={load} />
+      </section>
 
       {/* Recommendation */}
       <section className="rounded-lg border bg-white p-5 shadow-sm">

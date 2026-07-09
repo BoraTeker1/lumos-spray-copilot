@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
 DataSource = Literal[
@@ -118,6 +118,64 @@ class PhotoAnalysisResult(BaseModel):
     is_mock: bool = False
     disclaimer: str = ""
     suggested_observation: PhotoObservationSuggestion
+
+
+# ----------------------------------------------------------------- PlannedSpray
+PlannedSprayOutcome = Literal["sprayed", "skipped", "postponed"]
+
+
+class PlannedSprayCreate(BaseModel):
+    """An intended spray to check *before* it happens (pre-spray decision point)."""
+    intended_date: date
+    product_name: str
+    active_ingredient: str | None = None
+    target_pest_or_disease: str | None = None
+    pre_harvest_interval_days: int | None = Field(default=None, ge=0)
+    re_entry_interval_hours: int | None = Field(default=None, ge=0)
+    estimated_cost: float | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class PlannedSprayOutcomeUpdate(BaseModel):
+    """The grower/PCA's recorded decision on a planned spray.
+
+    A reason is mandatory for skipped/postponed so every non-spray is documented honestly.
+    `application_date` (sprayed only) defaults to the intended date.
+    """
+    outcome: PlannedSprayOutcome
+    outcome_reason: str | None = None
+    application_date: date | None = None
+
+    @model_validator(mode="after")
+    def _require_reason_when_not_sprayed(self):
+        if self.outcome in ("skipped", "postponed") and not (self.outcome_reason or "").strip():
+            raise ValueError(
+                "outcome_reason is required when the outcome is 'skipped' or 'postponed'"
+            )
+        return self
+
+
+class PlannedSpray(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    intended_date: date
+    product_name: str
+    active_ingredient: str | None = None
+    target_pest_or_disease: str | None = None
+    pre_harvest_interval_days: int | None = None
+    re_entry_interval_hours: int | None = None
+    estimated_cost: float | None = None
+    check_risk_level: str
+    check_text: str
+    outcome: str
+    outcome_reason: str | None = None
+    outcome_date: date | None = None
+    spray_event_id: int | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
 
 
 # ---------------------------------------------------------------- Recommendation

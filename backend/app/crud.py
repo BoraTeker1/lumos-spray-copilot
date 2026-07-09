@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.recommendation_engine import generate_recommendation
+from app.recommendation_engine import evaluate_planned_spray, generate_recommendation
 
 
 # ----------------------------------------------------------------------------- Farms
@@ -149,6 +149,77 @@ def update_recommendation(
     db.commit()
     db.refresh(rec)
     return rec
+
+
+# ----------------------------------------------------------------- PlannedSprays
+def list_planned_sprays(db: Session, farm_id: int) -> list[models.PlannedSpray]:
+    return list(
+        db.scalars(
+            select(models.PlannedSpray)
+            .where(models.PlannedSpray.farm_id == farm_id)
+            .order_by(models.PlannedSpray.intended_date.desc(), models.PlannedSpray.id.desc())
+        )
+    )
+
+
+def get_planned_spray(db: Session, planned_id: int) -> models.PlannedSpray | None:
+    return db.get(models.PlannedSpray, planned_id)
+
+
+def create_planned_spray(
+    db: Session, farm: models.Farm, data: schemas.PlannedSprayCreate
+) -> models.PlannedSpray:
+    """Run the pre-spray check against current records and persist the snapshot."""
+    sprays = list_spray_events(db, farm.id)
+    observations = list_scout_observations(db, farm.id)
+    result = evaluate_planned_spray(farm, data, sprays, observations)
+
+    planned = models.PlannedSpray(
+        farm_id=farm.id,
+        **data.model_dump(),
+        check_risk_level=result.risk_level,
+        check_text=result.recommendation_text,
+    )
+    db.add(planned)
+    db.commit()
+    db.refresh(planned)
+    return planned
+
+
+def record_planned_spray_outcome(
+    db: Session, planned: models.PlannedSpray, data: schemas.PlannedSprayOutcomeUpdate
+) -> models.PlannedSpray:
+    """Record the grower/PCA's decision; a 'sprayed' outcome creates the linked SprayEvent."""
+    planned.outcome = data.outcome
+    planned.outcome_reason = data.outcome_reason
+    planned.outcome_date = date.today()
+
+    if data.outcome == "sprayed" and planned.spray_event_id is None:
+        event = models.SprayEvent(
+            farm_id=planned.farm_id,
+            product_name=planned.product_name,
+            active_ingredient=planned.active_ingredient,
+            target_pest_or_disease=planned.target_pest_or_disease,
+            application_date=data.application_date or planned.intended_date,
+            cost=planned.estimated_cost,
+            pre_harvest_interval_days=planned.pre_harvest_interval_days,
+            re_entry_interval_hours=planned.re_entry_interval_hours,
+            notes=f"Logged from planned spray #{planned.id} (pre-spray check recorded).",
+            data_source=planned.data_source,
+            data_confidence=planned.data_confidence,
+        )
+        db.add(event)
+        db.flush()  # assign event.id for the link
+        planned.spray_event_id = event.id
+
+    db.commit()
+    db.refresh(planned)
+    return planned
+
+
+def delete_planned_spray(db: Session, planned: models.PlannedSpray) -> None:
+    db.delete(planned)
+    db.commit()
 
 
 # --------------------------------------------------------------- Pilot intake
