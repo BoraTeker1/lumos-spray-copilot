@@ -47,7 +47,7 @@ function CaseStudy({ cs, country }) {
   return (
     <div className="mt-4 rounded-lg border bg-gray-50 p-4">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-semibold">📄 Pilot case study — {cs.farm_name}</h3>
+        <h3 className="font-semibold">Pilot case study — {cs.farm_name}</h3>
         <span className="text-xs text-gray-500">
           {cs.crop} · {cs.location || "—"}
         </span>
@@ -167,7 +167,6 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
 
   return (
     <div>
-      <h2 className="mb-1 font-semibold">🤝 Concierge pilot</h2>
       <p className="mb-3 text-xs text-gray-500">
         Use this for manually collected pilot data from grower/PCA conversations. This is not an
         automated recommendation or compliance guarantee.

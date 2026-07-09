@@ -77,16 +77,15 @@ export default function PhotoScoutCard({ farmId, onCreated }) {
 
   return (
     <div>
-      <div className="mb-1 flex items-center gap-2">
-        <h2 className="font-semibold">📷 Photo scouting copilot</h2>
+      <div className="mb-3 flex items-center gap-2">
         <span className="rounded bg-leaf/10 px-1.5 py-0.5 text-[10px] font-medium text-leaf">
           AI · decision support
         </span>
+        <span className="text-xs text-gray-500">
+          The model describes what it appears to see and drafts a scouting note for you to
+          review — it does not diagnose disease or tell you to spray.
+        </span>
       </div>
-      <p className="mb-3 text-xs text-gray-500">
-        Upload a field photo. The model describes what it appears to see and drafts a scouting
-        note for you to review — it does not diagnose disease or tell you to spray.
-      </p>
 
       <form onSubmit={analyze} className="space-y-2">
         <input
@@ -187,7 +186,7 @@ export default function PhotoScoutCard({ farmId, onCreated }) {
               disabled={saving}
               className="mt-2 rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
-              {saving ? "Saving…" : "✓ Confirm as scouting note"}
+              {saving ? "Saving…" : "Confirm as scouting note"}
             </button>
           </div>
 

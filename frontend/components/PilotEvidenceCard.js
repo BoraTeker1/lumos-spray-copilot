@@ -18,7 +18,7 @@ function Metric({ label, value, hint }) {
 // Pilot Evidence: a descriptive snapshot of what the pilot has logged so far, plus a
 // link/copy for the consolidated audit packet. Framed as evidence, not a guarantee.
 // `refreshKey` re-fetches when records change.
-export default function PilotEvidenceCard({ farmId, country, refreshKey }) {
+export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocumentedSkip = false }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -52,22 +52,21 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey }) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">📋 Pilot evidence</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
         <div className="flex gap-2 text-xs">
           <a
             href={`${API_BASE_URL}/farms/${farmId}/audit-packet`}
             target="_blank"
             rel="noreferrer"
-            className="rounded border px-2 py-1 hover:border-leaf"
+            className="rounded border px-2 py-1 hover:border-gray-400"
           >
-            ↗ View audit packet
+            View audit packet
           </a>
           <button
             onClick={copyPacket}
-            className="rounded border px-2 py-1 hover:border-leaf"
+            className="rounded border px-2 py-1 hover:border-gray-400"
           >
-            {copied ? "Copied ✓" : "⧉ Copy audit packet"}
+            {copied ? "Copied" : "Copy audit packet"}
           </button>
         </div>
       </div>
@@ -87,9 +86,13 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey }) {
         />
         <Metric label="PCA review" value={reviewSummary} />
         <Metric
-          label="Potential avoidable cost"
+          label={
+            hasDocumentedSkip
+              ? "Potential avoidable cost"
+              : "Estimated cost of one planned application"
+          }
           value={avoidable}
-          hint="if one spray is avoided"
+          hint={hasDocumentedSkip ? "a planned spray was skipped" : "estimate, not a saving claim"}
         />
       </div>
 

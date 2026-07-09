@@ -71,11 +71,10 @@ export default function ReductionCard({ farmId, refreshKey }) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">📉 Measured spray reduction</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="rounded border px-2 py-1 text-xs hover:border-leaf"
+          className="rounded border px-2 py-1 text-xs hover:border-gray-400"
         >
           {data.has_baseline ? "Edit baseline" : "Set baseline"}
         </button>
@@ -93,8 +92,8 @@ export default function ReductionCard({ farmId, refreshKey }) {
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <div
-              className={`text-3xl font-bold ${
-                pct > 0 ? "text-leaf" : pct < 0 ? "text-red-600" : "text-gray-600"
+              className={`text-2xl font-semibold ${
+                pct > 0 ? "text-green-700" : pct < 0 ? "text-red-600" : "text-gray-600"
               }`}
             >
               {pct > 0 ? "−" : pct < 0 ? "+" : ""}

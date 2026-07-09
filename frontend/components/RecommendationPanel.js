@@ -36,12 +36,12 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">🧭 Spray-decision recommendation</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Spray-decision recommendation</h2>
         <button
           onClick={generate}
           disabled={generating}
-          className="rounded-md bg-leaf px-3.5 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-green-700 disabled:opacity-50"
+          className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-50"
         >
           {generating ? "Generating…" : latest ? "Re-generate" : "Generate recommendation"}
         </button>
@@ -75,10 +75,6 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
         </div>
       )}
 
-      <p className="text-xs text-gray-500">
-        Decision support only — not a prescription. Always confirm PHI, REI, rates, crop use, and
-        restrictions with the product label and a licensed PCA / agronomist.
-      </p>
     </div>
   );
 }

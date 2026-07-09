@@ -2,14 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
 
-const RISK_STYLES = {
-  low: "border-green-200 bg-green-50",
-  moderate: "border-amber-200 bg-amber-50",
-  elevated: "border-red-200 bg-red-50",
-};
+const RISK_VARIANTS = { low: "neutral", moderate: "amber", elevated: "red" };
 
-// Lightweight weather-based disease-pressure card for the farm location.
+// Compact, provenance-labelled weather info for the right rail. Demo data —
+// deliberately not presented as a major compliance signal.
 export default function WeatherCard({ farmId }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -21,31 +19,21 @@ export default function WeatherCard({ farmId }) {
       .catch((err) => setError(err.message));
   }, [farmId]);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading weather…</p>;
-
-  const boxCls = RISK_STYLES[data.risk_level] || "border-gray-200 bg-gray-50";
+  if (error) return <p className="text-xs text-red-600">{error}</p>;
+  if (!data) return <p className="text-xs text-gray-500">Loading weather…</p>;
 
   return (
-    <div>
-      <h2 className="mb-3 font-semibold">🌦️ Weather risk</h2>
-      <div className={`rounded-lg border p-4 ${boxCls}`}>
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium capitalize">
-            Disease pressure: {data.risk_level}
-          </span>
-          <span className="text-xs text-gray-500">{data.location}</span>
-        </div>
-        <div className="mt-2 flex gap-4 text-sm text-gray-700">
-          <span>🌡️ {data.temperature_c}°C</span>
-          <span>💧 {data.humidity_pct}% RH</span>
-          <span>🌧️ {data.rain_probability_pct}% rain</span>
-        </div>
-        <p className="mt-2 text-sm text-gray-700">{data.summary}</p>
+    <div className="text-xs text-gray-600">
+      <div className="flex items-center justify-between gap-2">
+        <span>Disease pressure</span>
+        <Badge variant={RISK_VARIANTS[data.risk_level] || "neutral"}>{data.risk_level}</Badge>
       </div>
-      <p className="mt-2 text-xs text-gray-500">
-        Demo weather data. A live weather API can be added behind the same WeatherService.
-      </p>
+      <div className="mt-1.5 text-gray-500">
+        {data.temperature_c}°C · {data.humidity_pct}% RH · {data.rain_probability_pct}% rain
+      </div>
+      <div className="mt-1.5 rounded bg-gray-50 px-2 py-1 text-[11px] text-gray-500">
+        Simulated demo weather — not a live feed.
+      </div>
     </div>
   );
 }

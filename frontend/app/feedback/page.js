@@ -139,7 +139,7 @@ export default function FeedbackPage() {
         <h2 className="font-semibold">Captured feedback ({items.length})</h2>
         {items.length > 0 && (
           <a href={`${API_BASE_URL}/export/pilot-feedback.csv`} className="rounded border px-3 py-1.5 text-sm hover:border-leaf">
-            ⬇ Export CSV
+            Export CSV
           </a>
         )}
       </div>

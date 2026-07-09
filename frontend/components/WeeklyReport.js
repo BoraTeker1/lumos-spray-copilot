@@ -36,8 +36,7 @@ export default function WeeklyReport({ farmId }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Weekly report</h2>
+      <div className="flex items-center justify-end">
         <div className="flex gap-2">
           <button
             onClick={load}
@@ -51,7 +50,7 @@ export default function WeeklyReport({ farmId }) {
               onClick={copy}
               className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white"
             >
-              {copied ? "Copied ✓" : "Copy for WhatsApp"}
+              {copied ? "Copied" : "Copy for WhatsApp"}
             </button>
           )}
         </div>

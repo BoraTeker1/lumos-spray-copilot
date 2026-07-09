@@ -1,22 +1,20 @@
-// Small colored badge for a recommendation's risk level.
+import { Badge } from "@/components/ui/badge";
+
+// Colored badge for a recommendation's risk level. Renders nothing when there
+// is no assessment yet (no ambiguous "not yet assessed" state).
 const STYLES = {
-  low: { cls: "bg-green-100 text-green-800 ring-green-600/20", label: "Low risk", dot: "🟢" },
-  moderate: { cls: "bg-amber-100 text-amber-800 ring-amber-600/20", label: "Moderate risk", dot: "🟡" },
-  elevated: { cls: "bg-red-100 text-red-800 ring-red-600/20", label: "Elevated risk", dot: "🔴" },
+  low: { variant: "green", label: "Low risk" },
+  moderate: { variant: "amber", label: "Moderate risk" },
+  elevated: { variant: "red", label: "Elevated risk" },
 };
 
 export default function RiskBadge({ level }) {
-  const meta = STYLES[level] || {
-    cls: "bg-gray-100 text-gray-600 ring-gray-500/20",
-    label: "Not yet assessed",
-    dot: "⚪",
-  };
+  const meta = STYLES[level];
+  if (!meta) return null;
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${meta.cls}`}
-    >
-      <span aria-hidden>{meta.dot}</span>
+    <Badge variant={meta.variant}>
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
       {meta.label}
-    </span>
+    </Badge>
   );
 }
