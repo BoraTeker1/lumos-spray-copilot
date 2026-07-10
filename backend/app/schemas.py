@@ -121,7 +121,19 @@ class PhotoAnalysisResult(BaseModel):
 
 
 # ----------------------------------------------------------------- PlannedSpray
-PlannedSprayOutcome = Literal["sprayed", "skipped", "postponed"]
+# Decision outcomes (mirrors app/decision_engine.py).
+DecisionOutcome = Literal[
+    "approve", "block", "delay", "inspect_first", "pca_review_required"
+]
+# Recorded real-world outcomes. Applied outcomes (sprayed_as_planned / changed_product)
+# create the linked SprayEvent; the others document a non-application honestly.
+PlannedSprayOutcome = Literal[
+    "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first"
+]
+ReviewAction = Literal["approved", "edited", "rejected"]
+# Who supplied the PHI/REI values for the check. "verified_label" is deliberately NOT
+# accepted from clients — nothing can claim label verification until label data exists.
+ValuesSource = Literal["grower_entered", "pca_entered"]
 
 
 class PlannedSprayCreate(BaseModel):
@@ -133,27 +145,79 @@ class PlannedSprayCreate(BaseModel):
     pre_harvest_interval_days: int | None = Field(default=None, ge=0)
     re_entry_interval_hours: int | None = Field(default=None, ge=0)
     estimated_cost: float | None = None
+    values_source: ValuesSource = "grower_entered"
+    values_entered_by: str | None = None
     data_source: DataSource = "manual_entry"
     data_confidence: DataConfidence = "user_provided"
 
 
-class PlannedSprayOutcomeUpdate(BaseModel):
-    """The grower/PCA's recorded decision on a planned spray.
+class PlannedSprayReviewUpdate(BaseModel):
+    """PCA / agronomist review of a pre-spray decision (approve / edit / reject).
 
-    A reason is mandatory for skipped/postponed so every non-spray is documented honestly.
-    `application_date` (sprayed only) defaults to the intended date.
+    An edit must include the PCA's replacement guidance; a rejection must say why.
+    """
+    action: ReviewAction
+    review_comment: str | None = None
+    reviewed_by: str | None = None
+    pca_next_action: str | None = None
+
+    @model_validator(mode="after")
+    def _require_substance(self):
+        if self.action == "edited" and not (self.pca_next_action or "").strip():
+            raise ValueError("pca_next_action is required when the review action is 'edited'")
+        if self.action == "rejected" and not (self.review_comment or "").strip():
+            raise ValueError("review_comment is required when the review action is 'rejected'")
+        return self
+
+
+class PlannedSprayOutcomeUpdate(BaseModel):
+    """The grower/PCA's recorded real-world outcome for a planned spray.
+
+    A reason is mandatory for every non-as-planned outcome so the record stays honest.
+    `changed_product` must say what was actually applied. `application_date` (applied
+    outcomes only) defaults to the intended date.
     """
     outcome: PlannedSprayOutcome
     outcome_reason: str | None = None
     application_date: date | None = None
+    outcome_product_name: str | None = None
+    outcome_active_ingredient: str | None = None
 
     @model_validator(mode="after")
-    def _require_reason_when_not_sprayed(self):
-        if self.outcome in ("skipped", "postponed") and not (self.outcome_reason or "").strip():
+    def _require_reason_and_product(self):
+        if self.outcome != "sprayed_as_planned" and not (self.outcome_reason or "").strip():
             raise ValueError(
-                "outcome_reason is required when the outcome is 'skipped' or 'postponed'"
+                "outcome_reason is required for every outcome other than 'sprayed_as_planned'"
+            )
+        if self.outcome == "changed_product" and not (self.outcome_product_name or "").strip():
+            raise ValueError(
+                "outcome_product_name is required when the outcome is 'changed_product'"
             )
         return self
+
+
+class PlannedSprayDecisionRule(BaseModel):
+    """One evaluated rule from the decision snapshot (triggered or not)."""
+    rule_id: str
+    name: str
+    triggered: bool
+    severity: str
+    detail: str
+    calculation: str | None = None
+    inputs: dict = Field(default_factory=dict)
+
+
+class PlannedSprayDecision(BaseModel):
+    """The explainable pre-spray decision snapshot."""
+    outcome: str
+    severity: str
+    confidence: str
+    rules: list[PlannedSprayDecisionRule] = Field(default_factory=list)
+    inputs_used: dict = Field(default_factory=dict)
+    missing_information: list[str] = Field(default_factory=list)
+    required_next_action: str
+    review_required: bool
+    disclaimer: str
 
 
 class PlannedSpray(BaseModel):
@@ -167,14 +231,52 @@ class PlannedSpray(BaseModel):
     pre_harvest_interval_days: int | None = None
     re_entry_interval_hours: int | None = None
     estimated_cost: float | None = None
+    values_source: str
+    values_entered_by: str | None = None
+    decision_outcome: str
+    decision_severity: str
+    decision_confidence: str
+    decision_authority: str
+    required_next_action: str
+    review_required: bool
+    decision_payload: dict | None = None
     check_risk_level: str
     check_text: str
+    review_status: str
+    review_comment: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    pca_next_action: str | None = None
     outcome: str
     outcome_reason: str | None = None
     outcome_date: date | None = None
+    outcome_product_name: str | None = None
+    outcome_active_ingredient: str | None = None
     spray_event_id: int | None = None
     data_source: str | None = None
     data_confidence: str | None = None
+    created_at: datetime
+
+
+# ------------------------------------------------------------------ Pilot events
+PilotEventType = Literal[
+    "check_started", "check_completed", "check_abandoned",
+    "review_recorded", "outcome_recorded", "import_used",
+]
+
+
+class PilotEventCreate(BaseModel):
+    """One workflow-telemetry event (fire-and-forget from the UI or logged server-side)."""
+    event_type: PilotEventType
+    farm_id: int | None = None
+    planned_spray_id: int | None = None
+    entry_source: str | None = None
+    meta: dict | None = None
+
+
+class PilotEvent(PilotEventCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
     created_at: datetime
 
 

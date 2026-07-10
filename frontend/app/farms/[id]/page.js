@@ -33,14 +33,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ActivityTimeline from "@/components/ActivityTimeline";
 import AnalyticsCard from "@/components/AnalyticsCard";
 import ComplianceCard from "@/components/ComplianceCard";
+import DecisionEvidenceCard from "@/components/DecisionEvidenceCard";
 import PhotoScoutCard from "@/components/PhotoScoutCard";
 import PilotEvidenceCard from "@/components/PilotEvidenceCard";
 import PreSpraySheet, { PlannedSprayList } from "@/components/PreSpraySheet";
 import RecommendationPanel from "@/components/RecommendationPanel";
 import ReductionCard from "@/components/ReductionCard";
-import RiskBadge from "@/components/RiskBadge";
 import ScoutObservationForm from "@/components/ScoutObservationForm";
 import SprayEventForm from "@/components/SprayEventForm";
+import SprayImportCard from "@/components/SprayImportCard";
 import WeatherCard from "@/components/WeatherCard";
 import WeeklyReport from "@/components/WeeklyReport";
 
@@ -88,20 +89,24 @@ function SectionCard({ title, icon, description, action, children }) {
   );
 }
 
-// Derive the single operational status chip for the farm header.
-function deriveStatus(compliance, latestRec) {
+// Derive the single operational status chip for the farm header. Open pre-spray
+// decisions outrank record-level flags: the decision queue is the product.
+function deriveStatus(compliance, openPlanned) {
+  const openCritical = openPlanned.filter((p) => p.decision_severity === "critical");
+  const needsReview = openPlanned.filter(
+    (p) => p.review_required && !["approved", "edited", "rejected"].includes(p.review_status)
+  );
+  if (openCritical.length) return { label: "Blocked decision open", variant: "red" };
+  if (needsReview.length) return { label: "Needs PCA review", variant: "amber" };
+  if (openPlanned.length) return { label: "Awaiting outcome", variant: "amber" };
   const anyFlag =
     compliance &&
     (compliance.phi_risk ||
       compliance.rei_risk ||
       compliance.repeated_active_ingredient_risk ||
       compliance.high_severity_scouting);
-  if (anyFlag) return { label: "Action required", variant: "red" };
-  if (latestRec?.agronomist_status === "pending")
-    return { label: "Review pending", variant: "amber" };
-  if (latestRec && ["approved", "edited"].includes(latestRec.agronomist_status))
-    return { label: "Reviewed", variant: "green" };
-  return { label: "No active flags", variant: "neutral" };
+  if (anyFlag) return { label: "Risk flags", variant: "amber" };
+  return { label: "No open decisions", variant: "neutral" };
 }
 
 function FarmDetail({ farmId }) {
@@ -157,15 +162,22 @@ function FarmDetail({ farmId }) {
   const derived = useMemo(() => {
     const records = [...sprays, ...observations];
     const isDemoFarm = records.length > 0 && records.every(isDemoRecord);
-    const awaiting = planned.filter((p) => p.outcome === "planned").length;
+    const openPlanned = planned.filter((p) => p.outcome === "planned");
+    const awaiting = openPlanned.length;
+    const needsReview = openPlanned.filter(
+      (p) => p.review_required && !["approved", "edited", "rejected"].includes(p.review_status)
+    ).length;
     const hasDocumentedSkip = planned.some(
-      (p) => p.outcome === "skipped" && !isDemoRecord(p)
+      (p) => p.outcome === "avoided" && !isDemoRecord(p)
     );
-    const timingResistanceFlags = compliance
+    // Must count the SAME four signals as the dashboard card (/farms-overview
+    // flag_count) so the two views never disagree in a demo.
+    const riskFlags = compliance
       ? [
           compliance.phi_risk,
           compliance.rei_risk,
           compliance.repeated_active_ingredient_risk,
+          compliance.high_severity_scouting,
         ].filter(Boolean).length
       : 0;
     const harvestDays = farm?.expected_harvest_date
@@ -179,9 +191,11 @@ function FarmDetail({ farmId }) {
     ];
     return {
       isDemoFarm,
+      openPlanned,
       awaiting,
+      needsReview,
       hasDocumentedSkip,
-      timingResistanceFlags,
+      riskFlags,
       harvestDays,
       provenanceSources,
       provenanceConfidence,
@@ -196,8 +210,13 @@ function FarmDetail({ farmId }) {
     );
   if (!farm) return <p className="text-sm text-gray-500">Loading…</p>;
 
-  const status = deriveStatus(compliance, latest);
-  const recentChecks = planned.slice(0, 3);
+  const status = deriveStatus(compliance, derived.openPlanned);
+  // The decision queue: open checks first (review needed, then awaiting outcome),
+  // then the most recent resolved ones.
+  const queue = [
+    ...derived.openPlanned,
+    ...planned.filter((p) => p.outcome !== "planned"),
+  ].slice(0, 3);
 
   return (
     <div className="space-y-5">
@@ -248,29 +267,23 @@ function FarmDetail({ farmId }) {
           }
         />
         <Kpi
+          icon={ClipboardCheck}
+          label="Decisions needing PCA review"
+          value={derived.needsReview}
+          tone={derived.needsReview > 0 ? "amber" : "neutral"}
+        />
+        <Kpi
           icon={ListChecks}
-          label="Planned sprays awaiting outcome"
+          label="Checked sprays awaiting outcome"
           value={derived.awaiting}
           tone={derived.awaiting > 0 ? "amber" : "neutral"}
         />
         <Kpi
           icon={TriangleAlert}
-          label="Timing / resistance flags"
-          value={derived.timingResistanceFlags}
-          tone={derived.timingResistanceFlags > 0 ? "amber" : "neutral"}
-          hint="PHI · REI · repeated ingredient"
-        />
-        <Kpi
-          icon={ClipboardCheck}
-          label="PCA review status"
-          value={latest ? latest.agronomist_status : "—"}
-          tone={
-            latest && ["approved", "edited"].includes(latest.agronomist_status)
-              ? "green"
-              : latest?.agronomist_status === "pending"
-              ? "amber"
-              : "neutral"
-          }
+          label="Risk flags"
+          value={derived.riskFlags}
+          tone={derived.riskFlags > 0 ? "amber" : "neutral"}
+          hint="PHI · REI · rotation · scouting"
         />
       </div>
 
@@ -294,15 +307,10 @@ function FarmDetail({ farmId }) {
         <TabsContent value="overview">
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="min-w-0 space-y-4 lg:col-span-2">
-              <Card>
-                <CardContent className="p-4">
-                  <RecommendationPanel farmId={farmId} latest={latest} onChanged={load} />
-                </CardContent>
-              </Card>
-
               <SectionCard
-                title="Recent pre-spray checks"
+                title="Decision queue"
                 icon={<ListChecks />}
+                description="Every planned spray gets one clear outcome — approve, block, delay, inspect first, or PCA review required — then a recorded real-world result."
                 action={
                   planned.length > 3 && (
                     <button
@@ -315,9 +323,9 @@ function FarmDetail({ farmId }) {
                 }
               >
                 <PlannedSprayList
-                  planned={recentChecks}
+                  planned={queue}
                   onChanged={load}
-                  emptyText='No pre-spray checks yet — use "Check a planned spray" before the next application.'
+                  emptyText='No pre-spray decisions yet — use "Check a planned spray" before the next application.'
                 />
               </SectionCard>
 
@@ -333,7 +341,11 @@ function FarmDetail({ farmId }) {
 
             {/* Right rail */}
             <div className="space-y-4">
-              <SectionCard title="Compliance snapshot" icon={<ClipboardCheck />}>
+              <SectionCard
+                title="Pre-spray risk snapshot"
+                icon={<ClipboardCheck />}
+                description="From user-entered PHI/REI values — not label-verified."
+              >
                 <ComplianceCard data={compliance} />
               </SectionCard>
 
@@ -375,7 +387,7 @@ function FarmDetail({ farmId }) {
           <SectionCard
             title="Planned sprays"
             icon={<ListChecks />}
-            description="Every pre-spray check with its snapshot and recorded outcome. Skipped and postponed outcomes require a stated reason."
+            description="Every pre-spray decision with its snapshot, PCA review, and recorded outcome. Every outcome except “sprayed as planned” requires a stated reason."
           >
             <PlannedSprayList planned={planned} onChanged={load} />
           </SectionCard>
@@ -445,6 +457,14 @@ function FarmDetail({ farmId }) {
             </SectionCard>
 
             <SectionCard
+              title="Import spray history"
+              icon={<Plus />}
+              description="Paste rows from a spreadsheet or upload a CSV — no formatting gymnastics."
+            >
+              <SprayImportCard farmId={farmId} onImported={load} />
+            </SectionCard>
+
+            <SectionCard
               title="Photo scouting (AI-assisted)"
               icon={<Eye />}
               description="Secondary tool: a photo drafts a scouting note that a human must review and confirm."
@@ -471,6 +491,18 @@ function FarmDetail({ farmId }) {
             )}
 
             <SectionCard
+              title="Decision evidence"
+              icon={<ListChecks />}
+              description="What the pre-spray decision workflow documented — counts and entered estimates, demo data excluded."
+            >
+              <DecisionEvidenceCard
+                farmId={farmId}
+                country={farm.country}
+                refreshKey={`${planned.length}-${planned.filter((p) => p.outcome !== "planned").length}`}
+              />
+            </SectionCard>
+
+            <SectionCard
               title="Measured spray reduction"
               icon={<ListChecks />}
               description="Sprays vs. a grower/PCA-declared baseline. No baseline, no number."
@@ -494,6 +526,14 @@ function FarmDetail({ farmId }) {
                 hasDocumentedSkip={derived.hasDocumentedSkip}
                 refreshKey={sprays.length}
               />
+            </SectionCard>
+
+            <SectionCard
+              title="Weekly risk review"
+              icon={<ClipboardCheck />}
+              description="Farm-wide review of current records; only PCA-approved or edited guidance reaches the weekly report below."
+            >
+              <RecommendationPanel farmId={farmId} latest={latest} onChanged={load} />
             </SectionCard>
 
             <SectionCard

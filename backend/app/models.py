@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models for Lumos Spray Copilot."""
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -94,11 +94,11 @@ class ScoutObservation(Base):
 class PlannedSpray(Base):
     """An *intended* spray checked before it happens — the pre-spray decision point.
 
-    The check result is snapshotted at creation time (`check_risk_level` / `check_text`)
-    so the record reflects what the grower/PCA actually saw when deciding. The outcome
-    (`sprayed` / `skipped` / `postponed`) is the grower/PCA's decision, recorded with their
-    stated reason — never a claim that the check caused it. PHI/REI values are user-entered
-    and not verified against the current pesticide label.
+    The decision is snapshotted at creation time (`decision_*` + `decision_payload`,
+    plus the legacy `check_risk_level` / `check_text`) so the record reflects what the
+    grower/PCA actually saw when deciding. The PCA review (`review_*`) and the recorded
+    real-world outcome are the humans' decisions — never a claim that the check caused
+    them. PHI/REI values are user-entered and not verified against the current label.
     """
     __tablename__ = "planned_sprays"
 
@@ -109,15 +109,42 @@ class PlannedSpray(Base):
     active_ingredient: Mapped[str | None] = mapped_column(String(200))
     target_pest_or_disease: Mapped[str | None] = mapped_column(String(200))
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
-    re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)  # stored, not checked
+    re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
     estimated_cost: Mapped[float | None] = mapped_column(Float)
-    # Check snapshot (what the rule engine said at creation time).
+    # Who supplied the PHI/REI values: grower_entered / pca_entered (never a verified
+    # label today — there is deliberately no label database yet).
+    values_source: Mapped[str] = mapped_column(String(30), default="grower_entered")
+    values_entered_by: Mapped[str | None] = mapped_column(String(120))
+    # Decision snapshot (what the decision engine said at creation time).
+    # outcome: approve / block / delay / inspect_first / pca_review_required
+    decision_outcome: Mapped[str] = mapped_column(String(30), default="pca_review_required")
+    decision_severity: Mapped[str] = mapped_column(String(20), default="none")
+    decision_confidence: Mapped[str] = mapped_column(String(20), default="low")
+    # Authority gating: definitive only when backed by verified-label / PCA-entered
+    # sources; provisional results always require PCA confirmation.
+    decision_authority: Mapped[str] = mapped_column(String(20), default="provisional")
+    required_next_action: Mapped[str] = mapped_column(String(300), default="")
+    review_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Full explainable snapshot: rules, inputs, calculations, missing info, disclaimer.
+    decision_payload: Mapped[dict | None] = mapped_column(JSON)
+    # Legacy snapshot fields kept for the weekly-report/audit surfaces.
     check_risk_level: Mapped[str] = mapped_column(String(20), default="low")
     check_text: Mapped[str] = mapped_column(Text, nullable=False)
-    # outcome: planned / sprayed / skipped / postponed
-    outcome: Mapped[str] = mapped_column(String(20), default="planned")
+    # PCA review of the decision: not_reviewed / approved / edited / rejected.
+    review_status: Mapped[str] = mapped_column(String(20), default="not_reviewed")
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # PCA's replacement guidance when the review action is "edited".
+    pca_next_action: Mapped[str | None] = mapped_column(Text)
+    # Real-world outcome: planned / sprayed_as_planned / changed_product / delayed /
+    # avoided / inspected_first.
+    outcome: Mapped[str] = mapped_column(String(30), default="planned")
     outcome_reason: Mapped[str | None] = mapped_column(Text)
     outcome_date: Mapped[date | None] = mapped_column(Date)
+    # What was actually applied when the outcome is changed_product.
+    outcome_product_name: Mapped[str | None] = mapped_column(String(200))
+    outcome_active_ingredient: Mapped[str | None] = mapped_column(String(200))
     # Set when outcome "sprayed" creates the real SprayEvent.
     spray_event_id: Mapped[int | None] = mapped_column(ForeignKey("spray_events.id"))
     # Concierge-pilot provenance (see SprayEvent for the allowed values).
@@ -195,6 +222,26 @@ class PilotFeedback(Base):
     would_pay: Mapped[str | None] = mapped_column(String(10))            # yes / no / maybe
     requested_pilot: Mapped[bool | None] = mapped_column(Boolean)
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class PilotEvent(Base):
+    """One pilot-instrumentation event (check started/abandoned, review, outcome, import).
+
+    Deliberately schemaless beyond the type: `meta` holds the per-event detail. Events are
+    workflow telemetry for running a real pilot — they are never customer-facing metrics.
+    """
+    __tablename__ = "pilot_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # check_started / check_completed / check_abandoned / review_recorded /
+    # outcome_recorded / import_used
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    farm_id: Mapped[int | None] = mapped_column(Integer)
+    planned_spray_id: Mapped[int | None] = mapped_column(Integer)
+    # How the data got in: manual_form / csv_paste / concierge / seed ...
+    entry_source: Mapped[str | None] = mapped_column(String(40))
+    meta: Mapped[dict | None] = mapped_column(JSON)
 
 
 class PilotImportBatch(Base):

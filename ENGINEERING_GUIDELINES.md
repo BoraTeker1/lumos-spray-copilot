@@ -80,13 +80,37 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 
 Backend + frontend both implement:
 
+- **Pre-spray decision workflow (THE core product since 2026-07-10)** — a grower/PCA enters a
+  *planned* spray; `app/decision_engine.py` checks it against harvest timing, entered PHI/REI,
+  prior applications' re-entry windows, repeated active ingredients, linked scouting evidence,
+  and missing data, and returns ONE explainable outcome: **approve / block / delay /
+  inspect_first / pca_review_required** — with triggered rules, exact calculations, inputs used,
+  missing information, and an input-completeness confidence. Missing inputs can NEVER yield
+  approve (they escalate to PCA review). **Authority gating (2026-07-10):** every rule carries a
+  `source_authority` (verified_label / pca_entered / grower_entered / heuristic), verification
+  status, and who entered the values; only verified-label or PCA-entered sources can back a
+  **definitive** approve/block — grower-entered values and heuristics always yield a
+  **provisional** result that a PCA must confirm (provisional approve ⇒ review_required). No
+  label database exists, so nothing can produce `verified_label` yet — the vocabulary and gate
+  are in place for when it does, and approve is currently NEVER definitive (rotation/scouting
+  checks are heuristics). The engine never names replacement products — those may only come
+  from explicit PCA-entered guidance (`pca_next_action`). A **PCA review** (approve/edit/reject
+  + comment) gates
+  applied outcomes (409 until approved/edited when review is required); the **real-world
+  outcome** is recorded as `sprayed_as_planned / changed_product / delayed / avoided /
+  inspected_first` (reason mandatory except as-planned; applied outcomes create the linked
+  SprayEvent). `GET /farms/{id}/decision-evidence` aggregates the YC metrics (decisions
+  reviewed, sprays changed/delayed/avoided, conflicts caught, PCA acceptance rate, entered-cost
+  avoided, assumption-based review minutes) with demo data excluded and caveats attached.
 - **Farms** (CRUD) — name, location, country (US/TR), crop_type, area, planting/harvest dates,
-  `advisor_involved`.
+  `advisor_involved`. `GET /farms-overview` returns the urgency-ranked, action-oriented list
+  (why + next action per farm) that drives the dashboard.
 - **Spray events** (CRUD) — product, active ingredient, class, target, dose, date, cost, **PHI
   days**, **REI hours**, notes, provenance tags.
 - **Scouting observations** (CRUD) — date, crop stage, visible issue, severity 1–5, notes.
 - **Rule-based recommendation engine** — cautious, never "must spray"; risk low/moderate/elevated
-  + a single farmer-facing **next action**.
+  + a single farmer-facing **next action**. Now the *secondary* farm-wide surface (feeds the
+  weekly report / audit packet); the pre-spray decision check is the primary workflow.
 - **PHI risk** check (harvest inside a spray's pre-harvest interval).
 - **REI risk** check (worker re-entry interval may still be active).
 - **Repeated active-ingredient / resistance** check (same AI > 2× in 30 days).
@@ -101,7 +125,10 @@ Backend + frontend both implement:
   Real AI, clearly labelled *AI-suggested, not confirmed*; never diagnoses, never says "spray".
   Falls back to a deterministic `MockVisionService` when no `ANTHROPIC_API_KEY` is set (demo/tests
   work offline). Confirmed notes carry `data_source="photo_ai"`. See `app/vision.py`.
-- **Compliance snapshot** card/endpoint (PHI/REI/resistance/scouting/weather/review status).
+- **Pre-spray risk snapshot** (formerly "Compliance snapshot") card/endpoint
+  (PHI/REI/resistance/scouting/weather/review status). Renamed in the UI because the signals
+  come from user-entered values, not verified label data; the endpoint is still `/compliance`
+  and now returns a `basis` field saying exactly that.
 - **Pesticide cost analytics** — total/avg spend, most-used AI, repeated-ingredient cost,
   *potential* avoidable cost.
 - **Reduction-measurement engine** — declared spray baseline (`stated_cadence` /
@@ -118,8 +145,10 @@ Backend + frontend both implement:
   talking points + explicit limitations.
 - **Audit packet export** (`/farms/{id}/audit-packet`) — consolidated farm record + flags +
   review trail + weekly report text.
-- **Concierge pilot import** (`POST /farms/{id}/pilot-import`) — manual transcription of
-  call/WhatsApp/spreadsheet/email data, with provenance tags.
+- **Concierge pilot import** (`POST /internal/farms/{id}/pilot-import`) — manual transcription
+  of call/WhatsApp/spreadsheet/email data, with provenance tags. Deliberately INTERNAL: the
+  route is namespaced `/internal`, and the raw-JSON UI lives on the unlinked `/internal` page —
+  it is operator tooling, not the customer-facing workflow.
 - **Persisted pilot import batches / provenance** — `PilotImportBatch` + `data_source` /
   `data_confidence` on every imported row.
 - **Pilot case study** output (`/farms/{id}/pilot-case-study`).
@@ -142,9 +171,15 @@ Backend + frontend both implement:
   - `app/models.py` — ORM models.
   - `app/schemas.py` — Pydantic request/response contracts; provenance `Literal` vocabularies.
   - `app/crud.py` — DB access; also `generate_and_store_recommendation`, pilot import/intake.
-  - `app/recommendation_engine.py` — the rule engine (tunable thresholds at top:
+  - `app/recommendation_engine.py` — the farm-wide rule engine (tunable thresholds at top:
     `RECENT_WINDOW_DAYS=30`, `SAME_INGREDIENT_MAX=2`, `HIGH_SEVERITY_THRESHOLD=4`). Returns a
     `RecommendationResult` (risk_level, next_action, flags, recommendation_text, signals dict).
+  - `app/decision_engine.py` — the **pre-spray decision engine** (pure, framework-free).
+    `evaluate_planned_spray(...)` → `PlannedSprayDecision` (outcome, severity, confidence,
+    per-rule audit trail with calculations, inputs_used, missing_information,
+    required_next_action, review_required, narrative, `as_payload()` for the JSON column).
+    Outcome precedence: block > delay > pca_review_required > inspect_first > approve.
+    `PLANNED_SPRAY_DISCLAIMER` lives here now.
   - `app/analytics.py` — `compute_cost_analytics`.
   - `app/reduction.py` — `compute_reduction` (pure, framework-free). Baseline methods +
     `CALENDAR_PROGRAMS`, `is_headline_safe` gate, honest caveats. Consumed by `pilot_evidence`.
@@ -156,19 +191,32 @@ Backend + frontend both implement:
     `default_weather_service`.
   - `app/pilot_evidence.py` — `build_pilot_evidence` + `build_pilot_case_study`.
   - `app/seed.py` — `run()` drops+recreates schema and loads the 3 demo farms.
-- **Key models:** `Farm`, `SprayEvent`, `ScoutObservation`, `Recommendation`, `PilotFeedback`,
-  `PilotImportBatch`, `SprayBaseline`. Sprays/scouting carry `data_source` + `data_confidence` +
-  `pilot_import_batch_id`; `SprayBaseline` carries the same provenance (one per farm, latest wins).
+- **Key models:** `Farm`, `SprayEvent`, `ScoutObservation`, `PlannedSpray`, `Recommendation`,
+  `PilotFeedback`, `PilotImportBatch`, `SprayBaseline`, `PilotEvent` (workflow telemetry). Sprays/scouting carry `data_source` +
+  `data_confidence` + `pilot_import_batch_id`; `SprayBaseline` carries the same provenance (one
+  per farm, latest wins). `PlannedSpray` snapshots the decision (`decision_*`,
+  `decision_payload` JSON, legacy `check_*`), the PCA review (`review_*`, `pca_next_action`),
+  and the recorded outcome (`outcome*`, linked `spray_event_id`).
 - **Key endpoints (selection):**
-  - Farms: `GET/POST /farms`, `GET/PUT/DELETE /farms/{id}`
+  - Farms: `GET/POST /farms`, `GET /farms-overview` (urgency-ranked dashboard),
+    `GET/PUT/DELETE /farms/{id}`
+  - Planned sprays: `GET/POST /farms/{id}/planned-sprays`, `GET /planned-sprays/{id}`,
+    `PATCH /planned-sprays/{id}/review`, `PATCH /planned-sprays/{id}/outcome` (409 when a
+    required review is missing), `DELETE /planned-sprays/{id}`,
+    `GET /farms/{id}/decision-evidence`
+  - Instrumentation: `POST /pilot-events` (client-reported check_started / check_abandoned /
+    import_used; check_completed / review_recorded / outcome_recorded are logged server-side),
+    `GET /internal/instrumentation` (funnel, median time-to-review, decisions changed,
+    entry sources, abandonment — internal only)
   - Sprays: `GET/POST /farms/{id}/spray-events`, `DELETE /spray-events/{id}`
   - Scouting: `GET/POST /farms/{id}/scout-observations`, `DELETE /scout-observations/{id}`
   - Recs: `GET/POST /farms/{id}/recommendations`, `PATCH /recommendations/{id}` (review action)
   - Photo: `POST /farms/{id}/photo-analysis` (multipart image upload → draft scouting suggestion)
   - `GET /farms/{id}/analytics`, `/weather-risk`, `/compliance`, `/weekly-report`
   - Reduction: `GET/PUT /farms/{id}/spray-baseline`, `GET /farms/{id}/reduction`
-  - Pilot: `/pilot-evidence`, `POST /pilot-import`, `/pilot-case-study`, `/audit-packet`,
+  - Pilot: `/pilot-evidence`, `/pilot-case-study`, `/audit-packet`,
     `POST /pilot/farms`, `GET/POST /pilot-feedback`
+  - Internal: `POST /internal/farms/{id}/pilot-import` (concierge import — operator tooling)
   - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
     `/export/pilot-feedback.csv`
   - `GET /health`; interactive docs at `/docs`.
@@ -188,10 +236,25 @@ Backend + frontend both implement:
   - `feedback/page.js` — pilot feedback capture.
   - `pilot/new/page.js` — pilot farm intake form.
   - `layout.js`, `globals.css`.
-- **Components (`frontend/components/`):** `AnalyticsCard`, `WeatherCard`, `ComplianceCard`,
-  `RecommendationPanel`, `AgronomistReview`, `NextActionCard`, `WeeklyReport`,
-  `PilotEvidenceCard`, `ReductionCard`, `ConciergePilotCard`, `PhotoScoutCard`, `SprayEventForm`,
-  `ScoutObservationForm`, `RiskBadge`, `SeverityBadge`.
+- **Components (`frontend/components/`):** `DecisionResult` (the explainable
+  approve/block/delay/inspect-first/PCA-review verdict, with per-rule source-authority chips
+  and PROVISIONAL/definitive banner), `PreSpraySheet` (mobile-first check form — product + date
+  required, everything else collapsible — plus PCA review + outcome recorder; the primary CTA;
+  fires check_started/check_abandoned telemetry), `SprayImportCard` (customer-facing CSV/paste
+  spray-history import, rows tagged `data_source="spreadsheet"` — no JSON exposed),
+  `DecisionEvidenceCard` (incl. demo-outcome reconciliation line), `AnalyticsCard`,
+  `WeatherCard`, `ComplianceCard`, `RecommendationPanel`, `AgronomistReview`, `NextActionCard`,
+  `WeeklyReport`, `PilotEvidenceCard`, `ReductionCard`, `ConciergePilotCard` (on `/internal`
+  only), `PhotoScoutCard`, `SprayEventForm`, `ScoutObservationForm`, `RiskBadge`,
+  `SeverityBadge`.
+- **Page hierarchy:** dashboard (`/`) uses `GET /farms-overview` (urgency-ranked cards with
+  why + next action; **Türkiye demo farms are hidden by default** behind a "show secondary-market
+  demo farms" toggle — the default demo is the CA strawberry/PCA workflow); farm detail
+  Overview = decision queue + pre-spray risk snapshot; `RecommendationPanel` (farm-wide weekly
+  review) lives in the Evidence tab; `/decisions/[id]` is the one-page printable decision record
+  (inputs, rules + calculations + source authority, missing data, PCA review, outcome,
+  disclaimers; print button hides app chrome); `/internal` is the unlinked operator page for
+  concierge import + pilot instrumentation.
 - **API client:** `frontend/lib/api.js` — single `api` object wrapping all backend calls; base
   URL from `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). `lib/format.js` for
   cost/date/area formatting. Keep all fetches here.
@@ -224,9 +287,18 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **107 passing** (README's "41" is STALE — ignore
+- **Passing test count:** repo currently shows **152 passing** (README's "41" is STALE — ignore
   it). **Always re-run `pytest` to confirm; do not trust this number.** Known harmless
   `datetime.utcnow()` deprecation warnings.
+- **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
+  date to a fixed anchor (screenshots / demo-consistency tests); unset, the anchor is today and
+  re-seeding before a demo keeps the story fresh. `tests/test_demo_consistency.py` asserts the
+  seeded story's invariants.
+- **NEVER run `npm run build` while `npm run dev` is running** — they share `.next` and the
+  build corrupts the dev server's cache (dev pages start returning 500 MODULE_NOT_FOUND). Stop
+  the dev server first, or restart it afterwards with `rm -rf .next && npm run dev`.
+- **`npm run lint` is NOT set up** (it prompts interactively for an ESLint config); the lint
+  pass inside `npm run build` is the real frontend check.
 
 ---
 
@@ -235,7 +307,14 @@ npm run dev        # http://localhost:3000
 - All seeded farms are **demo / simulated** (`data_source="demo"`, `data_confidence="simulated"`).
   Three farms (`backend/app/seed.py`):
   - **Golden Coast Strawberry Ranch** (Watsonville, CA, USD) — **primary U.S./YC demo**; triggers
-    PHI + REI + repeated-AI (captan ×3) + high-severity scouting.
+    PHI + REI + repeated-AI (captan ×3) + high-severity scouting, and seeds the end-to-end
+    decision story: a 4th captan planned 2 days before harvest → **DEFINITIVE BLOCK** (real
+    engine output; values are `pca_entered` by "Demo PCA (simulated)", which is what makes it
+    definitive) → demo PCA **edited** guidance (the Switch 62.5 WG recommendation lives ONLY in
+    `pca_next_action`, never in engine output) → outcome **changed_product**, applied on the
+    intended date. All timestamps anchor to the same demo day. Demo planned sprays are
+    demo/simulated: excluded from real decision-evidence counts but reconciled via the
+    `demo_outcomes` block so the queue and the evidence card never contradict each other.
   - **Green Valley Greenhouse** (Antalya, TR, ₺) — secondary high-risk tomato demo.
   - **Sunrise Tomato House** (Mersin, TR, ₺) — secondary low-risk/healthy contrast.
 - **Never present seed data as traction.** It is illustrative, not real usage.

@@ -20,6 +20,7 @@ async function request(path, options = {}) {
 export const api = {
   // Farms
   listFarms: () => request("/farms"),
+  listFarmsOverview: () => request("/farms-overview"),
   getFarm: (id) => request(`/farms/${id}`),
   createFarm: (data) =>
     request("/farms", { method: "POST", body: JSON.stringify(data) }),
@@ -43,9 +44,15 @@ export const api = {
 
   // Planned sprays (pre-spray decision check)
   listPlannedSprays: (farmId) => request(`/farms/${farmId}/planned-sprays`),
+  getPlannedSpray: (plannedId) => request(`/planned-sprays/${plannedId}`),
   createPlannedSpray: (farmId, data) =>
     request(`/farms/${farmId}/planned-sprays`, {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+  reviewPlannedSpray: (plannedId, data) =>
+    request(`/planned-sprays/${plannedId}/review`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     }),
   updatePlannedSprayOutcome: (plannedId, data) =>
@@ -55,6 +62,7 @@ export const api = {
     }),
   deletePlannedSpray: (plannedId) =>
     request(`/planned-sprays/${plannedId}`, { method: "DELETE" }),
+  getDecisionEvidence: (farmId) => request(`/farms/${farmId}/decision-evidence`),
 
   // Recommendations
   listRecommendations: (farmId) => request(`/farms/${farmId}/recommendations`),
@@ -104,13 +112,19 @@ export const api = {
   getPilotEvidence: (farmId) => request(`/farms/${farmId}/pilot-evidence`),
   getAuditPacket: (farmId) => request(`/farms/${farmId}/audit-packet`),
 
-  // Concierge pilot mode
+  // Concierge pilot mode (internal tooling — not the customer-facing workflow)
   importPilotData: (farmId, data) =>
-    request(`/farms/${farmId}/pilot-import`, {
+    request(`/internal/farms/${farmId}/pilot-import`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
   getPilotCaseStudy: (farmId) => request(`/farms/${farmId}/pilot-case-study`),
+
+  // Pilot instrumentation (fire-and-forget; failures must never break the UI)
+  trackEvent: (data) => {
+    request("/pilot-events", { method: "POST", body: JSON.stringify(data) }).catch(() => {});
+  },
+  getInstrumentation: () => request("/internal/instrumentation"),
 
   // Pilot feedback & intake
   listPilotFeedback: () => request("/pilot-feedback"),

@@ -5,13 +5,25 @@ an auth/tenant filter later in one place.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.recommendation_engine import evaluate_planned_spray, generate_recommendation
+from app.decision_engine import evaluate_planned_spray
+from app.recommendation_engine import generate_recommendation
+
+# Maps decision severity onto the legacy low/moderate/elevated risk vocabulary that the
+# weekly-report / audit surfaces still speak.
+_SEVERITY_TO_RISK = {"none": "low", "caution": "moderate", "critical": "elevated"}
+
+# Real-world outcomes that mean a spray was actually applied (they create the SprayEvent).
+APPLIED_OUTCOMES = ("sprayed_as_planned", "changed_product")
+
+
+class ReviewRequiredError(Exception):
+    """Raised when an applied outcome is recorded before a required PCA review."""
 
 
 # ----------------------------------------------------------------------------- Farms
@@ -169,18 +181,50 @@ def get_planned_spray(db: Session, planned_id: int) -> models.PlannedSpray | Non
 def create_planned_spray(
     db: Session, farm: models.Farm, data: schemas.PlannedSprayCreate
 ) -> models.PlannedSpray:
-    """Run the pre-spray check against current records and persist the snapshot."""
+    """Run the pre-spray decision check against current records and persist the snapshot."""
     sprays = list_spray_events(db, farm.id)
     observations = list_scout_observations(db, farm.id)
-    result = evaluate_planned_spray(farm, data, sprays, observations)
+    decision = evaluate_planned_spray(farm, data, sprays, observations)
 
     planned = models.PlannedSpray(
         farm_id=farm.id,
         **data.model_dump(),
-        check_risk_level=result.risk_level,
-        check_text=result.recommendation_text,
+        decision_outcome=decision.outcome,
+        decision_severity=decision.severity,
+        decision_confidence=decision.confidence,
+        decision_authority=decision.authority_level,
+        required_next_action=decision.required_next_action,
+        review_required=decision.review_required,
+        decision_payload=decision.as_payload(),
+        check_risk_level=_SEVERITY_TO_RISK.get(decision.severity, "low"),
+        check_text=decision.narrative,
     )
     db.add(planned)
+    db.flush()
+    _log_event(
+        db, "check_completed", farm_id=farm.id, planned_spray_id=planned.id,
+        entry_source=planned.data_source,
+        meta={"outcome": decision.outcome, "authority": decision.authority_level},
+    )
+    db.commit()
+    db.refresh(planned)
+    return planned
+
+
+def review_planned_spray(
+    db: Session, planned: models.PlannedSpray, data: schemas.PlannedSprayReviewUpdate
+) -> models.PlannedSpray:
+    """Record the PCA/agronomist's review of a pre-spray decision."""
+    planned.review_status = data.action
+    planned.review_comment = data.review_comment
+    planned.reviewed_by = data.reviewed_by
+    planned.reviewed_at = datetime.utcnow()
+    planned.pca_next_action = data.pca_next_action if data.action == "edited" else None
+    seconds_to_review = (planned.reviewed_at - planned.created_at).total_seconds()
+    _log_event(
+        db, "review_recorded", farm_id=planned.farm_id, planned_spray_id=planned.id,
+        meta={"action": data.action, "seconds_from_check": round(seconds_to_review, 1)},
+    )
     db.commit()
     db.refresh(planned)
     return planned
@@ -189,22 +233,52 @@ def create_planned_spray(
 def record_planned_spray_outcome(
     db: Session, planned: models.PlannedSpray, data: schemas.PlannedSprayOutcomeUpdate
 ) -> models.PlannedSpray:
-    """Record the grower/PCA's decision; a 'sprayed' outcome creates the linked SprayEvent."""
+    """Record the real-world outcome; applied outcomes create the linked SprayEvent.
+
+    The human gate: when the decision required review, an applied outcome cannot be
+    recorded until a PCA has approved or edited the decision (rejected/not_reviewed
+    raise `ReviewRequiredError`). Non-applied outcomes are always recordable.
+    """
+    if (
+        data.outcome in APPLIED_OUTCOMES
+        and planned.review_required
+        and planned.review_status not in ("approved", "edited")
+    ):
+        raise ReviewRequiredError(
+            "This decision requires a PCA / agronomist review (approve or edit) before an "
+            "applied outcome can be recorded."
+        )
+
     planned.outcome = data.outcome
     planned.outcome_reason = data.outcome_reason
     planned.outcome_date = date.today()
+    planned.outcome_product_name = data.outcome_product_name
+    planned.outcome_active_ingredient = data.outcome_active_ingredient
 
-    if data.outcome == "sprayed" and planned.spray_event_id is None:
+    if data.outcome in APPLIED_OUTCOMES and planned.spray_event_id is None:
+        changed = data.outcome == "changed_product"
         event = models.SprayEvent(
             farm_id=planned.farm_id,
-            product_name=planned.product_name,
-            active_ingredient=planned.active_ingredient,
+            product_name=data.outcome_product_name if changed else planned.product_name,
+            active_ingredient=(
+                data.outcome_active_ingredient if changed else planned.active_ingredient
+            ),
             target_pest_or_disease=planned.target_pest_or_disease,
             application_date=data.application_date or planned.intended_date,
-            cost=planned.estimated_cost,
-            pre_harvest_interval_days=planned.pre_harvest_interval_days,
-            re_entry_interval_hours=planned.re_entry_interval_hours,
-            notes=f"Logged from planned spray #{planned.id} (pre-spray check recorded).",
+            cost=None if changed else planned.estimated_cost,
+            # PHI/REI were entered for the planned product; they do not carry over to a
+            # different product — the changed product's values must be re-entered.
+            pre_harvest_interval_days=None if changed else planned.pre_harvest_interval_days,
+            re_entry_interval_hours=None if changed else planned.re_entry_interval_hours,
+            notes=(
+                f"Logged from planned spray #{planned.id} "
+                + (
+                    f"(product changed from '{planned.product_name}' after the pre-spray "
+                    f"check; enter the new product's PHI/REI from its label)."
+                    if changed
+                    else "(pre-spray decision recorded)."
+                )
+            ),
             data_source=planned.data_source,
             data_confidence=planned.data_confidence,
         )
@@ -212,6 +286,15 @@ def record_planned_spray_outcome(
         db.flush()  # assign event.id for the link
         planned.spray_event_id = event.id
 
+    _log_event(
+        db, "outcome_recorded", farm_id=planned.farm_id, planned_spray_id=planned.id,
+        meta={
+            "outcome": data.outcome,
+            "decision_outcome": planned.decision_outcome,
+            # "changed" = the human did something other than spray as planned.
+            "decision_changed": data.outcome != "sprayed_as_planned",
+        },
+    )
     db.commit()
     db.refresh(planned)
     return planned
@@ -220,6 +303,41 @@ def record_planned_spray_outcome(
 def delete_planned_spray(db: Session, planned: models.PlannedSpray) -> None:
     db.delete(planned)
     db.commit()
+
+
+# ------------------------------------------------------------------ Pilot events
+def _log_event(
+    db: Session, event_type: str, *, farm_id=None, planned_spray_id=None,
+    entry_source=None, meta=None,
+) -> None:
+    """Add (not commit) one server-side instrumentation event to the current transaction."""
+    db.add(models.PilotEvent(
+        event_type=event_type, farm_id=farm_id, planned_spray_id=planned_spray_id,
+        entry_source=entry_source, meta=meta,
+    ))
+
+
+def create_pilot_event(db: Session, data: schemas.PilotEventCreate) -> models.PilotEvent:
+    """Client-reported workflow event (check_started / check_abandoned / import_used)."""
+    event = models.PilotEvent(**data.model_dump())
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def list_pilot_events(db: Session) -> list[models.PilotEvent]:
+    return list(
+        db.scalars(
+            select(models.PilotEvent).order_by(models.PilotEvent.created_at.desc(),
+                                               models.PilotEvent.id.desc())
+        )
+    )
+
+
+def list_all_planned_sprays(db: Session) -> list[models.PlannedSpray]:
+    """Every planned spray across farms (for the instrumentation summary)."""
+    return list(db.scalars(select(models.PlannedSpray).order_by(models.PlannedSpray.id)))
 
 
 # --------------------------------------------------------------- Pilot intake

@@ -14,10 +14,23 @@ Creates two clearly contrasting farms:
 
 Idempotent: clears existing rows first so re-running gives a clean demo state.
 """
-from datetime import date, timedelta
+import os
+from datetime import date, datetime, timedelta
 
-from app import models
+from app import models, schemas
 from app.database import Base, SessionLocal, engine, init_db
+from app.decision_engine import evaluate_planned_spray
+
+
+def demo_today() -> date:
+    """The anchor date every seeded record is relative to.
+
+    Defaults to the real today (re-seed before a demo and the story is always fresh);
+    set LUMOS_DEMO_TODAY=YYYY-MM-DD to pin the whole demo to a fixed date for
+    screenshots / deterministic tests.
+    """
+    pinned = os.environ.get("LUMOS_DEMO_TODAY")
+    return date.fromisoformat(pinned) if pinned else date.today()
 
 
 def run() -> None:
@@ -28,7 +41,7 @@ def run() -> None:
     db = SessionLocal()
     try:
 
-        today = date.today()
+        today = demo_today()
 
         # ------------------------------------------------------------------ #
         # Farm 1 — HIGH RISK                                                  #
@@ -172,7 +185,7 @@ def run() -> None:
         db.add(farm3)
         db.flush()
 
-        db.add_all([
+        farm3_sprays = [
             # Captan applied yesterday: PHI 4 -> clears after harvest (PHI risk),
             # REI 24h -> worker re-entry window may still be active.
             models.SprayEvent(
@@ -228,19 +241,102 @@ def run() -> None:
                 re_entry_interval_hours=12,
                 notes="Lygus pressure on field edges.",
             ),
-        ])
+        ]
+        db.add_all(farm3_sprays)
 
         # High-severity scouting -> elevated pressure flag.
-        db.add(
-            models.ScoutObservation(
-                farm_id=farm3.id,
-                observation_date=today - timedelta(days=2),
-                crop_stage="fruiting",
-                visible_issue="gray mold (Botrytis) on ripening fruit, spreading",
-                severity_1_to_5=4,
-                notes="Several infected berries per bed in the low, shaded rows.",
-            )
+        farm3_obs = models.ScoutObservation(
+            farm_id=farm3.id,
+            observation_date=today - timedelta(days=2),
+            crop_stage="fruiting",
+            visible_issue="gray mold (Botrytis) on ripening fruit, spreading",
+            severity_1_to_5=4,
+            notes="Several infected berries per bed in the low, shaded rows.",
         )
+        db.add(farm3_obs)
+
+        # ------------------------------------------------------------------ #
+        # Demo pre-spray decision (the end-to-end YC scenario):               #
+        #   a 4th captan cover spray planned 1 day before harvest is BLOCKED  #
+        #   (PHI conflict + repeated chemistry), the demo PCA edits the       #
+        #   guidance to a PHI-0 alternative, and the grower records           #
+        #   "changed product" — Lumos changed a risky spray.                  #
+        #   All demo/simulated: excluded from real pilot evidence by design.  #
+        # ------------------------------------------------------------------ #
+        # Values entered by the demo PCA -> the block is DEFINITIVE under authority
+        # gating (grower-entered values would make it provisional).
+        planned_data = schemas.PlannedSprayCreate(
+            intended_date=today,  # checked and resolved the same day it was intended
+            product_name="Captan 80 WDG",
+            active_ingredient="captan",
+            target_pest_or_disease="gray mold (Botrytis) on ripening fruit, spreading",
+            pre_harvest_interval_days=4,
+            re_entry_interval_hours=24,
+            estimated_cost=120.0,
+            values_source="pca_entered",
+            values_entered_by="Demo PCA (simulated)",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        # Run the real decision engine (anchored to the same demo date) so the demo
+        # snapshot is authentic and internally consistent.
+        decision = evaluate_planned_spray(
+            farm3, planned_data, farm3_sprays, [farm3_obs], today=today
+        )
+        harvest_label = farm3.expected_harvest_date.isoformat()
+        # A named replacement product is ONLY allowed as explicit PCA-entered guidance
+        # (this note), never as engine output.
+        switch_note = (
+            f"Blocked as planned: captan's entered PHI cannot clear before the expected "
+            f"{harvest_label} harvest, and this would be the 4th captan in 30 days. "
+            f"Switch to Switch 62.5 WG (cyprodinil + fludioxonil, entered PHI 0 days) "
+            f"for this application and rotate chemistry."
+        )
+        db.add(models.PlannedSpray(
+            farm_id=farm3.id,
+            **planned_data.model_dump(),
+            decision_outcome=decision.outcome,
+            decision_severity=decision.severity,
+            decision_confidence=decision.confidence,
+            decision_authority=decision.authority_level,
+            required_next_action=decision.required_next_action,
+            review_required=decision.review_required,
+            decision_payload=decision.as_payload(),
+            check_risk_level="elevated",
+            check_text=decision.narrative,
+            review_status="edited",
+            review_comment="Agree with the block — do not apply captan this close to harvest.",
+            reviewed_by="Demo PCA (simulated)",
+            reviewed_at=datetime.combine(today, datetime.min.time()),
+            pca_next_action=switch_note,
+            outcome="changed_product",
+            outcome_reason=(
+                "Followed the PCA's edited guidance: applied Switch 62.5 WG instead of a "
+                "4th captan this close to harvest."
+            ),
+            outcome_date=today,
+            outcome_product_name="Switch 62.5 WG",
+            outcome_active_ingredient="cyprodinil + fludioxonil",
+            # Anchor the record timestamps to the same demo day so the story's
+            # check -> review -> outcome all read as one consistent day.
+            created_at=datetime.combine(today, datetime.min.time()),
+        ))
+
+        # The spray that actually happened after the changed-product outcome.
+        db.add(models.SprayEvent(
+            farm_id=farm3.id,
+            product_name="Switch 62.5 WG",
+            active_ingredient="cyprodinil + fludioxonil",
+            pesticide_class="anilinopyrimidine + phenylpyrrole fungicide",
+            target_pest_or_disease="gray mold (Botrytis) on ripening fruit, spreading",
+            dose="14 oz/acre",
+            application_date=today,
+            cost=210.0,
+            pre_harvest_interval_days=0,
+            re_entry_interval_hours=12,
+            notes="Applied instead of a 4th captan after the pre-spray check was blocked "
+            "and the demo PCA edited the guidance.",
+        ))
 
         # Declared spray baseline so the U.S. demo shows *measured* reduction, not just
         # descriptive metrics. Kept demo/simulated so the engine correctly flags the number as

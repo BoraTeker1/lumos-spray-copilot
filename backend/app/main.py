@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from app import crud, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
-from app.pilot_evidence import build_pilot_case_study, build_pilot_evidence
+from app.pilot_evidence import (
+    build_decision_evidence,
+    build_instrumentation_summary,
+    build_pilot_case_study,
+    build_pilot_evidence,
+)
 from app.recommendation_engine import generate_recommendation
 from app.reduction import compute_reduction
 from app.vision import (
@@ -62,6 +67,89 @@ def get_farms(db: Session = Depends(get_db)):
 @app.post("/farms", response_model=schemas.Farm, status_code=201, tags=["farms"])
 def post_farm(payload: schemas.FarmCreate, db: Session = Depends(get_db)):
     return crud.create_farm(db, payload)
+
+
+# NOTE: declared before /farms/{farm_id} so "overview" isn't parsed as a farm id.
+@app.get("/farms-overview", tags=["farms"])
+def farms_overview(db: Session = Depends(get_db)):
+    """Action-oriented farm list: which farm needs attention, why, and the next action.
+
+    One call for the dashboard (instead of N calls per farm). Urgency ranking:
+    conflict (a critical pre-spray decision is unresolved) > needs_review (a decision
+    awaits PCA review) > awaiting_outcome > flags (record-level PHI/REI/resistance/
+    scouting flags) > ok.
+    """
+    out = []
+    for farm in crud.list_farms(db):
+        sprays = crud.list_spray_events(db, farm.id)
+        observations = crud.list_scout_observations(db, farm.id)
+        planned = crud.list_planned_sprays(db, farm.id)
+        signals = generate_recommendation(farm, sprays, observations).signals
+
+        open_planned = [p for p in planned if p.outcome == "planned"]
+        needs_review = [
+            p for p in open_planned
+            if p.review_required and p.review_status not in ("approved", "edited", "rejected")
+        ]
+        open_critical = [p for p in open_planned if p.decision_severity == "critical"]
+        flag_count = sum(
+            1 for k in (
+                "phi_risk", "rei_risk", "repeated_active_ingredient_risk",
+                "high_severity_scouting",
+            ) if signals.get(k)
+        )
+
+        if open_critical:
+            urgency, why = "conflict", (
+                f"{len(open_critical)} planned spray(s) conflict with entered "
+                f"harvest/re-entry timing"
+            )
+            next_action = "Resolve the blocked pre-spray decision with your PCA"
+        elif needs_review:
+            urgency, why = "needs_review", (
+                f"{len(needs_review)} pre-spray decision(s) awaiting PCA review"
+            )
+            next_action = "Review the pending pre-spray decision(s)"
+        elif open_planned:
+            urgency, why = "awaiting_outcome", (
+                f"{len(open_planned)} checked spray(s) without a recorded outcome"
+            )
+            next_action = "Record what actually happened for the checked spray(s)"
+        elif flag_count:
+            urgency, why = "flags", (
+                f"{flag_count} PHI/REI/resistance/scouting flag(s) from current records"
+            )
+            next_action = "Open the pre-spray risk snapshot and review the flags"
+        else:
+            urgency, why = "ok", "No open decisions or risk flags from current records"
+            next_action = "Run a pre-spray check before the next planned application"
+
+        records = list(sprays) + list(observations)
+        out.append({
+            "id": farm.id,
+            "name": farm.name,
+            "location": farm.location,
+            "country": farm.country,
+            "crop_type": farm.crop_type,
+            "area": farm.greenhouse_area,
+            "expected_harvest_date": _iso(farm.expected_harvest_date),
+            "urgency": urgency,
+            "why": why,
+            "next_action": next_action,
+            "needs_review_count": len(needs_review),
+            "awaiting_outcome_count": len(open_planned),
+            "open_conflict_count": len(open_critical),
+            "flag_count": flag_count,
+            "spray_count": len(sprays),
+            "is_demo": bool(records) and all(
+                (r.data_source == "demo" or r.data_confidence == "simulated")
+                for r in records
+            ),
+        })
+
+    rank = {"conflict": 0, "needs_review": 1, "awaiting_outcome": 2, "flags": 3, "ok": 4}
+    out.sort(key=lambda f: (rank.get(f["urgency"], 9), f["id"]))
+    return out
 
 
 def _require_farm(db: Session, farm_id: int):
@@ -216,9 +304,11 @@ def post_planned_spray(
 ):
     """Check an *intended* spray before it happens (the pre-spray decision point).
 
-    Runs three conservative checks (repeated active ingredient, entered-PHI vs. expected
-    harvest, explicitly linked scouting evidence) and stores the result as a snapshot.
-    Decision support only — the outcome is the grower/PCA's decision, recorded separately.
+    Runs the decision engine (PHI/REI vs. harvest, prior re-entry windows, repeated
+    active ingredient, scouting evidence, missing data) and returns ONE explainable
+    outcome — approve / block / delay / inspect_first / pca_review_required — with the
+    triggered rules, inputs, calculations, and confidence snapshotted on the record.
+    Decision support only — the real-world outcome is recorded separately by the human.
     """
     farm = _require_farm(db, farm_id)
     return crud.create_planned_spray(db, farm, payload)
@@ -231,6 +321,32 @@ def _require_planned_spray(db: Session, planned_id: int):
     return planned
 
 
+@app.get(
+    "/planned-sprays/{planned_id}",
+    response_model=schemas.PlannedSpray,
+    tags=["planned-sprays"],
+)
+def get_planned_spray(planned_id: int, db: Session = Depends(get_db)):
+    """One planned spray with its full decision snapshot (drives the decision record)."""
+    return _require_planned_spray(db, planned_id)
+
+
+@app.patch(
+    "/planned-sprays/{planned_id}/review",
+    response_model=schemas.PlannedSpray,
+    tags=["planned-sprays"],
+)
+def patch_planned_spray_review(
+    planned_id: int, payload: schemas.PlannedSprayReviewUpdate, db: Session = Depends(get_db)
+):
+    """PCA / agronomist review of a pre-spray decision (approve / edit / reject + comment).
+
+    An edit must include the PCA's replacement guidance; a rejection must say why.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    return crud.review_planned_spray(db, planned, payload)
+
+
 @app.patch(
     "/planned-sprays/{planned_id}/outcome",
     response_model=schemas.PlannedSpray,
@@ -239,12 +355,29 @@ def _require_planned_spray(db: Session, planned_id: int):
 def patch_planned_spray_outcome(
     planned_id: int, payload: schemas.PlannedSprayOutcomeUpdate, db: Session = Depends(get_db)
 ):
-    """Record the grower/PCA's decision (sprayed / skipped / postponed + stated reason).
+    """Record what actually happened (sprayed_as_planned / changed_product / delayed /
+    avoided / inspected_first + stated reason).
 
-    A 'sprayed' outcome creates and links the real spray event.
+    Applied outcomes create and link the real spray event; when the decision required
+    review, they are rejected with 409 until a PCA has approved or edited the decision.
     """
     planned = _require_planned_spray(db, planned_id)
-    return crud.record_planned_spray_outcome(db, planned, payload)
+    try:
+        return crud.record_planned_spray_outcome(db, planned, payload)
+    except crud.ReviewRequiredError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/farms/{farm_id}/decision-evidence", tags=["planned-sprays"])
+def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
+    """Pre-spray decision workflow metrics for the pilot/evidence dashboard.
+
+    Demo/simulated decisions are excluded; every figure states whether it is a count,
+    an entered estimate, or a stated assumption (see `limitations`).
+    """
+    farm = _require_farm(db, farm_id)
+    planned = crud.list_planned_sprays(db, farm_id)
+    return build_decision_evidence(planned, advisor_label=_advisor_label(farm))
 
 
 @app.delete("/planned-sprays/{planned_id}", status_code=204, tags=["planned-sprays"])
@@ -337,6 +470,9 @@ def farm_compliance(farm_id: int, db: Session = Depends(get_db)):
         "weather_risk_level": weather["risk_level"],
         "review_status": latest.agronomist_status if latest else "none",
         "advisor_label": _advisor_label(farm),
+        # Honest framing for the UI: these signals come from user-entered PHI/REI values,
+        # not from a verified pesticide-label database.
+        "basis": "user-entered values, not label-verified",
     }
 
 
@@ -519,12 +655,13 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/farms/{farm_id}/pilot-import", status_code=201, tags=["pilot"])
+@app.post("/internal/farms/{farm_id}/pilot-import", status_code=201, tags=["internal"])
 def pilot_import(
     farm_id: int, payload: schemas.PilotImport, db: Session = Depends(get_db)
 ):
-    """Manual/concierge import of pilot data collected from a call/WhatsApp/spreadsheet/email.
+    """INTERNAL concierge tooling — not part of the customer-facing workflow.
 
+    Manual import of pilot data collected from a call/WhatsApp/spreadsheet/email.
     Not an automated integration — a human transcribes the records. Every imported row is
     tagged with the provided data_source + data_confidence for honest downstream metrics.
     """
@@ -702,6 +839,26 @@ def _iso(value):
 def create_pilot_farm(payload: schemas.PilotFarmIntake, db: Session = Depends(get_db)):
     """One-shot intake: create a pilot farm plus its last sprays and a scouting concern."""
     return crud.create_pilot_farm(db, payload)
+
+
+# ------------------------------------------------------------- Pilot events
+@app.post("/pilot-events", response_model=schemas.PilotEvent, status_code=201, tags=["pilot"])
+def post_pilot_event(payload: schemas.PilotEventCreate, db: Session = Depends(get_db)):
+    """Fire-and-forget workflow telemetry from the UI (check started/abandoned, imports).
+
+    Server-side events (check_completed / review_recorded / outcome_recorded) are logged
+    automatically by their own endpoints — clients should not send those.
+    """
+    return crud.create_pilot_event(db, payload)
+
+
+@app.get("/internal/instrumentation", tags=["internal"])
+def internal_instrumentation(db: Session = Depends(get_db)):
+    """INTERNAL pilot telemetry summary: check funnel, time-to-review, changed decisions,
+    entry sources, abandonment. Never customer-facing."""
+    return build_instrumentation_summary(
+        crud.list_all_planned_sprays(db), crud.list_pilot_events(db)
+    )
 
 
 # ------------------------------------------------------------- Pilot feedback

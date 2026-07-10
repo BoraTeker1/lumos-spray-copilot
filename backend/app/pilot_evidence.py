@@ -54,6 +54,25 @@ def _scouting_backed(spray, scout_observations) -> bool:
     return False
 
 
+# Recorded real-world outcomes for a planned spray (mirrors schemas.PlannedSprayOutcome).
+_PLANNED_OUTCOMES = (
+    "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first"
+)
+# Review statuses that count as a recorded PCA decision on a pre-spray check.
+_DECISION_REVIEWED = ("approved", "edited", "rejected")
+# Explicit, stated assumption behind the review-minutes-saved estimate. Not a measurement.
+ASSUMED_MANUAL_CHECK_MINUTES = 10
+
+
+def _real_planned(planned_sprays) -> list:
+    """Planned sprays excluding demo/simulated records (real pilot decisions only)."""
+    return [
+        p for p in (planned_sprays or [])
+        if getattr(p, "data_source", None) != "demo"
+        and getattr(p, "data_confidence", None) != "simulated"
+    ]
+
+
 def _pre_spray_decisions(planned_sprays) -> dict:
     """Minimal pre-spray decision counts for the evidence block.
 
@@ -61,27 +80,167 @@ def _pre_spray_decisions(planned_sprays) -> dict:
     decisions only. Outcomes are the grower/PCA's decisions that the check documented;
     no causation is claimed and no cost/savings figure is derived.
     """
-    real = [
-        p for p in (planned_sprays or [])
-        if getattr(p, "data_source", None) != "demo"
-        and getattr(p, "data_confidence", None) != "simulated"
-    ]
+    real = _real_planned(planned_sprays)
     outcomes = [getattr(p, "outcome", "planned") for p in real]
     reasons = [
         {"outcome": getattr(p, "outcome", None), "reason": getattr(p, "outcome_reason", None)}
         for p in real
         if getattr(p, "outcome_reason", None)
     ]
-    return {
-        "checked": len(real),
-        "sprayed": sum(1 for o in outcomes if o == "sprayed"),
-        "skipped": sum(1 for o in outcomes if o == "skipped"),
-        "postponed": sum(1 for o in outcomes if o == "postponed"),
-        "outcome_reasons": reasons,
-        "note": (
-            "Outcomes are grower/PCA decisions that the pre-spray check documented — not "
-            "outcomes the check caused. Demo/simulated planned sprays are excluded."
+    block = {"checked": len(real)}
+    block.update({o: sum(1 for x in outcomes if x == o) for o in _PLANNED_OUTCOMES})
+    block["outcome_reasons"] = reasons
+    block["note"] = (
+        "Outcomes are grower/PCA decisions that the pre-spray check documented — not "
+        "outcomes the check caused. Demo/simulated planned sprays are excluded."
+    )
+    return block
+
+
+def build_decision_evidence(planned_sprays, advisor_label: str = "agronomist") -> dict:
+    """Aggregate the pre-spray decision workflow into pilot metrics (honest by design).
+
+    Demo/simulated planned sprays are excluded. Every derived number states what it is:
+    documented decisions, not caused outcomes; cost *not spent on* avoided applications,
+    not net savings; review minutes *estimated from a stated assumption*, not measured.
+    """
+    all_planned = list(planned_sprays or [])
+    real = _real_planned(planned_sprays)
+    outcomes = {o: 0 for o in _PLANNED_OUTCOMES}
+    for p in real:
+        o = getattr(p, "outcome", "planned")
+        if o in outcomes:
+            outcomes[o] += 1
+    pending = len(real) - sum(outcomes.values())
+
+    # Reconciliation for demo farms: seeded decisions are visible in the queue but
+    # excluded from every real metric — count them separately so the two views agree.
+    demo = [p for p in all_planned if p not in real]
+    demo_outcomes = {o: 0 for o in _PLANNED_OUTCOMES}
+    for p in demo:
+        o = getattr(p, "outcome", "planned")
+        if o in demo_outcomes:
+            demo_outcomes[o] += 1
+
+    reviewed = [p for p in real if getattr(p, "review_status", None) in _DECISION_REVIEWED]
+    accepted = sum(
+        1 for p in reviewed if getattr(p, "review_status", None) in ("approved", "edited")
+    )
+    acceptance_rate_pct = (
+        round(100.0 * accepted / len(reviewed), 1) if reviewed else None
+    )
+
+    conflicts_caught = sum(
+        1 for p in real if getattr(p, "decision_severity", None) == "critical"
+    )
+
+    # Chemical cost NOT spent on avoided applications (entered estimates only).
+    avoided_cost = sum(
+        float(getattr(p, "estimated_cost", None) or 0.0)
+        for p in real
+        if getattr(p, "outcome", None) == "avoided"
+    )
+
+    review_minutes_estimate = len(real) * ASSUMED_MANUAL_CHECK_MINUTES
+
+    limitations = [
+        "Outcomes are grower/PCA decisions that the check documented — not outcomes the "
+        "check caused. This is workflow evidence, not a controlled study.",
+        "Estimated chemical cost avoided sums the user-entered cost estimates of avoided "
+        "applications — chemicals not applied, not a net-savings or yield claim.",
+        (
+            f"Review time uses a stated assumption ({ASSUMED_MANUAL_CHECK_MINUTES} min per "
+            f"manual PHI/REI/rotation cross-check), not a measurement."
         ),
+        "PHI/REI inputs are user-entered, not label-verified.",
+    ]
+    if not real:
+        limitations.insert(0, "No real (non-demo) pre-spray decisions recorded yet.")
+
+    return {
+        "decisions_checked": len(real),
+        "demo_decisions_checked": len(demo),
+        "demo_outcomes": demo_outcomes,
+        "decisions_reviewed": len(reviewed),
+        "pca_acceptance_rate_pct": acceptance_rate_pct,
+        "outcomes": {**outcomes, "awaiting_outcome": pending},
+        "sprays_changed_delayed_or_avoided": (
+            outcomes["changed_product"] + outcomes["delayed"] + outcomes["avoided"]
+        ),
+        "compliance_conflicts_caught": conflicts_caught,
+        "estimated_chemical_cost_avoided": round(avoided_cost, 2) if avoided_cost else 0.0,
+        "estimated_review_minutes_saved": review_minutes_estimate,
+        "review_minutes_assumption": (
+            f"Assumes ~{ASSUMED_MANUAL_CHECK_MINUTES} minutes per manual "
+            f"PHI/REI/rotation cross-check a {advisor_label} would otherwise do by hand. "
+            f"Stated assumption, not a measurement."
+        ),
+        "advisor_label": advisor_label,
+        "limitations": limitations,
+    }
+
+
+def build_instrumentation_summary(planned_sprays, events) -> dict:
+    """Pilot workflow telemetry: how the check→review→outcome loop is actually used.
+
+    Internal-only. Demo/simulated planned sprays are excluded from timing and
+    decision-changed stats (their timestamps are seeded); raw event counts include
+    everything and say so.
+    """
+    events = list(events or [])
+    real = _real_planned(planned_sprays)
+
+    counts: dict[str, int] = {}
+    for e in events:
+        t = getattr(e, "event_type", None)
+        if t:
+            counts[t] = counts.get(t, 0) + 1
+
+    started = counts.get("check_started", 0)
+    completed = counts.get("check_completed", 0)
+    abandoned = counts.get("check_abandoned", 0)
+
+    reviewed = [
+        p for p in real
+        if getattr(p, "reviewed_at", None) and getattr(p, "created_at", None)
+    ]
+    review_seconds = sorted(
+        (p.reviewed_at - p.created_at).total_seconds() for p in reviewed
+    )
+    median_seconds_to_review = (
+        round(review_seconds[len(review_seconds) // 2], 1) if review_seconds else None
+    )
+
+    recorded = [p for p in real if getattr(p, "outcome", "planned") != "planned"]
+    decisions_changed = sum(
+        1 for p in recorded if getattr(p, "outcome", None) != "sprayed_as_planned"
+    )
+
+    entry_sources: dict[str, int] = {}
+    for p in real:
+        src = getattr(p, "data_source", None) or "unknown"
+        entry_sources[src] = entry_sources.get(src, 0) + 1
+
+    return {
+        "event_counts": counts,
+        "checks_started": started,
+        "checks_completed": completed,
+        "checks_abandoned": abandoned,
+        "abandonment_rate_pct": (
+            round(100.0 * abandoned / started, 1) if started else None
+        ),
+        "median_seconds_to_pca_review": median_seconds_to_review,
+        "outcomes_recorded": len(recorded),
+        "decisions_changed": decisions_changed,
+        "entry_source_breakdown": entry_sources,
+        "notes": [
+            "Internal workflow telemetry, not customer-facing metrics.",
+            "Timing, decision-changed, and entry-source stats exclude demo/simulated "
+            "planned sprays; raw event counts include every logged event.",
+            "check_started and check_abandoned are client-reported and best-effort; "
+            "check_completed, review_recorded, and outcome_recorded are logged "
+            "server-side and complete.",
+        ],
     }
 
 

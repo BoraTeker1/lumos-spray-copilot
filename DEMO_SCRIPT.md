@@ -12,25 +12,34 @@ re-run `python -m app.seed` first for a clean state. The homepage hero has the t
 
 ---
 
-# ⚡ 90-SECOND YC DEMO
+# ⚡ 90-SECOND YC DEMO — "Lumos changed a risky spray"
 
-> Goal: land the wedge, show one screen of real value, and the human-in-the-loop. Don't click everything.
+> Goal: one workflow, one blocked spray, one changed decision. The seeded Golden Coast farm
+> already contains the finished story; you re-run it live in the same screen.
 
-1. **(15s) One-liner + homepage.** *"Lumos is the pesticide decision and compliance copilot for
-   specialty-crop growers and their PCAs — the decision layer **before** the spray, not a sprayer
-   or a drone."* Point at the homepage hero (who / pain / outcome) and click
-   **🇺🇸 View U.S. strawberry demo**.
-2. **(30s) Compliance snapshot.** Scroll to **🛡️ Compliance snapshot**: PHI **At risk**, REI
-   **May be active**, repeated ingredient **Repeated**, scouting **High**.
-   *"In one screen: residue timing, worker re-entry, resistance — the exact things that get a
-   load rejected or a crew sent into a treated field too early."*
-3. **(25s) Recommendation + PCA approval.** Click **Generate recommendation** → next action
-   **"Harvest timing risk — review before picking."** Hit **Approve** in the PCA review box.
-   *"It never says 'spray now.' A licensed PCA — already required by law in California — approves
-   before anything reaches the grower."*
-4. **(20s) Report + close.** **Weekly report → Copy** (PCA wording, $ costs, PHI/REI warnings,
-   disclaimer). *"Audit-ready, shareable, exportable to CSV. We help them spray less and stay
-   compliant — capital-light software, no hardware."*
+1. **(10s) One-liner + farms page.** *"Lumos is the pesticide decision copilot for specialty-crop
+   growers and their PCAs — the decision layer **before** the spray."* The farms page is already
+   ranked by urgency: each card says **why** it needs attention and the **next action**. Open
+   **🇺🇸 Golden Coast Strawberry Ranch**.
+2. **(30s) The seeded blocked decision.** The **Decision queue** shows the story that already
+   happened: a 4th captan cover spray planned **two days before harvest** came back
+   **BLOCK — definitive** (PHI arithmetic shown: intended date + 4 days clears *after* harvest,
+   plus "use number 4 of captan in 30 days"; definitive because the values were
+   **PCA-entered** — the source authority is printed on every rule). The demo PCA **edited**
+   the guidance — switch to a PHI-0 product — and the recorded outcome is
+   **Changed product → Switch 62.5 WG**, applied on the intended day.
+   *"That's the product: a risky spray went in, one clear outcome came back, a licensed PCA —
+   already required by law in California — redirected it, and the audit trail wrote itself.
+   Open the **Decision record** link for the printable one-pager."*
+3. **(35s) Run one live.** Click **Check a planned spray** → product `Captan 80 WDG` + date;
+   expand compliance values → AI `captan`, PHI `4`, REI `24` → **Run the decision check** →
+   **PROVISIONAL BLOCK**, with the triggered rules, the exact calculations, inputs used, and
+   who entered them. *"Grower-entered values can never produce a definitive verdict — only
+   PCA-confirmed or label-verified data can. Honest by construction."* Approve as the PCA,
+   record **Avoided** with a reason.
+4. **(15s) Evidence + close.** Evidence tab → **Decision evidence**: decisions checked,
+   conflicts caught, sprays changed/avoided, PCA acceptance rate — demo data excluded,
+   every caveat printed. *"This is the per-pilot scoreboard we'll fill with real growers."*
 
 ---
 

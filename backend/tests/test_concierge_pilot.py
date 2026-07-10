@@ -45,7 +45,7 @@ def _import_payload():
 # --------------------------------------------------------------- Pilot import
 def test_valid_pilot_import(client):
     fid = _make_us_farm(client)
-    resp = client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    resp = client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     assert resp.status_code == 201
     body = resp.json()
     assert body["imported_spray_events"] == 3
@@ -61,13 +61,13 @@ def test_valid_pilot_import(client):
 
 
 def test_pilot_import_invalid_farm_returns_404(client):
-    assert client.post("/farms/9999/pilot-import", json=_import_payload()).status_code == 404
+    assert client.post("/internal/farms/9999/pilot-import", json=_import_payload()).status_code == 404
 
 
 def test_pilot_import_rejects_bad_enum_value(client):
     fid = _make_us_farm(client)
     bad = {**_import_payload(), "data_confidence": "totally_made_up"}
-    assert client.post(f"/farms/{fid}/pilot-import", json=bad).status_code == 422
+    assert client.post(f"/internal/farms/{fid}/pilot-import", json=bad).status_code == 422
 
 
 def test_imported_records_affect_pilot_evidence_metrics(client):
@@ -75,7 +75,7 @@ def test_imported_records_affect_pilot_evidence_metrics(client):
     before = client.get(f"/farms/{fid}/pilot-evidence").json()
     assert before["total_spray_events"] == 0
 
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     after = client.get(f"/farms/{fid}/pilot-evidence").json()
     assert after["total_spray_events"] == 3
     assert after["total_scouting_observations"] == 1
@@ -87,7 +87,7 @@ def test_imported_records_affect_pilot_evidence_metrics(client):
 # ------------------------------------------------------------- Case study
 def test_case_study_includes_required_sections(client):
     fid = _make_us_farm(client)
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     cs = client.get(f"/farms/{fid}/pilot-case-study").json()
 
     required = {
@@ -108,7 +108,7 @@ def test_case_study_includes_required_sections(client):
 
 def test_case_study_includes_limitations_and_disclaimer(client):
     fid = _make_us_farm(client)
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     cs = client.get(f"/farms/{fid}/pilot-case-study").json()
     assert len(cs["what_is_still_unknown"]) >= 1
     assert any("baseline" in u.lower() for u in cs["what_is_still_unknown"])
@@ -119,7 +119,7 @@ def test_case_study_includes_limitations_and_disclaimer(client):
 
 def test_case_study_has_no_autonomous_prescription_language(client):
     fid = _make_us_farm(client)
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     cs = client.get(f"/farms/{fid}/pilot-case-study").json()
     blob = " ".join(
         cs["what_lumos_helped_surface"]
@@ -138,7 +138,7 @@ def test_case_study_nonexistent_farm_returns_404(client):
 # ------------------------------------------------ Import batch (audit trail)
 def test_pilot_import_creates_persisted_batch(client):
     fid = _make_us_farm(client)
-    resp = client.post(f"/farms/{fid}/pilot-import", json=_import_payload()).json()
+    resp = client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload()).json()
     assert resp["batch_id"]
     assert resp["imported_at"]
     assert resp["imported_spray_events"] == 3
@@ -147,7 +147,7 @@ def test_pilot_import_creates_persisted_batch(client):
 
 def test_imported_records_link_to_the_batch(client):
     fid = _make_us_farm(client)
-    batch_id = client.post(f"/farms/{fid}/pilot-import", json=_import_payload()).json()["batch_id"]
+    batch_id = client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload()).json()["batch_id"]
     sprays = client.get(f"/farms/{fid}/spray-events").json()
     obs = client.get(f"/farms/{fid}/scout-observations").json()
     assert sprays and all(s["pilot_import_batch_id"] == batch_id for s in sprays)
@@ -157,7 +157,7 @@ def test_imported_records_link_to_the_batch(client):
 def test_case_study_includes_latest_import_metadata(client):
     fid = _make_us_farm(client)
     # Two batches from different sources; the second is the "latest".
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     second = {
         **_import_payload(),
         "source_label": "WhatsApp from grower, 2026-06-21",
@@ -166,7 +166,7 @@ def test_case_study_includes_latest_import_metadata(client):
         "notes": "Follow-up thread.",
         "scouting_observations": [],
     }
-    client.post(f"/farms/{fid}/pilot-import", json=second)
+    client.post(f"/internal/farms/{fid}/pilot-import", json=second)
 
     cs = client.get(f"/farms/{fid}/pilot-case-study").json()
     assert cs["pilot_import_batches_count"] == 2
@@ -179,7 +179,7 @@ def test_case_study_includes_latest_import_metadata(client):
 
 def test_audit_packet_includes_pilot_import_batches_section(client):
     fid = _make_us_farm(client)
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     packet = client.get(f"/farms/{fid}/audit-packet").json()
     assert "pilot_import_batches" in packet
     assert len(packet["pilot_import_batches"]) == 1
@@ -192,7 +192,7 @@ def test_audit_packet_includes_pilot_import_batches_section(client):
 
 def test_import_batch_metadata_has_no_autonomous_prescription_language(client):
     fid = _make_us_farm(client)
-    client.post(f"/farms/{fid}/pilot-import", json=_import_payload())
+    client.post(f"/internal/farms/{fid}/pilot-import", json=_import_payload())
     cs = client.get(f"/farms/{fid}/pilot-case-study").json()
     disc = cs["disclaimer"].lower()
     assert "must spray" not in disc

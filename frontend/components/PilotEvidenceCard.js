@@ -92,7 +92,7 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
               : "Estimated cost of one planned application"
           }
           value={avoidable}
-          hint={hasDocumentedSkip ? "a planned spray was skipped" : "estimate, not a saving claim"}
+          hint={hasDocumentedSkip ? "a planned spray was avoided" : "estimate, not a saving claim"}
         />
       </div>
 

@@ -1,141 +1,13 @@
-"""Tests for the pre-spray decision check (planned sprays).
+"""API tests for the planned-spray workflow: decision check -> PCA review -> outcome.
 
-Engine tests use SimpleNamespace stand-ins with a fixed `today` (same style as
-test_recommendation_engine.py); API tests use the shared TestClient fixture.
+Engine behaviour is covered in test_decision_engine.py; these tests exercise the
+HTTP workflow, the human review gate, and the evidence aggregation.
 """
 from datetime import date, timedelta
-from types import SimpleNamespace
 
-from app.recommendation_engine import (
-    PLANNED_SPRAY_DISCLAIMER,
-    RISK_LOW,
-    evaluate_planned_spray,
-)
-
-TODAY = date(2026, 7, 9)
+from app.decision_engine import PLANNED_SPRAY_DISCLAIMER
 
 
-def farm(harvest_offset_days=None):
-    harvest = (
-        TODAY + timedelta(days=harvest_offset_days)
-        if harvest_offset_days is not None
-        else None
-    )
-    return SimpleNamespace(expected_harvest_date=harvest)
-
-
-def spray(ai="captan", days_ago=1):
-    return SimpleNamespace(
-        active_ingredient=ai,
-        application_date=TODAY - timedelta(days=days_ago),
-        pre_harvest_interval_days=None,
-        product_name="Test Product",
-    )
-
-
-def obs(issue, days_ago=1, severity=2):
-    return SimpleNamespace(
-        observation_date=TODAY - timedelta(days=days_ago),
-        severity_1_to_5=severity,
-        visible_issue=issue,
-    )
-
-
-def planned(ai="captan", target="botrytis", phi=None, intended_offset_days=1):
-    return SimpleNamespace(
-        intended_date=TODAY + timedelta(days=intended_offset_days),
-        product_name="Captan 80WDG",
-        active_ingredient=ai,
-        target_pest_or_disease=target,
-        pre_harvest_interval_days=phi,
-    )
-
-
-# ------------------------------------------------------ Check 1: repeated ingredient
-def test_planned_spray_exceeding_ingredient_window_is_flagged():
-    # 2 recent captan uses; the planned one would be the 3rd -> over the limit.
-    sprays = [spray(days_ago=5), spray(days_ago=15)]
-    result = evaluate_planned_spray(farm(), planned(), sprays, [], today=TODAY)
-    assert any("use number 3" in f for f in result.flags)
-
-
-def test_planned_spray_within_ingredient_limit_not_flagged():
-    sprays = [spray(days_ago=5)]  # planned would be only the 2nd use
-    result = evaluate_planned_spray(farm(), planned(), sprays, [], today=TODAY)
-    assert not any("use number" in f for f in result.flags)
-
-
-def test_old_sprays_outside_window_do_not_count():
-    sprays = [spray(days_ago=40), spray(days_ago=50)]
-    result = evaluate_planned_spray(farm(), planned(), sprays, [], today=TODAY)
-    assert not any("use number" in f for f in result.flags)
-
-
-# ------------------------------------------------------------- Check 2: PHI arithmetic
-def test_phi_clearing_after_harvest_is_flagged():
-    # Intended tomorrow + PHI 7 clears on day 8; harvest on day 3 -> flag.
-    result = evaluate_planned_spray(
-        farm(harvest_offset_days=3), planned(phi=7), [], [], today=TODAY
-    )
-    assert any("pre-harvest interval risk" in f.lower() for f in result.flags)
-
-
-def test_phi_clearing_before_harvest_not_flagged():
-    # Intended tomorrow + PHI 2 clears on day 3; harvest on day 10 -> fine.
-    result = evaluate_planned_spray(
-        farm(harvest_offset_days=10), planned(phi=2), [], [], today=TODAY
-    )
-    assert not any("pre-harvest interval risk" in f.lower() for f in result.flags)
-
-
-def test_no_phi_entered_means_no_phi_flag():
-    result = evaluate_planned_spray(
-        farm(harvest_offset_days=1), planned(phi=None), [], [], today=TODAY
-    )
-    assert not any("pre-harvest interval risk" in f.lower() for f in result.flags)
-
-
-# ------------------------------------------- Check 3: explicitly linked scouting evidence
-def test_exact_normalized_scouting_match_suppresses_flag():
-    observations = [obs("  Botrytis ", days_ago=3)]  # trims + lowercases to "botrytis"
-    result = evaluate_planned_spray(
-        farm(), planned(ai="azoxystrobin", target="botrytis"), [], observations, today=TODAY
-    )
-    assert not any("no scouting observation" in f.lower() for f in result.flags)
-    assert result.signals["scouting_evidence_linked"] is True
-    assert result.risk_level == RISK_LOW
-
-
-def test_near_miss_scouting_text_still_flags_as_not_explicitly_linked():
-    # "botrytis on fruit" is NOT an exact normalized match for "botrytis" — no substring
-    # matching is allowed, so this must flag.
-    observations = [obs("botrytis on fruit", days_ago=3)]
-    result = evaluate_planned_spray(
-        farm(), planned(target="botrytis"), [], observations, today=TODAY
-    )
-    assert any("no scouting observation explicitly referencing" in f.lower() for f in result.flags)
-    assert result.signals["scouting_evidence_linked"] is False
-
-
-def test_no_recent_scouting_flags_missing_evidence():
-    result = evaluate_planned_spray(farm(), planned(), [], [], today=TODAY)
-    assert any("no scouting observation explicitly referencing" in f.lower() for f in result.flags)
-
-
-# ------------------------------------------------------------------ Cautious language
-def test_disclaimer_and_cautious_language_in_check_text():
-    result = evaluate_planned_spray(
-        farm(harvest_offset_days=1), planned(phi=7), [spray(days_ago=2), spray(days_ago=4)], [],
-        today=TODAY,
-    )
-    assert PLANNED_SPRAY_DISCLAIMER in result.recommendation_text
-    lower = result.recommendation_text.lower()
-    assert "must spray" not in lower
-    assert "don't spray" not in lower
-    assert "do not spray" not in lower
-
-
-# ------------------------------------------------------------------------- API flow
 def _create_farm(client, **overrides):
     payload = {
         "name": "Pilot Berry Farm",
@@ -154,6 +26,7 @@ def _create_planned(client, farm_id, **overrides):
         "active_ingredient": "captan",
         "target_pest_or_disease": "botrytis",
         "pre_harvest_interval_days": 7,
+        "re_entry_interval_hours": 24,
         "estimated_cost": 120.0,
     }
     payload.update(overrides)
@@ -162,57 +35,153 @@ def _create_planned(client, farm_id, **overrides):
     return res.json()
 
 
-def test_create_planned_spray_returns_check_snapshot(client):
+def _approve(client, planned_id, **overrides):
+    payload = {"action": "approved", "reviewed_by": "Test PCA"}
+    payload.update(overrides)
+    res = client.patch(f"/planned-sprays/{planned_id}/review", json=payload)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+# ------------------------------------------------------------------ decision check
+def test_create_planned_spray_returns_explainable_decision(client):
     farm_row = _create_farm(client)
     planned_row = _create_planned(client, farm_row["id"])
+    # PHI 7d from tomorrow clears after the day-3 harvest -> block.
+    assert planned_row["decision_outcome"] == "block"
+    assert planned_row["decision_severity"] == "critical"
+    assert planned_row["review_required"] is True
     assert planned_row["outcome"] == "planned"
-    assert planned_row["check_risk_level"] in ("low", "moderate", "elevated")
+    assert planned_row["review_status"] == "not_reviewed"
     assert PLANNED_SPRAY_DISCLAIMER in planned_row["check_text"]
-    # PHI 7d from tomorrow clears after the day-3 harvest -> flagged in the snapshot.
-    assert "pre-harvest interval risk" in planned_row["check_text"].lower()
+
+    payload = planned_row["decision_payload"]
+    assert payload["outcome"] == "block"
+    triggered = [r for r in payload["rules"] if r["triggered"]]
+    assert any(r["rule_id"] == "phi_harvest_conflict" for r in triggered)
+    assert any(r["calculation"] for r in triggered)
+    assert payload["inputs_used"]["pre_harvest_interval_days"] == 7
+    assert payload["disclaimer"] == PLANNED_SPRAY_DISCLAIMER
 
     listed = client.get(f"/farms/{farm_row['id']}/planned-sprays").json()
     assert [p["id"] for p in listed] == [planned_row["id"]]
 
 
-def test_skipped_without_reason_is_rejected(client):
-    farm_row = _create_farm(client)
-    planned_row = _create_planned(client, farm_row["id"])
-    for outcome in ("skipped", "postponed"):
-        res = client.patch(
-            f"/planned-sprays/{planned_row['id']}/outcome", json={"outcome": outcome}
-        )
-        assert res.status_code == 422
-        res = client.patch(
-            f"/planned-sprays/{planned_row['id']}/outcome",
-            json={"outcome": outcome, "outcome_reason": "   "},
-        )
-        assert res.status_code == 422
+def test_clean_planned_spray_is_provisional_approve(client):
+    farm_row = _create_farm(
+        client, expected_harvest_date=(date.today() + timedelta(days=40)).isoformat()
+    )
+    client.post(
+        f"/farms/{farm_row['id']}/scout-observations",
+        json={"observation_date": date.today().isoformat(), "visible_issue": "botrytis",
+              "severity_1_to_5": 3},
+    )
+    planned_row = _create_planned(client, farm_row["id"], pre_harvest_interval_days=2)
+    assert planned_row["decision_outcome"] == "approve"
+    assert planned_row["decision_confidence"] == "high"
+    # Authority gating: grower-entered values + heuristic checks can never yield a
+    # definitive green light — the approve is provisional and needs PCA confirmation.
+    assert planned_row["decision_authority"] == "provisional"
+    assert planned_row["review_required"] is True
+    assert planned_row["values_source"] == "grower_entered"
 
 
-def test_skipped_with_reason_is_recorded(client):
+def test_values_source_flows_through_and_gates_authority(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(
+        client, farm_row["id"],
+        values_source="pca_entered", values_entered_by="Jane Doe, PCA",
+    )
+    assert planned_row["decision_outcome"] == "block"
+    assert planned_row["decision_authority"] == "definitive"
+    assert planned_row["values_entered_by"] == "Jane Doe, PCA"
+    phi_rule = next(
+        r for r in planned_row["decision_payload"]["rules"]
+        if r["rule_id"] == "phi_harvest_conflict"
+    )
+    assert phi_rule["source_authority"] == "pca_entered"
+    assert phi_rule["entered_by"] == "Jane Doe, PCA"
+
+    # verified_label cannot be claimed by clients — there is no label database.
+    res = client.post(
+        f"/farms/{farm_row['id']}/planned-sprays",
+        json={"intended_date": date.today().isoformat(), "product_name": "X",
+              "values_source": "verified_label"},
+    )
+    assert res.status_code == 422
+
+
+def test_get_planned_spray_by_id(client):
     farm_row = _create_farm(client)
     planned_row = _create_planned(client, farm_row["id"])
+    res = client.get(f"/planned-sprays/{planned_row['id']}")
+    assert res.status_code == 200
+    assert res.json()["decision_payload"]["outcome"] == "block"
+    assert client.get("/planned-sprays/99999").status_code == 404
+
+
+# ---------------------------------------------------------------------- PCA review
+def test_review_approve_edit_reject(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(client, farm_row["id"])
+
+    reviewed = _approve(client, planned_row["id"], review_comment="Agree with the block.")
+    assert reviewed["review_status"] == "approved"
+    assert reviewed["reviewed_by"] == "Test PCA"
+    assert reviewed["reviewed_at"] is not None
+
+    edited = client.patch(
+        f"/planned-sprays/{planned_row['id']}/review",
+        json={"action": "edited", "pca_next_action": "Use a PHI-0 product instead.",
+              "reviewed_by": "Test PCA"},
+    ).json()
+    assert edited["review_status"] == "edited"
+    assert edited["pca_next_action"] == "Use a PHI-0 product instead."
+
+
+def test_edit_without_guidance_and_reject_without_comment_are_rejected(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(client, farm_row["id"])
+    res = client.patch(
+        f"/planned-sprays/{planned_row['id']}/review", json={"action": "edited"}
+    )
+    assert res.status_code == 422
+    res = client.patch(
+        f"/planned-sprays/{planned_row['id']}/review", json={"action": "rejected"}
+    )
+    assert res.status_code == 422
+
+
+# ------------------------------------------------------------------ the human gate
+def test_applied_outcome_requires_review_when_decision_demanded_it(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(client, farm_row["id"])  # block -> review required
     res = client.patch(
         f"/planned-sprays/{planned_row['id']}/outcome",
-        json={"outcome": "skipped", "outcome_reason": "No botrytis found on inspection."},
+        json={"outcome": "sprayed_as_planned"},
+    )
+    assert res.status_code == 409
+    assert "review" in res.json()["detail"].lower()
+
+    # Non-applied outcomes stay recordable without review (honest documentation).
+    res = client.patch(
+        f"/planned-sprays/{planned_row['id']}/outcome",
+        json={"outcome": "avoided", "outcome_reason": "Held off after the block."},
     )
     assert res.status_code == 200
-    body = res.json()
-    assert body["outcome"] == "skipped"
-    assert body["outcome_reason"] == "No botrytis found on inspection."
-    assert body["spray_event_id"] is None
 
 
-def test_sprayed_outcome_creates_linked_spray_event(client):
+def test_applied_outcome_allowed_after_review(client):
     farm_row = _create_farm(client)
     planned_row = _create_planned(client, farm_row["id"])
+    _approve(client, planned_row["id"])
     res = client.patch(
-        f"/planned-sprays/{planned_row['id']}/outcome", json={"outcome": "sprayed"}
+        f"/planned-sprays/{planned_row['id']}/outcome",
+        json={"outcome": "sprayed_as_planned"},
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["outcome"] == "sprayed"
+    assert body["outcome"] == "sprayed_as_planned"
     assert body["spray_event_id"] is not None
 
     events = client.get(f"/farms/{farm_row['id']}/spray-events").json()
@@ -220,7 +189,64 @@ def test_sprayed_outcome_creates_linked_spray_event(client):
     assert len(linked) == 1
     assert linked[0]["product_name"] == "Captan 80WDG"
     assert linked[0]["application_date"] == planned_row["intended_date"]
-    assert linked[0]["data_confidence"] == "user_provided"
+
+
+# --------------------------------------------------------------- recorded outcomes
+def test_non_as_planned_outcomes_require_a_reason(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(client, farm_row["id"])
+    for outcome in ("avoided", "delayed", "inspected_first", "changed_product"):
+        res = client.patch(
+            f"/planned-sprays/{planned_row['id']}/outcome", json={"outcome": outcome}
+        )
+        assert res.status_code == 422, outcome
+
+
+def test_changed_product_requires_product_and_creates_linked_event(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(client, farm_row["id"])
+    _approve(client, planned_row["id"])
+
+    # Missing the replacement product -> 422.
+    res = client.patch(
+        f"/planned-sprays/{planned_row['id']}/outcome",
+        json={"outcome": "changed_product", "outcome_reason": "Too close to harvest."},
+    )
+    assert res.status_code == 422
+
+    res = client.patch(
+        f"/planned-sprays/{planned_row['id']}/outcome",
+        json={
+            "outcome": "changed_product",
+            "outcome_reason": "Too close to harvest — used a PHI-0 product.",
+            "outcome_product_name": "Switch 62.5 WG",
+            "outcome_active_ingredient": "cyprodinil + fludioxonil",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["spray_event_id"] is not None
+
+    events = client.get(f"/farms/{farm_row['id']}/spray-events").json()
+    linked = next(e for e in events if e["id"] == body["spray_event_id"])
+    assert linked["product_name"] == "Switch 62.5 WG"
+    assert linked["active_ingredient"] == "cyprodinil + fludioxonil"
+    # PHI/REI never carry over from a different planned product.
+    assert linked["pre_harvest_interval_days"] is None
+    assert linked["re_entry_interval_hours"] is None
+
+
+def test_avoided_with_reason_is_recorded(client):
+    farm_row = _create_farm(client)
+    planned_row = _create_planned(client, farm_row["id"])
+    res = client.patch(
+        f"/planned-sprays/{planned_row['id']}/outcome",
+        json={"outcome": "avoided", "outcome_reason": "No botrytis found on inspection."},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["outcome"] == "avoided"
+    assert body["spray_event_id"] is None
 
 
 def test_delete_planned_spray(client):
@@ -231,23 +257,75 @@ def test_delete_planned_spray(client):
     assert client.get(f"/farms/{farm_row['id']}/planned-sprays").json() == []
 
 
+# ------------------------------------------------------------- evidence aggregation
+def test_decision_evidence_metrics(client):
+    farm_row = _create_farm(client)
+    # Demo/simulated decision: excluded everywhere.
+    _create_planned(client, farm_row["id"], data_source="demo", data_confidence="simulated")
+
+    # Real decision 1: blocked, reviewed, avoided (cost 120 -> counted as avoided).
+    p1 = _create_planned(client, farm_row["id"])
+    _approve(client, p1["id"])
+    client.patch(
+        f"/planned-sprays/{p1['id']}/outcome",
+        json={"outcome": "avoided", "outcome_reason": "Held off — PHI conflict."},
+    )
+    # Real decision 2: blocked, rejected review, still awaiting outcome.
+    p2 = _create_planned(client, farm_row["id"])
+    client.patch(
+        f"/planned-sprays/{p2['id']}/review",
+        json={"action": "rejected", "review_comment": "Data looks wrong — re-enter PHI."},
+    )
+
+    ev = client.get(f"/farms/{farm_row['id']}/decision-evidence").json()
+    assert ev["decisions_checked"] == 2
+    assert ev["decisions_reviewed"] == 2
+    assert ev["pca_acceptance_rate_pct"] == 50.0
+    assert ev["outcomes"]["avoided"] == 1
+    assert ev["outcomes"]["awaiting_outcome"] == 1
+    assert ev["sprays_changed_delayed_or_avoided"] == 1
+    assert ev["compliance_conflicts_caught"] == 2
+    assert ev["estimated_chemical_cost_avoided"] == 120.0
+    assert ev["estimated_review_minutes_saved"] == 20
+    assert "assumption" in ev["review_minutes_assumption"].lower()
+    assert ev["limitations"]
+
+
 def test_demo_planned_sprays_excluded_from_pilot_evidence(client):
     farm_row = _create_farm(client)
-    # One demo/simulated record (excluded) and one real user-provided record (counted).
     _create_planned(client, farm_row["id"], data_source="demo", data_confidence="simulated")
     real = _create_planned(client, farm_row["id"])
     client.patch(
         f"/planned-sprays/{real['id']}/outcome",
-        json={"outcome": "skipped", "outcome_reason": "Scouting showed no pressure."},
+        json={"outcome": "avoided", "outcome_reason": "Scouting showed no pressure."},
     )
 
     evidence = client.get(f"/farms/{farm_row['id']}/pilot-evidence").json()
     block = evidence["pre_spray_decisions"]
     assert block["checked"] == 1
-    assert block["skipped"] == 1
-    assert block["sprayed"] == 0
-    assert block["postponed"] == 0
+    assert block["avoided"] == 1
+    assert block["sprayed_as_planned"] == 0
     assert block["outcome_reasons"] == [
-        {"outcome": "skipped", "reason": "Scouting showed no pressure."}
+        {"outcome": "avoided", "reason": "Scouting showed no pressure."}
     ]
     assert "not" in block["note"].lower()  # explicitly non-causal framing
+
+
+# --------------------------------------------------------------- farms overview
+def test_farms_overview_ranks_urgency_and_explains_why(client):
+    quiet = _create_farm(
+        client, name="Quiet Farm",
+        expected_harvest_date=(date.today() + timedelta(days=60)).isoformat(),
+    )
+    risky = _create_farm(client, name="Risky Farm")
+    _create_planned(client, risky["id"])  # block -> unresolved conflict
+
+    overview = client.get("/farms-overview").json()
+    assert [f["name"] for f in overview] == ["Risky Farm", "Quiet Farm"]
+    top = overview[0]
+    assert top["urgency"] == "conflict"
+    assert top["why"]
+    assert top["next_action"]
+    assert top["needs_review_count"] == 1
+    quiet_row = overview[1]
+    assert quiet_row["urgency"] == "ok"

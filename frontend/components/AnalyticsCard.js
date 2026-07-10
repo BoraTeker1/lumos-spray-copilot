@@ -6,7 +6,7 @@ import { formatCost } from "@/lib/format";
 
 // Pesticide cost analytics for one farm. `refreshKey` re-fetches when records change.
 // `hasDocumentedSkip`: only call the figure "avoidable" when a planned spray was
-// actually documented as skipped; otherwise it is just the cost of one application.
+// actually documented as avoided; otherwise it is just the cost of one application.
 export default function AnalyticsCard({ farmId, country, refreshKey, hasDocumentedSkip = false }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -53,7 +53,7 @@ export default function AnalyticsCard({ farmId, country, refreshKey, hasDocument
           {formatCost(data.potential_avoidable_cost, country)}
         </span>{" "}
         {hasDocumentedSkip
-          ? "— potential avoidable cost: a planned spray was documented as skipped (based on your average spray cost). This is an estimate, not a guaranteed saving."
+          ? "— potential avoidable cost: a planned spray was documented as avoided (based on your average spray cost). This is an estimate, not a guaranteed saving."
           : "— estimated cost of one planned application (based on your average spray cost). This is an estimate, not a saving claim."}
       </div>
     </div>

@@ -2,62 +2,53 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, Droplets, FlaskConical, MapPin, Plus } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarClock,
+  Droplets,
+  FlaskConical,
+  MapPin,
+  Plus,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { formatArea, formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import RiskBadge from "@/components/RiskBadge";
 
-// Demo ordering: lead with the U.S. strawberry wedge demo, keep Türkiye tomato
-// farms secondary. Rank = (TR after US) + (non-strawberry after strawberry).
-function sortForDemo(farms) {
-  const rank = (f) => {
-    const isTR = (f.country || "").toUpperCase() === "TR";
-    const isStrawberry = (f.crop_type || "").toLowerCase().startsWith("straw");
-    return (isTR ? 10 : 0) + (isStrawberry ? 0 : 1);
-  };
-  return [...farms].sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+// The backend ranks farms by urgency (/farms-overview); this maps each urgency
+// to how loud the card should be.
+const URGENCY_META = {
+  conflict: { label: "Timing conflict", variant: "red", border: "border-red-300" },
+  needs_review: { label: "Needs PCA review", variant: "amber", border: "border-amber-300" },
+  awaiting_outcome: { label: "Awaiting outcome", variant: "amber", border: "border-amber-200" },
+  flags: { label: "Risk flags", variant: "amber", border: "border-gray-200" },
+  ok: { label: "No open decisions", variant: "neutral", border: "border-gray-200" },
+};
+
+// Farms ranked by what needs attention: which farm, why, and the next action.
+// The default YC demo is the California strawberry / PCA workflow. Secondary-market
+// demo farms (Türkiye greenhouse tomatoes) stay fully supported but are hidden behind
+// a toggle so the primary story stays narrow. Real (non-demo) farms always show.
+function isSecondaryDemoFarm(f) {
+  return f.is_demo && (f.country || "").toUpperCase() !== "US";
 }
 
-function isDemoRecord(r) {
-  return r.data_source === "demo" || r.data_confidence === "simulated";
-}
-
-// Farms list: the operational entry point. Open a farm to run pre-spray checks,
-// review compliance, and build pilot evidence.
 export default function DashboardPage() {
   const [farms, setFarms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showSecondary, setShowSecondary] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const list = await api.listFarms();
-        const enriched = await Promise.all(
-          list.map(async (farm) => {
-            const [sprays, recs] = await Promise.all([
-              api.listSprayEvents(farm.id),
-              api.listRecommendations(farm.id),
-            ]);
-            return {
-              ...farm,
-              sprayCount: sprays.length,
-              latestRisk: recs[0]?.risk_level || null,
-              isDemo: sprays.length > 0 && sprays.every(isDemoRecord),
-            };
-          })
-        );
-        setFarms(sortForDemo(enriched));
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+    api
+      .listFarmsOverview()
+      .then(setFarms)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
+
+  const hiddenCount = farms.filter(isSecondaryDemoFarm).length;
+  const visibleFarms = showSecondary ? farms : farms.filter((f) => !isSecondaryDemoFarm(f));
 
   return (
     <div className="space-y-5">
@@ -65,8 +56,8 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Farms</h1>
           <p className="mt-0.5 max-w-2xl text-xs text-gray-500">
-            The decision layer before the spray: check planned applications, avoid PHI/REI
-            mistakes, and keep PCA-reviewed, audit-ready records.
+            The decision layer before the spray — ranked by what needs attention: open
+            pre-spray decisions first, then risk flags.
           </p>
         </div>
         <Link
@@ -86,53 +77,72 @@ export default function DashboardPage() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {farms.map((farm) => (
-          <Link key={farm.id} href={`/farms/${farm.id}`} className="group block">
-            <Card className="h-full transition-colors group-hover:border-gray-300">
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-gray-900">
-                      {farm.name}
+        {visibleFarms.map((farm) => {
+          const meta = URGENCY_META[farm.urgency] || URGENCY_META.ok;
+          return (
+            <Link key={farm.id} href={`/farms/${farm.id}`} className="group block">
+              <Card className={`h-full transition-colors group-hover:border-gray-400 ${meta.border}`}>
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-gray-900">
+                        {farm.name}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1 text-xs text-gray-500">
+                        <MapPin className="h-3 w-3 shrink-0" />
+                        <span className="truncate">
+                          {farm.location || "—"} · {(farm.country || "US").toUpperCase()}
+                        </span>
+                      </div>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-1 text-xs text-gray-500">
-                      <MapPin className="h-3 w-3 shrink-0" />
-                      <span className="truncate">
-                        {farm.location || "—"} · {(farm.country || "US").toUpperCase()}
-                      </span>
-                    </div>
+                    <Badge variant={meta.variant}>{meta.label}</Badge>
                   </div>
-                  <RiskBadge level={farm.latestRisk} />
-                </div>
 
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
-                  <span className="capitalize">{farm.crop_type?.replace(/_/g, " ")}</span>
-                  {farm.greenhouse_area != null && (
-                    <span>{formatArea(farm.greenhouse_area, farm.country)}</span>
+                  {/* Why this farm needs attention + the next action. */}
+                  <p className="mt-2.5 text-xs text-gray-600">{farm.why}</p>
+                  <p className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-gray-900">
+                    <ArrowRight className="h-3 w-3 text-leaf" />
+                    {farm.next_action}
+                  </p>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                    <span className="capitalize">{farm.crop_type?.replace(/_/g, " ")}</span>
+                    {farm.area != null && <span>{formatArea(farm.area, farm.country)}</span>}
+                    <span className="inline-flex items-center gap-1">
+                      <Droplets className="h-3 w-3" />
+                      {farm.spray_count} sprays
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <CalendarClock className="h-3 w-3" />
+                      harvest {formatDate(farm.expected_harvest_date)}
+                    </span>
+                  </div>
+
+                  {farm.is_demo && (
+                    <div className="mt-3">
+                      <Badge variant="outline">
+                        <FlaskConical />
+                        Simulated demo data
+                      </Badge>
+                    </div>
                   )}
-                  <span className="inline-flex items-center gap-1">
-                    <Droplets className="h-3 w-3" />
-                    {farm.sprayCount} sprays
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <CalendarClock className="h-3 w-3" />
-                    harvest {formatDate(farm.expected_harvest_date)}
-                  </span>
-                </div>
-
-                {farm.isDemo && (
-                  <div className="mt-3">
-                    <Badge variant="outline">
-                      <FlaskConical />
-                      Simulated demo data
-                    </Badge>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
+                </CardContent>
+              </Card>
+            </Link>
+          );
+        })}
       </div>
+
+      {!loading && hiddenCount > 0 && (
+        <button
+          onClick={() => setShowSecondary((v) => !v)}
+          className="text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
+        >
+          {showSecondary
+            ? "Hide secondary-market demo farms"
+            : `Show ${hiddenCount} secondary-market demo farm${hiddenCount === 1 ? "" : "s"} (Türkiye)`}
+        </button>
+      )}
 
       {!loading && !error && farms.length === 0 && (
         <div className="rounded-md border border-gray-200 bg-white p-4 text-sm text-gray-500">

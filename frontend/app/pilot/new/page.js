@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import ConciergePilotCard from "@/components/ConciergePilotCard";
 
 const EMPTY_SPRAY = {
   product_name: "",
@@ -30,20 +29,6 @@ export default function PilotFarmIntakePage() {
   const [concern, setConcern] = useState({ text: "", severity: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-
-  // Concierge import targets an existing farm.
-  const [existingFarms, setExistingFarms] = useState([]);
-  const [conciergeFarmId, setConciergeFarmId] = useState("");
-
-  useEffect(() => {
-    api
-      .listFarms()
-      .then((list) => {
-        setExistingFarms(list);
-        if (list.length > 0) setConciergeFarmId(String(list[0].id));
-      })
-      .catch(() => {});
-  }, []);
 
   const setFarmField = (k, v) => setFarm((f) => ({ ...f, [k]: v }));
   const setSpray = (i, k, v) =>
@@ -98,7 +83,8 @@ export default function PilotFarmIntakePage() {
         <h1 className="text-lg font-semibold">Pilot setup</h1>
         <p className="mt-1 text-sm text-gray-500">
           Capture a real grower&apos;s farm, their last 3 sprays, and the latest scouting
-          concern — then generate a recommendation live. No login needed.
+          concern — then run their next planned spray through the decision check live. No
+          login needed.
         </p>
       </div>
 
@@ -180,44 +166,6 @@ export default function PilotFarmIntakePage() {
           {saving ? "Creating…" : "Create pilot farm & open it"}
         </button>
       </form>
-
-      {/* Concierge import: transcribe call/WhatsApp/spreadsheet data into an existing farm. */}
-      <section className="rounded-lg border bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Concierge import</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an existing
-          farm, with provenance tags.
-        </p>
-        {existingFarms.length === 0 ? (
-          <p className="text-sm text-gray-500">No farms yet — create one above first.</p>
-        ) : (
-          <>
-            <label className="mb-4 block text-xs font-medium text-gray-600">
-              Target farm
-              <select
-                className="mt-1 w-full max-w-sm rounded border px-2 py-1.5 text-sm"
-                value={conciergeFarmId}
-                onChange={(e) => setConciergeFarmId(e.target.value)}
-              >
-                {existingFarms.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {conciergeFarmId && (
-              <ConciergePilotCard
-                key={conciergeFarmId}
-                farmId={conciergeFarmId}
-                country={
-                  existingFarms.find((f) => String(f.id) === conciergeFarmId)?.country || "US"
-                }
-              />
-            )}
-          </>
-        )}
-      </section>
     </div>
   );
 }
