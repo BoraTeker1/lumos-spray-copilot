@@ -92,7 +92,208 @@ def _pre_spray_decisions(planned_sprays) -> dict:
     return block
 
 
-def build_decision_evidence(planned_sprays, advisor_label: str = "agronomist") -> dict:
+def derive_follow_up_summary(planned, events) -> dict:
+    """Read-only consolidated view of one decision's append-only follow-up timeline.
+
+    Derived, never stored: earlier observations are never overwritten — this just
+    reads the event list. "Confirmed" here means "supported by recorded follow-up
+    events", not proof of causation.
+    """
+    events = sorted(
+        list(events or []),
+        key=lambda e: (getattr(e, "observed_at", None) or date.min, getattr(e, "id", 0)),
+    )
+    scouting = [e for e in events if e.event_type == "scouting_observation"]
+    applications = [e for e in events if e.event_type == "actual_application"]
+    rescues = [e for e in events if e.event_type == "rescue_application"]
+    outcome_events = [
+        e for e in events
+        if e.event_type in ("harvest_outcome", "yield_quality_outcome")
+    ]
+
+    def _latest_impact(attr: str) -> str:
+        for e in reversed(outcome_events):
+            value = getattr(e, attr, None)
+            if value:
+                return value
+        return "unknown"
+
+    severities = [e.severity for e in scouting if e.severity is not None]
+    rescue_required = bool(rescues) or any(
+        e.rescue_required for e in events if e.rescue_required
+    )
+    rejected_flags = [
+        e.rejected_or_downgraded for e in events if e.rejected_or_downgraded is not None
+    ]
+    scouting_cost = sum(float(e.cost or 0.0) for e in scouting)
+    application_cost = sum(float(e.cost or 0.0) for e in applications)
+    rescue_cost = sum(float(e.cost or 0.0) for e in rescues)
+
+    ultimately_applied = bool(applications) or bool(rescues)
+    outcome = getattr(planned, "outcome", "planned")
+
+    first_application_date = (
+        applications[0].observed_at if applications else None
+    )
+    confirmed_delay_days = None
+    if outcome == "delayed" and first_application_date is not None:
+        confirmed_delay_days = max(
+            0, (first_application_date - planned.intended_date).days
+        )
+
+    return {
+        "has_follow_up": bool(events),
+        "event_count": len(events),
+        "event_types": sorted({e.event_type for e in events}),
+        "severity_before": severities[0] if severities else None,
+        "severity_after": severities[-1] if len(severities) > 1 else None,
+        "spray_ultimately_applied": ultimately_applied if events else None,
+        "rescue_required": rescue_required if events else None,
+        "confirmed_avoided": (
+            outcome == "avoided" and bool(events) and not ultimately_applied
+        ),
+        "confirmed_replacement": (
+            outcome == "changed_product"
+            and (bool(applications) or getattr(planned, "spray_event_id", None) is not None)
+        ),
+        "confirmed_delay_days": confirmed_delay_days,
+        "additional_scouting_cost": round(scouting_cost, 2),
+        "application_cost": round(application_cost, 2),
+        "rescue_cost": round(rescue_cost, 2),
+        "yield_impact": _latest_impact("yield_impact") if events else "unknown",
+        "quality_impact": _latest_impact("quality_impact") if events else "unknown",
+        "rejected_or_downgraded": rejected_flags[-1] if rejected_flags else None,
+        "note": (
+            "Derived read-only from the append-only follow-up timeline. 'Confirmed' "
+            "means supported by recorded follow-up events — correlation, not proof of "
+            "causation."
+        ),
+    }
+
+
+def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict, dict, dict]:
+    """(confirmed, estimated, follow_up_stats) metric blocks from non-demo decisions.
+
+    Confirmed figures come ONLY from follow-up-backed summaries; estimated figures are
+    entered values without follow-up support. The two are never mixed or combined
+    into a score.
+    """
+    summaries = {
+        p.id: derive_follow_up_summary(p, follow_ups_by_id.get(p.id, []))
+        for p in real_planned
+    }
+
+    confirmed_avoided = [p for p in real_planned if summaries[p.id]["confirmed_avoided"]]
+    confirmed_avoided_acres = sum(
+        float(getattr(p, "treated_acres", None) or 0.0) for p in confirmed_avoided
+    )
+    delays = [
+        summaries[p.id]["confirmed_delay_days"]
+        for p in real_planned
+        if summaries[p.id]["confirmed_delay_days"] is not None
+    ]
+    replacements = [p for p in real_planned if summaries[p.id]["confirmed_replacement"]]
+    rescued = [p for p in real_planned if summaries[p.id]["rescue_required"]]
+
+    gross_avoided = sum(
+        float(getattr(p, "estimated_cost", None) or 0.0) for p in confirmed_avoided
+    )
+    scouting_cost = sum(s["additional_scouting_cost"] for s in summaries.values())
+    rescue_cost = sum(s["rescue_cost"] for s in summaries.values())
+    replacement_cost = sum(
+        summaries[p.id]["application_cost"] for p in replacements
+    )
+    net = gross_avoided - scouting_cost - rescue_cost
+
+    with_follow_up = [p for p in real_planned if summaries[p.id]["has_follow_up"]]
+    yield_counts = {"positive": 0, "neutral": 0, "negative": 0, "unknown": 0}
+    quality_counts = {"positive": 0, "neutral": 0, "negative": 0, "unknown": 0}
+    rejected = 0
+    for p in with_follow_up:
+        s = summaries[p.id]
+        yield_counts[s["yield_impact"]] = yield_counts.get(s["yield_impact"], 0) + 1
+        quality_counts[s["quality_impact"]] = (
+            quality_counts.get(s["quality_impact"], 0) + 1
+        )
+        if s["rejected_or_downgraded"]:
+            rejected += 1
+
+    confirmed = {
+        "applications_confirmed_avoided": len(confirmed_avoided),
+        "treated_acres_confirmed_avoided": round(confirmed_avoided_acres, 2),
+        "confirmed_delay_days_total": sum(delays) if delays else 0,
+        "confirmed_delayed_decisions": len(delays),
+        "confirmed_replacement_applications": len(replacements),
+        "confirmed_rescue_treatments": len(rescued),
+        "confirmed_gross_spend_avoided": round(gross_avoided, 2),
+        "confirmed_additional_scouting_cost": round(scouting_cost, 2),
+        "confirmed_replacement_application_cost": round(replacement_cost, 2),
+        "confirmed_rescue_cost": round(rescue_cost, 2),
+        "confirmed_net_financial_result": round(net, 2),
+        "yield_impact_counts": yield_counts,
+        "quality_impact_counts": quality_counts,
+        "rejected_or_downgraded_count": rejected,
+        "basis": (
+            "Only decisions with recorded follow-up events count here. 'Gross spend "
+            "avoided' sums the entered planned costs of follow-up-confirmed avoided "
+            "applications; net = gross avoided - additional scouting - rescue costs. "
+            "Replacement application costs are reported separately, not netted. A "
+            "negative net is reported as negative."
+        ),
+    }
+
+    # Estimated: entered values with NO follow-up support (never mixed with confirmed).
+    est_avoided_unconfirmed = [
+        p for p in real_planned
+        if getattr(p, "outcome", None) == "avoided"
+        and not summaries[p.id]["confirmed_avoided"]
+    ]
+    estimated = {
+        "planned_application_cost_total": round(
+            sum(float(getattr(p, "estimated_cost", None) or 0.0) for p in real_planned), 2
+        ),
+        "potential_gross_savings_unconfirmed": round(
+            sum(
+                float(getattr(p, "estimated_cost", None) or 0.0)
+                for p in est_avoided_unconfirmed
+            ), 2
+        ),
+        "avoided_outcomes_without_follow_up": len(est_avoided_unconfirmed),
+        "basis": (
+            "Entered estimates without follow-up support. A planned avoidance is NOT "
+            "a confirmed pesticide reduction until follow-up is recorded."
+        ),
+    }
+
+    required = [p for p in real_planned if decision_status.follow_up_required(p)]
+    completed = [p for p in required if summaries[p.id]["has_follow_up"]]
+    follow_up_stats = {
+        "follow_up_required": len(required),
+        "follow_up_with_events": len(completed),
+        "follow_up_completion_rate_pct": (
+            round(100.0 * len(completed) / len(required), 1) if required else None
+        ),
+    }
+    return confirmed, estimated, follow_up_stats
+
+
+# Pesticide-quantity and risk-weighted metrics are deliberately NOT calculated —
+# stating why beats publishing a wrong number.
+NOT_CALCULATED = {
+    "active_ingredient_quantity_avoided": (
+        "not calculated — requires normalized rate units and active-ingredient "
+        "concentration with conversion provenance, which do not exist yet"
+    ),
+    "risk_weighted_pesticide_reduction": (
+        "not calculated — no authoritative risk-weighting methodology/source is "
+        "integrated; a home-made weighting would be misleading"
+    ),
+}
+
+
+def build_decision_evidence(
+    planned_sprays, advisor_label: str = "agronomist", follow_ups_by_id: dict | None = None
+) -> dict:
     """Aggregate the pre-spray decision workflow into pilot metrics (honest by design).
 
     Demo/simulated planned sprays are excluded. Every derived number states what it is:
@@ -159,8 +360,16 @@ def build_decision_evidence(planned_sprays, advisor_label: str = "agronomist") -
     if not real:
         limitations.insert(0, "No real (non-demo) pre-spray decisions recorded yet.")
 
+    confirmed, estimated, follow_up_stats = _confirmed_and_estimated(
+        real, follow_ups_by_id or {}
+    )
+
     return {
         "decisions_checked": len(real),
+        "confirmed": confirmed,
+        "estimated": estimated,
+        "not_calculated": dict(NOT_CALCULATED),
+        "follow_up": follow_up_stats,
         "demo_decisions_checked": len(demo),
         "demo_outcomes": demo_outcomes,
         "decisions_reviewed": len(reviewed),
@@ -443,6 +652,242 @@ def build_pilot_case_study(
             "\"<Add a short grower/PCA quote from your pilot call here — e.g. what surprised "
             "them or what they'd want next.>\""
         ),
+        "disclaimer": CASE_STUDY_DISCLAIMER,
+    }
+
+
+# ---------------------------------------------------------------- Evidence export
+EVIDENCE_EXPORT_METHODOLOGY = (
+    "Each row is one planned spray decision: the recommendation as imported/entered, "
+    "the deterministic rule checks it triggered (with per-value source provenance), "
+    "the PCA/agronomist review, the recorded real-world action, and the append-only "
+    "follow-up timeline. 'Confirmed' figures require recorded follow-up events; "
+    "'estimated' figures are entered values without follow-up support; quantities "
+    "that cannot be computed honestly are reported as 'not calculated'. The rule "
+    "engine is deterministic — no machine-learning model decides anything here."
+)
+
+EVIDENCE_EXPORT_LIMITATIONS = [
+    "Correlation, not causality: outcomes are decisions humans made that Lumos "
+    "documented — this export does not prove Lumos caused them.",
+    "This is operational pilot evidence, not a controlled study; no statistical "
+    "claim of pesticide reduction or savings is made.",
+    "PHI/REI and cost inputs are user-entered or imported and not verified against "
+    "an authoritative pesticide label database unless marked pca_verified.",
+    "Yield and quality outcomes remain 'unknown' unless explicitly recorded in "
+    "follow-up; unknown is reported as unknown, never assumed neutral or positive.",
+    "Demo/simulated records are excluded from this export by construction.",
+    "Label-dependent checks (seasonal rate caps, application counts, retreatment "
+    "intervals, crop/use registration) were not evaluated — they require "
+    "authoritative label data.",
+]
+
+
+def _export_decision_row(planned, follow_ups, audit_events, input_values) -> dict:
+    """One anonymized decision record for the evidence export (JSON form)."""
+    payload = getattr(planned, "decision_payload", None) or {}
+    triggered = [
+        {
+            "rule_id": r.get("rule_id"),
+            "severity": r.get("severity"),
+            "detail": r.get("detail"),
+            "calculation": r.get("calculation"),
+            "source_authority": r.get("source_authority"),
+        }
+        for r in payload.get("rules", [])
+        if r.get("triggered")
+    ]
+    summary = derive_follow_up_summary(planned, follow_ups)
+    return {
+        "decision_id": planned.id,
+        "external_record_id": planned.external_record_id,
+        "field_block": planned.field_block,
+        "crop": planned.crop,
+        "treated_acres": planned.treated_acres,
+        "planned": {
+            "product_name": planned.product_name,
+            "epa_reg_no": planned.epa_reg_no,
+            "active_ingredient": planned.active_ingredient,
+            "moa_group": planned.moa_group,
+            "target_pest_or_disease": planned.target_pest_or_disease,
+            "intended_date": _iso_dt(planned.intended_date),
+            "rate_amount": planned.rate_amount,
+            "rate_unit": planned.rate_unit,
+            "estimated_cost": planned.estimated_cost,
+            "pre_harvest_interval_days": planned.pre_harvest_interval_days,
+            "re_entry_interval_hours": planned.re_entry_interval_hours,
+            "recommendation_author": planned.recommendation_author,
+            "source_system": planned.source_system,
+            "source_filename": planned.source_filename,
+        },
+        "decision": {
+            "outcome": planned.decision_outcome,
+            "severity": planned.decision_severity,
+            "authority": planned.decision_authority,
+            "confidence": planned.decision_confidence,
+            "review_required": planned.review_required,
+            "triggered_exceptions": triggered,
+            "missing_information": payload.get("missing_information", []),
+            "not_evaluated": payload.get("not_evaluated", []),
+        },
+        "input_values": [
+            {
+                "field_name": v.field_name,
+                "raw_value": v.raw_value,
+                "normalized_value": v.normalized_value,
+                "unit": v.unit,
+                "source_type": v.source_type,
+                "source_reference": v.source_reference,
+                "verified_by": v.verified_by,
+                "verified_at": _iso_dt(v.verified_at),
+                "supersedes_input_value_id": v.supersedes_input_value_id,
+            }
+            for v in input_values
+        ],
+        "review": {
+            "status": planned.review_status,
+            "reviewed_by": planned.reviewed_by,
+            "reviewed_at": _iso_dt(planned.reviewed_at),
+            "comment": planned.review_comment,
+            "pca_next_action": planned.pca_next_action,
+        },
+        "recorded_action": {
+            "outcome": planned.outcome,
+            "outcome_reason": planned.outcome_reason,
+            "outcome_date": _iso_dt(planned.outcome_date),
+            "outcome_product_name": planned.outcome_product_name,
+        },
+        "audit_history": [
+            {
+                "event_type": e.event_type,
+                "actor": e.actor,
+                "rationale": e.rationale,
+                "system_recommendation": e.system_recommendation,
+                "before": e.before,
+                "after": e.after,
+                "created_at": _iso_dt(e.created_at),
+            }
+            for e in audit_events
+        ],
+        "follow_up_timeline": [
+            {
+                "event_type": e.event_type,
+                "observed_at": _iso_dt(e.observed_at),
+                "severity": e.severity,
+                "severity_scale": e.severity_scale,
+                "actual_product": e.actual_product,
+                "actual_rate_amount": e.actual_rate_amount,
+                "actual_rate_unit": e.actual_rate_unit,
+                "actual_treated_acres": e.actual_treated_acres,
+                "cost": e.cost,
+                "rescue_required": e.rescue_required,
+                "yield_impact": e.yield_impact,
+                "quality_impact": e.quality_impact,
+                "rejected_or_downgraded": e.rejected_or_downgraded,
+                "evidence_notes": e.evidence_notes,
+                "entered_by": e.entered_by,
+                "source_type": e.source_type,
+                "confidence": e.confidence,
+            }
+            for e in follow_ups
+        ],
+        "follow_up_summary": summary,
+        "missing_evidence": _missing_evidence_notes(planned, summary),
+    }
+
+
+def _missing_evidence_notes(planned, summary: dict) -> list[str]:
+    out = []
+    if decision_status.needs_review(planned):
+        out.append("PCA review still outstanding.")
+    if decision_status.is_open(planned):
+        out.append("No real-world outcome recorded yet.")
+    elif decision_status.follow_up_required(planned) and not summary["has_follow_up"]:
+        out.append(
+            "Follow-up required but no follow-up events recorded — nothing about this "
+            "decision is confirmed."
+        )
+    if summary["has_follow_up"] and summary["yield_impact"] == "unknown":
+        out.append("Yield impact not recorded — remains unknown.")
+    return out
+
+
+def build_evidence_export(
+    farm,
+    planned_sprays,
+    follow_ups_by_id: dict,
+    audit_events_by_id: dict,
+    input_values_by_id: dict,
+    advisor_label: str = "agronomist",
+    today: date | None = None,
+) -> dict:
+    """Anonymized evidence export for one farm's REAL (non-demo) decisions.
+
+    The farm is identified only as pilot-farm-{id} plus crop/area — never by name or
+    location. Demo/simulated decisions are excluded by construction.
+    """
+    real = _real_planned(planned_sprays)
+    rows = [
+        _export_decision_row(
+            p,
+            follow_ups_by_id.get(p.id, []),
+            audit_events_by_id.get(p.id, []),
+            input_values_by_id.get(p.id, []),
+        )
+        for p in real
+    ]
+
+    confirmed, estimated, follow_up_stats = _confirmed_and_estimated(
+        real, follow_ups_by_id
+    )
+
+    # Data-completeness statement (computed, not asserted).
+    reviewed = sum(
+        1 for p in real
+        if decision_status.review_state(p) in decision_status.RESOLVED_REVIEW_STATUSES
+    )
+    all_active_values = []
+    for p in real:
+        chain = input_values_by_id.get(p.id, [])
+        superseded = {v.supersedes_input_value_id for v in chain if v.supersedes_input_value_id}
+        all_active_values.extend(v for v in chain if v.id not in superseded)
+    verified_values = sum(
+        1 for v in all_active_values
+        if v.source_type in ("pca_verified", "authoritative_provider")
+    )
+    dates = [p.intended_date for p in real if p.intended_date]
+
+    return {
+        "farm_ref": f"pilot-farm-{getattr(farm, 'id', 'x')}",
+        "anonymization": (
+            "Farm name and location are excluded. Operators must anonymize records "
+            "before upload; reviewer names appear only as entered."
+        ),
+        "crop_type": getattr(farm, "crop_type", None),
+        "area": getattr(farm, "greenhouse_area", None),
+        "advisor_label": advisor_label,
+        "generated_on": (today or date.today()).isoformat(),
+        "pilot_period_start": min(dates).isoformat() if dates else None,
+        "pilot_period_end": max(dates).isoformat() if dates else None,
+        "decisions_exported": len(rows),
+        "data_completeness": {
+            "decisions_reviewed_pct": (
+                round(100.0 * reviewed / len(real), 1) if real else None
+            ),
+            "critical_values_verified_pct": (
+                round(100.0 * verified_values / len(all_active_values), 1)
+                if all_active_values else None
+            ),
+            "follow_up_completion_rate_pct": follow_up_stats[
+                "follow_up_completion_rate_pct"
+            ],
+        },
+        "methodology": EVIDENCE_EXPORT_METHODOLOGY,
+        "confirmed": confirmed,
+        "estimated": estimated,
+        "not_calculated": dict(NOT_CALCULATED),
+        "decisions": rows,
+        "limitations": list(EVIDENCE_EXPORT_LIMITATIONS),
         "disclaimer": CASE_STUDY_DISCLAIMER,
     }
 

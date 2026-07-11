@@ -23,6 +23,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from app import target_aliases
 from app.recommendation_engine import (
     RECENT_WINDOW_DAYS,
     SAME_INGREDIENT_MAX,
@@ -53,6 +54,7 @@ CONFIDENCE_HIGH = "high"
 AUTHORITY_VERIFIED_LABEL = "verified_label"
 AUTHORITY_PCA = "pca_entered"
 AUTHORITY_GROWER = "grower_entered"
+AUTHORITY_IMPORTED = "imported_unverified"
 AUTHORITY_HEURISTIC = "heuristic"
 
 DEFINITIVE_AUTHORITIES = (AUTHORITY_VERIFIED_LABEL, AUTHORITY_PCA)
@@ -61,8 +63,51 @@ AUTHORITY_LABELS = {
     AUTHORITY_VERIFIED_LABEL: "verified label",
     AUTHORITY_PCA: "PCA-entered value",
     AUTHORITY_GROWER: "grower-entered value",
+    AUTHORITY_IMPORTED: "imported, unverified value",
     AUTHORITY_HEURISTIC: "heuristic (rule-of-thumb threshold)",
 }
+
+# Weakest-first ranking: a rule (and a decision) is only as strong as its weakest input.
+_AUTHORITY_RANK = {
+    AUTHORITY_HEURISTIC: 0,
+    AUTHORITY_IMPORTED: 1,
+    AUTHORITY_GROWER: 2,
+    AUTHORITY_PCA: 3,
+    AUTHORITY_VERIFIED_LABEL: 4,
+}
+
+# Field-level provenance source types (DecisionInputValue vocabulary) -> rule authority.
+INPUT_SOURCE_TO_AUTHORITY = {
+    "authoritative_provider": AUTHORITY_VERIFIED_LABEL,
+    "pca_verified": AUTHORITY_PCA,
+    "user_entered": AUTHORITY_GROWER,
+    # Demo values behave like user-entered inside the engine; demo separation happens
+    # at the record level (data_source/data_confidence), never here.
+    "demo": AUTHORITY_GROWER,
+    "imported_unverified": AUTHORITY_IMPORTED,
+}
+
+# Checks this engine deliberately does NOT run, and says so, because they require
+# authoritative pesticide-label data that does not exist in the system. They are
+# reported per decision under `not_evaluated` — never simulated with guesses.
+NOT_EVALUATED_CHECKS = (
+    {
+        "check": "maximum seasonal rate",
+        "reason": "requires authoritative label data — no label database exists",
+    },
+    {
+        "check": "maximum number of applications per season",
+        "reason": "requires authoritative label data — no label database exists",
+    },
+    {
+        "check": "minimum retreatment interval",
+        "reason": "requires authoritative label data — no label database exists",
+    },
+    {
+        "check": "crop/use registration match",
+        "reason": "requires authoritative label data — no label database exists",
+    },
+)
 
 # Decision authority levels — how strongly the determining inputs back the verdict.
 # Three honest levels replace the old binary "definitive"/"provisional":
@@ -139,6 +184,8 @@ class PlannedSprayDecision:
     # must confirm before the result is relied on).
     authority_level: str = LEVEL_PROVISIONAL
     authority_basis: str = ""
+    # Label-dependent checks that were NOT run (with reasons) — honest, never guessed.
+    not_evaluated: list = field(default_factory=lambda: [dict(c) for c in NOT_EVALUATED_CHECKS])
 
     @property
     def triggered_rules(self) -> list[DecisionRule]:
@@ -169,6 +216,7 @@ class PlannedSprayDecision:
             ],
             "inputs_used": self.inputs_used,
             "missing_information": self.missing_information,
+            "not_evaluated": self.not_evaluated,
             "required_next_action": self.required_next_action,
             "review_required": self.review_required,
             "disclaimer": self.disclaimer,
@@ -195,6 +243,7 @@ def evaluate_planned_spray(
     scout_observations,
     pca_policies=None,
     today: date | None = None,
+    input_sources: dict | None = None,
 ) -> PlannedSprayDecision:
     """Check an intended spray before it happens and return one explainable outcome.
 
@@ -202,12 +251,18 @@ def evaluate_planned_spray(
     ----------
     farm: object with `expected_harvest_date` (date or None).
     planned: object with `intended_date`, `product_name`, `active_ingredient`,
-        `target_pest_or_disease`, `pre_harvest_interval_days`, `re_entry_interval_hours`.
+        `target_pest_or_disease`, `pre_harvest_interval_days`, `re_entry_interval_hours`
+        (optionally `epa_reg_no`, `moa_group`, `rate_amount`, `rate_unit`, ...).
     spray_events / scout_observations: the farm's current records (duck-typed).
     pca_policies: PCA-entered action thresholds (objects with `target_pest_or_disease`,
         `min_severity_to_treat`, `entered_by`). Optional — without a matching policy
         the scouting rule stays a plain heuristic; a threshold is NEVER invented.
     today: injectable "current date" for deterministic testing.
+    input_sources: optional field-level provenance —
+        {field_name: {"source_type": InputSourceType, "entered_by": str|None}}.
+        When present it drives each rule's source authority (a rule is only as strong
+        as its weakest input); when absent the legacy record-level `values_source`
+        applies. Imported values can never back a definitive result.
     """
     if today is None:
         today = date.today()
@@ -215,6 +270,7 @@ def evaluate_planned_spray(
     spray_events = list(spray_events or [])
     scout_observations = list(scout_observations or [])
     pca_policies = list(pca_policies or [])
+    input_sources = dict(input_sources or {})
 
     decision = PlannedSprayDecision()
 
@@ -225,20 +281,50 @@ def evaluate_planned_spray(
     phi = getattr(planned, "pre_harvest_interval_days", None)
     rei_hours = getattr(planned, "re_entry_interval_hours", None)
     harvest = getattr(farm, "expected_harvest_date", None)
+    epa_reg_no = (getattr(planned, "epa_reg_no", None) or "").strip()
+    moa_group = (getattr(planned, "moa_group", None) or "").strip().lower()
+    rate_amount = getattr(planned, "rate_amount", None)
+    rate_unit = (getattr(planned, "rate_unit", None) or "").strip()
 
     # Who supplied the PHI/REI values for THIS check (never a verified label today).
     values_source = getattr(planned, "values_source", None) or AUTHORITY_GROWER
-    if values_source not in (AUTHORITY_GROWER, AUTHORITY_PCA):
+    if values_source not in (AUTHORITY_GROWER, AUTHORITY_PCA, AUTHORITY_IMPORTED):
         values_source = AUTHORITY_GROWER
-    values_entered_by = getattr(planned, "values_entered_by", None) or (
-        "PCA" if values_source == AUTHORITY_PCA else "grower"
-    )
+    values_entered_by = getattr(planned, "values_entered_by", None) or {
+        AUTHORITY_PCA: "PCA",
+        AUTHORITY_IMPORTED: "imported record",
+    }.get(values_source, "grower")
+
+    def field_authority(*field_names: str) -> tuple[str, str | None]:
+        """(weakest source authority, its attribution) across the named fields.
+
+        Field-level provenance wins when available; otherwise the legacy record-level
+        values_source stands in for every field.
+        """
+        weakest = None
+        weakest_by = None
+        for name in field_names:
+            info = input_sources.get(name)
+            if info:
+                authority = INPUT_SOURCE_TO_AUTHORITY.get(
+                    info.get("source_type"), AUTHORITY_IMPORTED
+                )
+                by = info.get("entered_by")
+            else:
+                authority, by = values_source, values_entered_by
+            if weakest is None or _AUTHORITY_RANK[authority] < _AUTHORITY_RANK[weakest]:
+                weakest, weakest_by = authority, by
+        return weakest or values_source, weakest_by or values_entered_by
 
     decision.inputs_used = {
         "product_name": product,
+        "epa_reg_no": epa_reg_no or None,
         "active_ingredient": planned_ai or None,
+        "moa_group": moa_group or None,
         "target_pest_or_disease": target or None,
         "intended_date": _iso(intended),
+        "rate_amount": rate_amount,
+        "rate_unit": rate_unit or None,
         "pre_harvest_interval_days": phi,
         "re_entry_interval_hours": rei_hours,
         "expected_harvest_date": _iso(harvest),
@@ -248,6 +334,10 @@ def evaluate_planned_spray(
         "scouting_observations_on_record": len(scout_observations),
         "recent_window_days": RECENT_WINDOW_DAYS,
     }
+    if input_sources:
+        decision.inputs_used["field_sources"] = {
+            name: info.get("source_type") for name, info in input_sources.items()
+        }
 
     # ---------------------------------------------------------------- missing data
     # Any compliance check that cannot run means the result can never be "approve".
@@ -281,6 +371,12 @@ def evaluate_planned_spray(
     decision.missing_information = missing
 
     # ------------------------------------------- Rule 1: PHI vs. expected harvest
+    phi_authority, phi_entered_by = field_authority(
+        "pre_harvest_interval_days", "expected_harvest_date", "intended_date"
+    )
+    rei_authority, rei_entered_by = field_authority(
+        "re_entry_interval_hours", "expected_harvest_date", "intended_date"
+    )
     phi_conflict = False
     if harvest is not None and phi is not None:
         phi_clears_on = intended + timedelta(days=phi)
@@ -308,8 +404,8 @@ def evaluate_planned_spray(
                 "pre_harvest_interval_days": phi,
                 "expected_harvest_date": _iso(harvest),
             },
-            source_authority=values_source,
-            entered_by=values_entered_by,
+            source_authority=phi_authority,
+            entered_by=phi_entered_by,
         ))
 
     # -------------------------------------- Rule 2: planned REI vs. expected harvest
@@ -343,8 +439,8 @@ def evaluate_planned_spray(
                 "re_entry_interval_hours": rei_hours,
                 "expected_harvest_date": _iso(harvest),
             },
-            source_authority=values_source,
-            entered_by=values_entered_by,
+            source_authority=rei_authority,
+            entered_by=rei_entered_by,
         ))
 
     # ------------------------------- Rule 3: a prior spray's REI active on intended date
@@ -414,25 +510,177 @@ def evaluate_planned_spray(
             },
         ))
 
+    # --------------------------- Rule 4b: repeated mode-of-action group (resistance)
+    # Only runs when structured MoA data exists on the planned spray — the engine
+    # never infers a FRAC/IRAC group from a product or ingredient name.
+    moa_repeat = False
+    if moa_group:
+        recent_sprays = _recent(spray_events, "application_date", today)
+        moa_prior = sum(
+            1 for s in recent_sprays
+            if (getattr(s, "moa_group", None) or "").strip().lower() == moa_group
+        )
+        moa_repeat = moa_prior + 1 > SAME_INGREDIENT_MAX
+        moa_authority, moa_entered_by = field_authority("moa_group")
+        decision.rules.append(DecisionRule(
+            rule_id="repeated_moa_group",
+            name="Repeated mode-of-action group (resistance)",
+            triggered=moa_repeat,
+            severity=SEVERITY_CAUTION if moa_repeat else SEVERITY_NONE,
+            detail=(
+                f"This would be use number {moa_prior + 1} of MoA group '{moa_group}' in "
+                f"the last {RECENT_WINDOW_DAYS} days (limit {SAME_INGREDIENT_MAX}) — "
+                f"repeating one mode of action drives resistance; rotation should be "
+                f"reviewed."
+                if moa_repeat
+                else f"MoA group '{moa_group}' used {moa_prior} time(s) in the last "
+                f"{RECENT_WINDOW_DAYS} days — within the rotation limit "
+                f"(only applications with recorded MoA data are counted)."
+            ),
+            calculation=(
+                f"{moa_prior} recent use(s) + 1 planned = {moa_prior + 1} vs. limit "
+                f"{SAME_INGREDIENT_MAX} in {RECENT_WINDOW_DAYS} days"
+            ),
+            inputs={
+                "moa_group": moa_group,
+                "prior_uses_in_window": moa_prior,
+                "limit": SAME_INGREDIENT_MAX,
+            },
+            source_authority=moa_authority,
+            entered_by=moa_entered_by,
+        ))
+
+    # ------------------------------------ Rule 4c: product identity completeness
+    identity_ambiguous = not planned_ai and not epa_reg_no
+    identity_authority, identity_entered_by = field_authority(
+        "product_name", "active_ingredient", "epa_reg_no"
+    )
+    decision.rules.append(DecisionRule(
+        rule_id="product_identity",
+        name="Product identity (name + active ingredient / EPA reg. no.)",
+        triggered=identity_ambiguous,
+        severity=SEVERITY_CAUTION if identity_ambiguous else SEVERITY_NONE,
+        detail=(
+            f"'{product}' has no active ingredient and no EPA registration number on "
+            f"record — the product identity is ambiguous, so resistance and label "
+            f"checks cannot be tied to a specific chemistry."
+            if identity_ambiguous
+            else f"Product identity for '{product}' includes "
+            + (f"EPA reg. no. {epa_reg_no}" if epa_reg_no else f"active ingredient '{planned_ai}'")
+            + "."
+        ),
+        calculation=None,
+        inputs={
+            "product_name": product,
+            "active_ingredient": planned_ai or None,
+            "epa_reg_no": epa_reg_no or None,
+        },
+        source_authority=identity_authority,
+        entered_by=identity_entered_by,
+    ))
+
+    # ---------------------------------------- Rule 4d: application-rate completeness
+    rate_incomplete = False
+    if rate_amount is not None or rate_unit:
+        rate_incomplete = (rate_amount is None) != (not rate_unit)
+        rate_authority, rate_entered_by = field_authority("rate_amount", "rate_unit")
+        decision.rules.append(DecisionRule(
+            rule_id="rate_completeness",
+            name="Application rate completeness (amount + unit)",
+            triggered=rate_incomplete,
+            severity=SEVERITY_CAUTION if rate_incomplete else SEVERITY_NONE,
+            detail=(
+                "The application rate is incomplete — "
+                + (
+                    f"an amount ({rate_amount}) was recorded without a unit."
+                    if rate_amount is not None
+                    else f"a unit ('{rate_unit}') was recorded without an amount."
+                )
+                + " A rate that cannot be read unambiguously cannot be reviewed."
+                if rate_incomplete
+                else f"Application rate recorded as {rate_amount} {rate_unit}."
+            ),
+            calculation=None,
+            inputs={"rate_amount": rate_amount, "rate_unit": rate_unit or None},
+            source_authority=rate_authority,
+            entered_by=rate_entered_by,
+        ))
+
+    # ------------------------------- Rule 4e: unverified imported compliance values
+    # Imported values are explicitly unverified until a PCA (or, one day, an
+    # authoritative label provider) confirms them — they can never back an approve.
+    imported_fields = sorted(
+        name for name, info in input_sources.items()
+        if info.get("source_type") == "imported_unverified"
+    )
+    imported_unverified = bool(imported_fields)
+    if imported_unverified:
+        decision.rules.append(DecisionRule(
+            rule_id="unverified_imported_values",
+            name="Imported values not yet verified",
+            triggered=True,
+            severity=SEVERITY_CAUTION,
+            detail=(
+                f"{len(imported_fields)} input value(s) came from an import and have "
+                f"not been verified by a PCA: {', '.join(imported_fields)}. Unverified "
+                f"regulatory data can never produce an automatic approve — a PCA must "
+                f"review this decision."
+            ),
+            calculation=None,
+            inputs={"imported_unverified_fields": imported_fields},
+            source_authority=AUTHORITY_IMPORTED,
+            entered_by=values_entered_by,
+        ))
+
     # --------------------------------------- Rule 5: linked scouting evidence
-    # Exact normalized match only — anything less counts as "not explicitly linked",
-    # which is all this rule claims. When the farm has a PCA-entered action threshold
-    # for this target, the rule additionally requires the linked scouting pressure to
-    # reach that threshold, and the rule's authority becomes pca_entered (attributed).
+    # Exact normalized names or the explicit alias dictionary (app/target_aliases.py)
+    # only — the engine NEVER fuzzily infers that two pest/disease names are the same.
+    # A partial overlap (one name contained in the other, or a known alias appearing
+    # inside free text) is AMBIGUOUS: it is escalated to PCA review and recorded, not
+    # treated as evidence. When the farm has a PCA-entered action threshold for this
+    # target, the rule additionally requires the linked scouting pressure to reach
+    # that threshold, and the rule's authority becomes pca_entered (attributed).
     # Without a policy the behavior is the plain heuristic — a threshold is NEVER
     # invented by Lumos.
     scouting_linked = False
+    target_match_ambiguous = False
     if target:
         recent_obs = _recent(scout_observations, "observation_date", today)
-        linked = [
-            o for o in recent_obs
-            if (getattr(o, "visible_issue", None) or "").strip().lower() == target
+        linked, ambiguous_obs = [], []
+        for o in recent_obs:
+            verdict = target_aliases.match_targets(
+                target, getattr(o, "visible_issue", None)
+            )
+            if verdict == target_aliases.MATCH:
+                linked.append(o)
+            elif verdict == target_aliases.AMBIGUOUS:
+                ambiguous_obs.append(o)
+        # Matching observations that exist but fell out of the recent window: report
+        # them as STALE evidence explicitly instead of silently ignoring them.
+        stale_dates = [
+            getattr(o, "observation_date", None)
+            for o in scout_observations
+            if o not in recent_obs
+            and getattr(o, "observation_date", None) is not None
+            and getattr(o, "observation_date") <= today
+            and target_aliases.match_targets(
+                target, getattr(o, "visible_issue", None)
+            ) == target_aliases.MATCH
         ]
+        latest_stale = max(stale_dates) if stale_dates else None
+        stale_note = (
+            f" The most recent matching observation is from "
+            f"{latest_stale.isoformat()} ({(today - latest_stale).days} days ago) — "
+            f"older than the {RECENT_WINDOW_DAYS}-day window, so it is stale evidence."
+            if latest_stale is not None
+            else ""
+        )
         policy = next(
             (
                 p for p in pca_policies
-                if (getattr(p, "target_pest_or_disease", None) or "").strip().lower()
-                == target
+                if target_aliases.match_targets(
+                    getattr(p, "target_pest_or_disease", None), target
+                ) == target_aliases.MATCH
             ),
             None,
         )
@@ -465,6 +713,7 @@ def evaluate_planned_spray(
                     f"PCA-entered action threshold for '{target}': treat only if "
                     f"scouting severity >= {threshold}; no scouting observation "
                     f"referencing '{target}' in the last {RECENT_WINDOW_DAYS} days."
+                    + stale_note
                 )
             decision.rules.append(DecisionRule(
                 rule_id="scouting_evidence",
@@ -501,11 +750,46 @@ def evaluate_planned_spray(
                     if scouting_linked
                     else f"No scouting observation explicitly referencing '{target}' in the "
                     f"last {RECENT_WINDOW_DAYS} days — no logged evidence of pressure."
+                    + stale_note
                 ),
                 calculation=None,
                 inputs={
                     "target_pest_or_disease": target,
                     "recent_observations_checked": len(recent_obs),
+                },
+            ))
+
+        # ------------------- Rule 5b: ambiguous target-name overlap (never inferred)
+        # Only relevant when no proper (exact/alias) match exists: a partial name
+        # overlap is escalated to PCA review with both names recorded — the engine
+        # never silently decides two pest/disease names mean the same thing.
+        if ambiguous_obs and not scouting_linked:
+            target_match_ambiguous = True
+            pairs = [
+                f"'{(getattr(o, 'visible_issue', None) or '').strip()}' "
+                f"(logged {getattr(o, 'observation_date').isoformat()})"
+                for o in ambiguous_obs[:3]
+                if getattr(o, "observation_date", None) is not None
+            ]
+            decision.rules.append(DecisionRule(
+                rule_id="scouting_target_ambiguity",
+                name="Ambiguous pest/disease name overlap",
+                triggered=True,
+                severity=SEVERITY_CAUTION,
+                detail=(
+                    f"The stated target '{target}' partially overlaps "
+                    f"{len(ambiguous_obs)} scouting observation(s) — {'; '.join(pairs)} — "
+                    f"but is not an exact or known-alias match. Lumos does not infer "
+                    f"that the names are equivalent; a PCA must decide whether these "
+                    f"observations are evidence for this application."
+                ),
+                calculation=(
+                    "match method: exact normalized name or explicit alias dictionary "
+                    "only — partial overlap escalates, never matches"
+                ),
+                inputs={
+                    "target_pest_or_disease": target,
+                    "ambiguous_observations": len(ambiguous_obs),
                 },
             ))
 
@@ -527,15 +811,19 @@ def evaluate_planned_spray(
 
     # ------------------------------------------------------------ verdict mapping
     # Precedence: block > delay > pca_review_required > inspect_first > approve.
+    review_triggers = (
+        overuse or moa_repeat or bool(missing) or identity_ambiguous
+        or rate_incomplete or imported_unverified or target_match_ambiguous
+    )
     if phi_conflict or rei_harvest_conflict:
         decision.outcome = OUTCOME_BLOCK
         decision.severity = SEVERITY_CRITICAL
     elif prior_rei_active:
         decision.outcome = OUTCOME_DELAY
         decision.severity = SEVERITY_CAUTION
-    elif overuse or missing:
+    elif review_triggers:
         decision.outcome = OUTCOME_PCA_REVIEW
-        decision.severity = SEVERITY_CAUTION if (overuse or missing) else SEVERITY_NONE
+        decision.severity = SEVERITY_CAUTION
     elif not scouting_linked:
         decision.outcome = OUTCOME_INSPECT_FIRST
         decision.severity = SEVERITY_CAUTION
@@ -678,6 +966,11 @@ def _build_narrative(decision: PlannedSprayDecision, product: str) -> str:
         lines.append("Missing information:")
         for m in decision.missing_information:
             lines.append(f"- {m}")
+    if decision.not_evaluated:
+        lines.append("")
+        lines.append("Not evaluated (requires authoritative label data; never guessed):")
+        for c in decision.not_evaluated:
+            lines.append(f"- {c['check']}")
     lines += [
         "",
         "Note: This is cautious decision support, not a prescription or a diagnosis. "

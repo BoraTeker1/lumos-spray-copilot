@@ -94,3 +94,28 @@ full crop cycle of measurement — see below.
 - **Not** a compliance or legal guarantee — PHI, REI, and label requirements must be confirmed
   with a licensed advisor and the product label.
 - **Not** an automated integration — concierge import is deliberately manual in this phase.
+
+---
+
+## V1 pilot operating mode (concierge)
+
+The Real Pilot Evidence Loop V1 is deliberately **operator-run**:
+
+- **We run the import.** A PCA/grower sends redacted spray recommendations and scouting
+  records (CSV/spreadsheet); the operator anonymizes them **before upload**, then imports
+  via the CSV pilot import (dry-run validation → mapping correction → commit).
+- **Every imported value is `imported_unverified`** until the PCA reviews the decision —
+  the check can never auto-approve on imported data, and PCA edits supersede (never
+  overwrite) the imported values with attributed `pca_verified` rows.
+- **Follow-up is mandatory** before anything is called confirmed: avoided/delayed/changed
+  decisions stay "estimated" until follow-up events (re-scouts, actual/rescue
+  applications, harvest outcomes) are recorded. Failures (rescues, negative net results)
+  are counted and shown — that is what makes the evidence credible.
+- **The deliverable** is the anonymized evidence export (`/farms/{id}/evidence-export`,
+  JSON + CSV): decisions, provenance, immutable audit history, follow-up timeline,
+  confirmed-vs-estimated metrics, limitations, correlation-not-causality statement.
+
+**This build is not customer-facing production software.** Before any self-serve
+customer use it would need: authentication, per-tenant data isolation, backups, and a
+data-security review. Completing this milestone is infrastructure for obtaining
+validation from real PCA records — it is **not** validation of the business.

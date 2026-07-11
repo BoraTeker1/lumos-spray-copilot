@@ -16,9 +16,62 @@ Idempotent: clears existing rows first so re-running gives a clean demo state.
 """
 from datetime import date, datetime, timedelta
 
-from app import clock, models, schemas
+from app import clock, crud, models, schemas
 from app.database import Base, SessionLocal, engine, init_db
 from app.decision_engine import evaluate_planned_spray
+
+
+def _seed_decision_trail(
+    db, planned: models.PlannedSpray, *, source_type: str, entered_by: str | None,
+    ts: datetime, review_rationale: str | None = None,
+) -> None:
+    """Field-level input values + immutable audit events for a seeded decision.
+
+    Mirrors what crud.create_planned_spray / review / outcome write live, so demo
+    decision records show the same provenance/audit surfaces as real ones. All rows
+    anchor to the seeded timestamp.
+    """
+    for name, value, unit in crud._planned_input_rows(planned, None):
+        db.add(models.DecisionInputValue(
+            planned_spray_id=planned.id,
+            field_name=name,
+            raw_value=str(value),
+            normalized_value=crud._normalized_input(name, value),
+            unit=unit,
+            source_type=source_type,
+            source_reference="demo seed (simulated)",
+            confidence="simulated",
+            verified_by=entered_by if source_type == "pca_verified" else None,
+            verified_at=ts if source_type == "pca_verified" else None,
+            created_at=ts,
+        ))
+    snapshot = crud._decision_snapshot(planned)
+    db.add(models.DecisionAuditEvent(
+        planned_spray_id=planned.id, event_type="created",
+        actor=entered_by, system_recommendation=planned.decision_outcome,
+        after={**snapshot, "review_status": "not_reviewed", "outcome": "planned",
+               "input_source_type": source_type},
+        created_at=ts,
+    ))
+    if planned.review_status != "not_reviewed":
+        db.add(models.DecisionAuditEvent(
+            planned_spray_id=planned.id, event_type="reviewed",
+            actor=planned.reviewed_by, rationale=review_rationale or planned.review_comment,
+            system_recommendation=planned.decision_outcome,
+            before={**snapshot, "review_status": "not_reviewed", "outcome": "planned"},
+            after={**snapshot, "outcome": "planned",
+                   "review_action": planned.review_status},
+            created_at=ts,
+        ))
+    if planned.outcome != "planned":
+        db.add(models.DecisionAuditEvent(
+            planned_spray_id=planned.id, event_type="outcome_recorded",
+            rationale=planned.outcome_reason,
+            system_recommendation=planned.decision_outcome,
+            before={**snapshot, "outcome": "planned"},
+            after=snapshot,
+            created_at=ts,
+        ))
 
 
 def demo_today() -> date:
@@ -342,6 +395,33 @@ def run() -> None:
         db.flush()  # assign switch_event.id
         planned1.spray_event_id = switch_event.id
 
+        demo_ts = datetime.combine(today, datetime.min.time())
+        # Field-level provenance + immutable audit trail (PCA-entered -> pca_verified).
+        _seed_decision_trail(
+            db, planned1, source_type="pca_verified",
+            entered_by="Demo PCA (simulated)", ts=demo_ts,
+        )
+        # Follow-up timeline: the replacement application actually happened. No
+        # pesticide-reduction claim is attached — a different product was applied.
+        db.add(models.DecisionFollowUpEvent(
+            planned_spray_id=planned1.id,
+            event_type="actual_application",
+            observed_at=today,
+            actual_product="Switch 62.5 WG",
+            actual_rate_amount=14.0,
+            actual_rate_unit="oz/acre",
+            actual_treated_acres=18.0,
+            cost=210.0,
+            evidence_notes=(
+                "Replacement product applied per the PCA's edited guidance. Demo/"
+                "simulated record — no reduction or savings claim."
+            ),
+            entered_by="Demo grower (simulated)",
+            source_type="demo",
+            confidence="simulated",
+            created_at=demo_ts,
+        ))
+
         # ------------------------------------------------------------------ #
         # Demo scenario 2 (unnecessary routine spray AVOIDED — the pesticide- #
         # reduction story):                                                   #
@@ -421,6 +501,33 @@ def run() -> None:
         )
         db.add(planned2)
 
+        db.flush()  # assign planned2.id for its provenance/audit/follow-up rows
+        _seed_decision_trail(
+            db, planned2, source_type="user_entered",
+            entered_by="Demo grower (simulated)", ts=demo_ts,
+        )
+        # Follow-up timeline: the inspection happened, pressure stayed below the
+        # entered threshold, no rescue was needed. Yield impact deliberately stays
+        # UNKNOWN — nothing here was measured, and unknown is reported as unknown.
+        db.add(models.DecisionFollowUpEvent(
+            planned_spray_id=planned2.id,
+            event_type="scouting_observation",
+            observed_at=today,
+            severity=2,
+            severity_scale="1-5",
+            cost=35.0,
+            rescue_required=False,
+            evidence_notes=(
+                "Follow-up inspection: lygus severity 2, below the PCA-entered "
+                "threshold of 3. No application made; no rescue needed so far. Yield "
+                "impact unknown (not measured). Demo/simulated record."
+            ),
+            entered_by="Demo PCA (simulated)",
+            source_type="demo",
+            confidence="simulated",
+            created_at=demo_ts,
+        ))
+
         # The follow-up inspection the INSPECT FIRST outcome asked for (same demo day):
         # lygus pressure logged at severity 2 — below the PCA-entered threshold of 3.
         db.add(models.ScoutObservation(
@@ -431,6 +538,176 @@ def run() -> None:
             severity_1_to_5=2,
             notes="Follow-up inspection after the pre-spray check returned INSPECT "
             "FIRST: a few lygus on field edges, below the entered action threshold.",
+        ))
+
+        # ------------------------------------------------------------------ #
+        # Demo scenario 3 (FAILED reduction attempt — shown honestly):        #
+        #   a miticide was planned for twospotted spider mite at scouting     #
+        #   severity 2 (below the PCA-entered threshold of 3), the check said #
+        #   INSPECT FIRST, the PCA held it — and the pressure then ROSE to    #
+        #   severity 4, forcing a RESCUE application days later. Net result   #
+        #   is negative (extra scouting + rescue cost, no spray avoided).     #
+        #   The product must show failures like this or its evidence is not  #
+        #   credible. All demo/simulated.                                     #
+        # ------------------------------------------------------------------ #
+        check_day = today - timedelta(days=6)
+        check_ts = datetime.combine(check_day, datetime.min.time())
+        mite_policy = models.PcaPolicy(
+            farm_id=farm3.id,
+            target_pest_or_disease="twospotted spider mite",
+            min_severity_to_treat=3,
+            entered_by="Demo PCA (simulated)",
+            notes="Demo policy: treat mites only at scouting severity 3 or more.",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=check_ts,
+        )
+        db.add(mite_policy)
+
+        mite_obs_before = models.ScoutObservation(
+            farm_id=farm3.id,
+            observation_date=today - timedelta(days=8),
+            crop_stage="fruiting",
+            visible_issue="twospotted spider mite",
+            severity_1_to_5=2,
+            notes="Scattered mites on lower leaves; below the entered action threshold.",
+        )
+        db.add(mite_obs_before)
+
+        planned3_data = schemas.PlannedSprayCreate(
+            intended_date=today - timedelta(days=5),
+            product_name="Agri-Mek SC",
+            active_ingredient="abamectin",
+            target_pest_or_disease="twospotted spider mite",
+            pre_harvest_interval_days=3,
+            re_entry_interval_hours=12,
+            estimated_cost=190.0,
+            values_source="grower_entered",
+            values_entered_by="Demo grower (simulated)",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        # Evaluate against the records as they stood on the check day (sprays applied
+        # later did not exist yet), anchored to that day.
+        decision3 = evaluate_planned_spray(
+            farm3, planned3_data,
+            [s for s in farm3_sprays if s.application_date <= check_day],
+            [mite_obs_before],
+            pca_policies=[mite_policy], today=check_day,
+        )
+        assert decision3.outcome == "inspect_first", decision3.outcome
+
+        planned3 = models.PlannedSpray(
+            farm_id=farm3.id,
+            **planned3_data.model_dump(),
+            decision_outcome=decision3.outcome,
+            decision_severity=decision3.severity,
+            decision_confidence=decision3.confidence,
+            decision_authority=decision3.authority_level,
+            required_next_action=decision3.required_next_action,
+            review_required=decision3.review_required,
+            decision_payload=decision3.as_payload(),
+            check_risk_level="moderate",
+            check_text=decision3.narrative,
+            review_status="edited",
+            review_comment=(
+                "Mite pressure is below the entered threshold — hold and re-scout "
+                "before treating."
+            ),
+            reviewed_by="Demo PCA (simulated)",
+            reviewed_at=check_ts,
+            pca_next_action=(
+                "Delay the miticide. Re-scout the block in 2-3 days; treat only if "
+                "severity reaches 3 or more (entered action threshold)."
+            ),
+            outcome="delayed",
+            outcome_reason=(
+                "Held per the PCA's guidance to verify pressure before treating."
+            ),
+            outcome_date=today - timedelta(days=5),
+            created_at=check_ts,
+        )
+        db.add(planned3)
+        db.flush()
+        _seed_decision_trail(
+            db, planned3, source_type="user_entered",
+            entered_by="Demo grower (simulated)", ts=check_ts,
+        )
+
+        # Follow-up timeline: pressure ROSE after the delay and a rescue was required.
+        db.add_all([
+            models.DecisionFollowUpEvent(
+                planned_spray_id=planned3.id,
+                event_type="scouting_observation",
+                observed_at=today - timedelta(days=3),
+                severity=3,
+                severity_scale="1-5",
+                cost=0.0,
+                evidence_notes="Re-scout: mite pressure rising, at threshold.",
+                entered_by="Demo PCA (simulated)",
+                source_type="demo",
+                confidence="simulated",
+                created_at=datetime.combine(today - timedelta(days=3), datetime.min.time()),
+            ),
+            models.DecisionFollowUpEvent(
+                planned_spray_id=planned3.id,
+                event_type="scouting_observation",
+                observed_at=today - timedelta(days=2),
+                severity=4,
+                severity_scale="1-5",
+                cost=40.0,
+                evidence_notes=(
+                    "Re-scout: mite flare-up, severity 4 with visible stippling — "
+                    "the delay did not hold."
+                ),
+                entered_by="Demo PCA (simulated)",
+                source_type="demo",
+                confidence="simulated",
+                created_at=datetime.combine(today - timedelta(days=2), datetime.min.time()),
+            ),
+            models.DecisionFollowUpEvent(
+                planned_spray_id=planned3.id,
+                event_type="rescue_application",
+                observed_at=today - timedelta(days=1),
+                actual_product="Agri-Mek SC",
+                actual_rate_amount=3.5,
+                actual_rate_unit="oz/acre",
+                actual_treated_acres=18.0,
+                cost=260.0,
+                rescue_required=True,
+                evidence_notes=(
+                    "Rescue miticide required after the flare-up — the attempted "
+                    "delay FAILED: extra scouting cost plus a more expensive rescue, "
+                    "no application avoided. Counted as a failure. Demo/simulated."
+                ),
+                entered_by="Demo grower (simulated)",
+                source_type="demo",
+                confidence="simulated",
+                created_at=datetime.combine(today - timedelta(days=1), datetime.min.time()),
+            ),
+        ])
+
+        # The farm-level records behind the follow-up story (scouting + rescue spray).
+        db.add(models.ScoutObservation(
+            farm_id=farm3.id,
+            observation_date=today - timedelta(days=2),
+            crop_stage="fruiting",
+            visible_issue="twospotted spider mite",
+            severity_1_to_5=4,
+            notes="Mite flare-up after the delayed miticide — rescue treatment needed.",
+        ))
+        db.add(models.SprayEvent(
+            farm_id=farm3.id,
+            product_name="Agri-Mek SC",
+            active_ingredient="abamectin",
+            pesticide_class="avermectin miticide",
+            target_pest_or_disease="twospotted spider mite",
+            dose="3.5 oz/acre",
+            application_date=today - timedelta(days=1),
+            cost=260.0,
+            pre_harvest_interval_days=3,
+            re_entry_interval_hours=12,
+            notes="Rescue application after the delayed miticide failed to hold.",
         ))
 
         # Declared spray baseline so the U.S. demo shows *measured* reduction, not just

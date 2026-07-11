@@ -69,6 +69,29 @@ export const api = {
     request(`/planned-sprays/${plannedId}`, { method: "DELETE" }),
   getDecisionEvidence: (farmId) => request(`/farms/${farmId}/decision-evidence`),
 
+  // Decision provenance + immutable audit trail + follow-up timeline
+  listAuditEvents: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/audit-events`),
+  listInputValues: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/input-values`),
+  listFollowUpEvents: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/follow-up-events`),
+  addFollowUpEvent: (plannedId, data) =>
+    request(`/planned-sprays/${plannedId}/follow-up-events`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // CSV pilot import (dry-run by default; commit with dry_run: false)
+  importCsv: (farmId, data) =>
+    request(`/farms/${farmId}/import/csv`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // Anonymized evidence export (JSON; CSV via exportUrl)
+  getEvidenceExport: (farmId) => request(`/farms/${farmId}/evidence-export`),
+
   // Recommendations
   listRecommendations: (farmId) => request(`/farms/${farmId}/recommendations`),
   generateRecommendation: (farmId) =>

@@ -42,6 +42,7 @@ import RecommendationPanel from "@/components/RecommendationPanel";
 import ReductionCard from "@/components/ReductionCard";
 import ScoutObservationForm from "@/components/ScoutObservationForm";
 import SprayEventForm from "@/components/SprayEventForm";
+import PilotImportCard from "@/components/PilotImportCard";
 import SprayImportCard from "@/components/SprayImportCard";
 import WeatherCard from "@/components/WeatherCard";
 import WeeklyReport from "@/components/WeeklyReport";
@@ -423,6 +424,14 @@ function FarmDetail({ farmId }) {
               description="Paste rows from a spreadsheet or upload a CSV — no formatting gymnastics."
             >
               <SprayImportCard farmId={farmId} onImported={load} />
+            </SectionCard>
+
+            <SectionCard
+              title="Pilot CSV import (planned sprays & scouting)"
+              icon={<Plus />}
+              description="Real pilot records: dry-run validation, correctable column mapping, duplicate detection. Imported values are flagged unverified and never auto-approve."
+            >
+              <PilotImportCard farmId={farmId} onImported={load} />
             </SectionCard>
 
             <SectionCard

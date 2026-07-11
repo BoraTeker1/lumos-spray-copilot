@@ -42,8 +42,9 @@ def _planned_by_product(client, farm_id, product_name):
 def test_demo_planned_spray_story_is_coherent(seeded):
     farm = _us_farm(seeded)
     planned = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()
-    # Two seeded scenarios: the blocked-then-changed captan and the avoided PyGanic.
-    assert len(planned) == 2
+    # Three seeded scenarios: the blocked-then-changed captan, the avoided PyGanic,
+    # and the failed-delay Agri-Mek rescue story.
+    assert len(planned) == 3
     p = _planned_by_product(seeded, farm["id"], "Captan 80 WDG")
     anchor = date.fromisoformat(PINNED)
 
@@ -126,6 +127,38 @@ def test_scenario2_routine_spray_avoided_story(seeded):
     assert lygus_obs[0]["severity_1_to_5"] == 2
 
 
+def test_scenario3_failed_delay_is_shown_honestly(seeded):
+    """The failure scenario: delayed miticide -> severity rose -> rescue required.
+    The product must show this as a failure — negative result, no avoided claim."""
+    farm = _us_farm(seeded)
+    p = _planned_by_product(seeded, farm["id"], "Agri-Mek SC")
+    anchor = date.fromisoformat(PINNED)
+
+    assert p["decision_outcome"] == "inspect_first"
+    assert p["outcome"] == "delayed"
+    assert p["follow_up_required"] is True
+    assert p["follow_up_event_count"] == 3
+
+    events = seeded.get(f"/planned-sprays/{p['id']}/follow-up-events").json()
+    assert [e["event_type"] for e in events] == [
+        "scouting_observation", "scouting_observation", "rescue_application"
+    ]
+    # Severity rose after the delay; the rescue is recorded with its cost.
+    assert events[0]["severity"] == 3
+    assert events[1]["severity"] == 4
+    rescue = events[2]
+    assert rescue["rescue_required"] is True
+    assert rescue["cost"] == 260.0
+    assert "FAILED" in rescue["evidence_notes"]
+    # Chronology: check -> delay -> re-scouts -> rescue, all before/at the anchor.
+    assert p["created_at"][:10] <= p["outcome_date"]
+    observed = [e["observed_at"] for e in events]
+    assert observed == sorted(observed)
+    assert observed[-1] <= anchor.isoformat()
+    # No avoided claim anywhere: yield/quality stay unknown, nothing "confirmed".
+    assert all(e["yield_impact"] in (None, "unknown") for e in events)
+
+
 def test_farm_card_flags_match_farm_page_signals(seeded):
     """The overview card's flag count must equal what /compliance shows on the page."""
     farm = _us_farm(seeded)
@@ -146,11 +179,16 @@ def test_decision_evidence_reconciles_with_visible_demo_outcomes(seeded):
     farm = _us_farm(seeded)
     ev = seeded.get(f"/farms/{farm['id']}/decision-evidence").json()
     assert ev["decisions_checked"] == 0            # no real decisions yet
-    assert ev["demo_decisions_checked"] == 2       # both seeded stories, reconciled
+    assert ev["demo_decisions_checked"] == 3       # all seeded stories, reconciled
     assert ev["demo_outcomes"]["changed_product"] == 1
     assert ev["demo_outcomes"]["avoided"] == 1
+    assert ev["demo_outcomes"]["delayed"] == 1     # the failed-delay rescue story
     assert ev["compliance_conflicts_caught"] == 0  # demo conflicts never count as real
     assert ev["estimated_chemical_cost_avoided"] == 0.0  # demo cost never counts as real
+    # Demo follow-up events never leak into the CONFIRMED metrics either.
+    assert ev["confirmed"]["applications_confirmed_avoided"] == 0
+    assert ev["confirmed"]["confirmed_rescue_treatments"] == 0
+    assert ev["confirmed"]["confirmed_net_financial_result"] == 0.0
 
 
 def test_demo_dates_never_precede_their_own_story(seeded):

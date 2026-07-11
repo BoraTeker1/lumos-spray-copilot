@@ -56,6 +56,8 @@ class SprayEvent(Base):
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
     active_ingredient: Mapped[str | None] = mapped_column(String(200))
+    # FRAC/IRAC/HRAC mode-of-action group, when known (needed for MoA-rotation checks).
+    moa_group: Mapped[str | None] = mapped_column(String(40))
     pesticide_class: Mapped[str | None] = mapped_column(String(100))
     target_pest_or_disease: Mapped[str | None] = mapped_column(String(200))
     dose: Mapped[str | None] = mapped_column(String(100))
@@ -88,6 +90,14 @@ class ScoutObservation(Base):
     severity_1_to_5: Mapped[int | None] = mapped_column(Integer)
     image_url_optional: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(Text)
+    # Pilot CSV-import fields (all optional; provenance for real scouting records).
+    external_record_id: Mapped[str | None] = mapped_column(String(120))
+    field_block: Mapped[str | None] = mapped_column(String(120))
+    severity_scale: Mapped[str | None] = mapped_column(String(40))  # e.g. "1-5", "1-10"
+    count_value: Mapped[float | None] = mapped_column(Float)
+    observer: Mapped[str | None] = mapped_column(String(120))
+    source_system: Mapped[str | None] = mapped_column(String(120))
+    source_filename: Mapped[str | None] = mapped_column(String(255))
     # Concierge-pilot provenance (see SprayEvent for the allowed values).
     data_source: Mapped[str | None] = mapped_column(String(40), default="demo")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="simulated")
@@ -118,6 +128,23 @@ class PlannedSpray(Base):
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
     re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
     estimated_cost: Mapped[float | None] = mapped_column(Float)
+    # Pilot CSV-import / real-record fields (all optional).
+    external_record_id: Mapped[str | None] = mapped_column(String(120))
+    field_block: Mapped[str | None] = mapped_column(String(120))
+    crop: Mapped[str | None] = mapped_column(String(100))
+    treated_acres: Mapped[float | None] = mapped_column(Float)
+    epa_reg_no: Mapped[str | None] = mapped_column(String(60))
+    # FRAC/IRAC/HRAC mode-of-action group, when known.
+    moa_group: Mapped[str | None] = mapped_column(String(40))
+    rate_amount: Mapped[float | None] = mapped_column(Float)
+    rate_unit: Mapped[str | None] = mapped_column(String(40))
+    recommendation_author: Mapped[str | None] = mapped_column(String(120))
+    source_system: Mapped[str | None] = mapped_column(String(120))
+    source_filename: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+    pilot_import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pilot_import_batches.id")
+    )
     # Who supplied the PHI/REI values: grower_entered / pca_entered (never a verified
     # label today — there is deliberately no label database yet).
     values_source: Mapped[str] = mapped_column(String(30), default="grower_entered")
@@ -160,6 +187,15 @@ class PlannedSpray(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="planned_sprays")
+    input_values: Mapped[list["DecisionInputValue"]] = relationship(
+        back_populates="planned_spray", cascade="all, delete-orphan"
+    )
+    audit_events: Mapped[list["DecisionAuditEvent"]] = relationship(
+        back_populates="planned_spray", cascade="all, delete-orphan"
+    )
+    follow_up_events: Mapped[list["DecisionFollowUpEvent"]] = relationship(
+        back_populates="planned_spray", cascade="all, delete-orphan"
+    )
 
     # Derived status fields (read-only, from the canonical app/decision_status.py).
     # Serialized on schemas.PlannedSpray so the frontend never re-derives them.
@@ -188,6 +224,120 @@ class PlannedSpray(Base):
         return decision_status.harvest_date_changed_since_check(
             self, self.farm.expected_harvest_date if self.farm else None
         )
+
+    @property
+    def follow_up_required(self) -> bool:
+        return decision_status.follow_up_required(self)
+
+    @property
+    def follow_up_event_count(self) -> int:
+        return len(self.follow_up_events or [])
+
+
+class DecisionInputValue(Base):
+    """Field-level provenance for one compliance/decision-critical input value.
+
+    Append-only via a supersede chain: a correction or PCA verification never edits a
+    row — it appends a new row whose `supersedes_input_value_id` points at the old one.
+    The latest non-superseded row per field is what drives the decision engine (crud
+    resolves it and keeps the PlannedSpray's denormalized display columns in sync).
+    Imported values are `imported_unverified` and NEVER silently become verified —
+    only an attributed PCA action can append a `pca_verified` row.
+    """
+    __tablename__ = "decision_input_values"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    planned_spray_id: Mapped[int] = mapped_column(
+        ForeignKey("planned_sprays.id"), nullable=False
+    )
+    # e.g. product_name / epa_reg_no / crop / target_pest_or_disease / rate_amount /
+    # pre_harvest_interval_days / re_entry_interval_hours / intended_date /
+    # expected_harvest_date / active_ingredient / moa_group
+    field_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    raw_value: Mapped[str | None] = mapped_column(String(500))
+    normalized_value: Mapped[str | None] = mapped_column(String(500))
+    unit: Mapped[str | None] = mapped_column(String(40))
+    # demo / user_entered / imported_unverified / pca_verified / authoritative_provider
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Where the value came from (filename+row, form, reviewer action, ...).
+    source_reference: Mapped[str | None] = mapped_column(String(255))
+    confidence: Mapped[str | None] = mapped_column(String(40))
+    verified_by: Mapped[str | None] = mapped_column(String(120))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    effective_date: Mapped[date | None] = mapped_column(Date)
+    supersedes_input_value_id: Mapped[int | None] = mapped_column(
+        ForeignKey("decision_input_values.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    planned_spray: Mapped["PlannedSpray"] = relationship(back_populates="input_values")
+
+
+class DecisionAuditEvent(Base):
+    """One append-only audit event on a pre-spray decision. NEVER updated or deleted.
+
+    Reviews/outcomes still update the PlannedSpray's current-state columns, but every
+    change appends one of these first, with the prior state in `before` — so history
+    is immutable even though the current-state row is convenient to read.
+    """
+    __tablename__ = "decision_audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    planned_spray_id: Mapped[int] = mapped_column(
+        ForeignKey("planned_sprays.id"), nullable=False
+    )
+    # created / reviewed / outcome_recorded / input_value_superseded / follow_up_added
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    rationale: Mapped[str | None] = mapped_column(Text)
+    # The engine's outcome at the moment of this event (what the human saw).
+    system_recommendation: Mapped[str | None] = mapped_column(String(30))
+    before: Mapped[dict | None] = mapped_column(JSON)
+    after: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    planned_spray: Mapped["PlannedSpray"] = relationship(back_populates="audit_events")
+
+
+class DecisionFollowUpEvent(Base):
+    """One append-only follow-up observation after a decision's recorded outcome.
+
+    One-to-many per planned spray: the follow-up story is a timeline of events
+    (scouting_observation / actual_application / rescue_application / harvest_outcome /
+    yield_quality_outcome / note), never a single mutable record. Confirmed metrics are
+    derived read-only from this timeline; earlier observations are never overwritten.
+    """
+    __tablename__ = "decision_follow_up_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    planned_spray_id: Mapped[int] = mapped_column(
+        ForeignKey("planned_sprays.id"), nullable=False
+    )
+    # scouting_observation / actual_application / rescue_application / harvest_outcome /
+    # yield_quality_outcome / note
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    observed_at: Mapped[date] = mapped_column(Date, nullable=False)
+    severity: Mapped[int | None] = mapped_column(Integer)
+    severity_scale: Mapped[str | None] = mapped_column(String(40))
+    actual_product: Mapped[str | None] = mapped_column(String(200))
+    actual_rate_amount: Mapped[float | None] = mapped_column(Float)
+    actual_rate_unit: Mapped[str | None] = mapped_column(String(40))
+    actual_treated_acres: Mapped[float | None] = mapped_column(Float)
+    cost: Mapped[float | None] = mapped_column(Float)
+    rescue_required: Mapped[bool | None] = mapped_column(Boolean)
+    # positive / neutral / negative / unknown
+    yield_impact: Mapped[str | None] = mapped_column(String(20))
+    quality_impact: Mapped[str | None] = mapped_column(String(20))
+    rejected_or_downgraded: Mapped[bool | None] = mapped_column(Boolean)
+    evidence_notes: Mapped[str | None] = mapped_column(Text)
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    # demo / user_entered / imported_unverified / pca_verified / authoritative_provider
+    source_type: Mapped[str | None] = mapped_column(String(40))
+    source_reference: Mapped[str | None] = mapped_column(String(255))
+    confidence: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    planned_spray: Mapped["PlannedSpray"] = relationship(back_populates="follow_up_events")
 
 
 class PcaPolicy(Base):
@@ -319,8 +469,12 @@ class PilotImportBatch(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     data_source: Mapped[str | None] = mapped_column(String(40))
     data_confidence: Mapped[str | None] = mapped_column(String(40))
+    # CSV pilot imports: what kind of records the batch carried and the file it came from.
+    record_type: Mapped[str | None] = mapped_column(String(40))
+    source_filename: Mapped[str | None] = mapped_column(String(255))
     spray_event_count: Mapped[int] = mapped_column(Integer, default=0)
     scouting_observation_count: Mapped[int] = mapped_column(Integer, default=0)
+    planned_spray_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="pilot_import_batches")

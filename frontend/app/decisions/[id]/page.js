@@ -44,10 +44,143 @@ function Row({ label, value }) {
   );
 }
 
+// Compact badge colors for field-level provenance source types.
+const SOURCE_TYPE_LABELS = {
+  demo: "Demo (simulated)",
+  user_entered: "User entered",
+  imported_unverified: "Imported, unverified",
+  pca_verified: "PCA verified",
+  authoritative_provider: "Verified (authoritative provider)",
+};
+const SOURCE_TYPE_BADGE = {
+  pca_verified: "green",
+  authoritative_provider: "green",
+  imported_unverified: "amber",
+  user_entered: "outline",
+  demo: "outline",
+};
+
+const FOLLOW_UP_TYPES = [
+  { value: "scouting_observation", label: "Scouting observation" },
+  { value: "actual_application", label: "Actual application" },
+  { value: "rescue_application", label: "Rescue application" },
+  { value: "harvest_outcome", label: "Harvest outcome" },
+  { value: "yield_quality_outcome", label: "Yield / quality outcome" },
+  { value: "note", label: "Note" },
+];
+
+function FollowUpForm({ plannedId, onAdded }) {
+  const [form, setForm] = useState({
+    event_type: "scouting_observation",
+    observed_at: new Date().toISOString().slice(0, 10),
+    severity: "",
+    actual_product: "",
+    cost: "",
+    rescue_required: false,
+    yield_impact: "",
+    quality_impact: "",
+    evidence_notes: "",
+    entered_by: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k) => (e) =>
+    setForm({ ...form, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addFollowUpEvent(plannedId, {
+        event_type: form.event_type,
+        observed_at: form.observed_at,
+        severity: form.severity === "" ? null : Number(form.severity),
+        severity_scale: form.severity === "" ? null : "1-5",
+        actual_product: form.actual_product || null,
+        cost: form.cost === "" ? null : Number(form.cost),
+        rescue_required: ["rescue_application"].includes(form.event_type)
+          ? true
+          : form.rescue_required,
+        yield_impact: form.yield_impact || null,
+        quality_impact: form.quality_impact || null,
+        evidence_notes: form.evidence_notes || null,
+        entered_by: form.entered_by || null,
+      });
+      onAdded && (await onAdded());
+      setForm({ ...form, severity: "", actual_product: "", cost: "", evidence_notes: "" });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const needsProduct = ["actual_application", "rescue_application"].includes(form.event_type);
+  return (
+    <form onSubmit={submit} className="no-print mt-2 space-y-2 rounded-md border bg-gray-50 p-3">
+      <p className="text-xs font-medium text-gray-700">
+        Add follow-up event (append-only — events are never edited or deleted)
+      </p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <select className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.event_type} onChange={set("event_type")}>
+          {FOLLOW_UP_TYPES.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <input type="date" className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.observed_at} onChange={set("observed_at")} />
+        {form.event_type === "scouting_observation" && (
+          <input type="number" min="0" max="5" placeholder="Severity (1-5)" className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.severity} onChange={set("severity")} />
+        )}
+        {needsProduct && (
+          <input placeholder="Product applied" className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.actual_product} onChange={set("actual_product")} />
+        )}
+        <input type="number" step="0.01" placeholder="Cost (optional)" className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.cost} onChange={set("cost")} />
+        {["harvest_outcome", "yield_quality_outcome"].includes(form.event_type) && (
+          <>
+            <select className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.yield_impact} onChange={set("yield_impact")}>
+              <option value="">Yield impact: unknown</option>
+              <option value="positive">Yield: positive</option>
+              <option value="neutral">Yield: neutral</option>
+              <option value="negative">Yield: negative</option>
+            </select>
+            <select className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.quality_impact} onChange={set("quality_impact")}>
+              <option value="">Quality impact: unknown</option>
+              <option value="positive">Quality: positive</option>
+              <option value="neutral">Quality: neutral</option>
+              <option value="negative">Quality: negative</option>
+            </select>
+          </>
+        )}
+        <input placeholder="Entered by" className="rounded border border-gray-300 px-2 py-1 text-xs" value={form.entered_by} onChange={set("entered_by")} />
+      </div>
+      <textarea rows={2} placeholder="Evidence notes (what was actually seen/done)" className="w-full rounded border border-gray-300 px-2 py-1 text-xs" value={form.evidence_notes} onChange={set("evidence_notes")} />
+      <Button type="submit" size="sm" disabled={busy}>
+        {busy ? "Saving…" : "Append event"}
+      </Button>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+    </form>
+  );
+}
+
 export default function DecisionRecordPage({ params }) {
   const [planned, setPlanned] = useState(null);
   const [farm, setFarm] = useState(null);
+  const [inputValues, setInputValues] = useState([]);
+  const [auditEvents, setAuditEvents] = useState([]);
+  const [followUps, setFollowUps] = useState([]);
   const [error, setError] = useState(null);
+
+  async function loadTrail(id) {
+    const [values, audit, events] = await Promise.all([
+      api.listInputValues(id),
+      api.listAuditEvents(id),
+      api.listFollowUpEvents(id),
+    ]);
+    setInputValues(values);
+    setAuditEvents(audit);
+    setFollowUps(events);
+  }
 
   useEffect(() => {
     api
@@ -55,6 +188,7 @@ export default function DecisionRecordPage({ params }) {
       .then(async (p) => {
         setPlanned(p);
         setFarm(await api.getFarm(p.farm_id));
+        await loadTrail(p.id);
       })
       .catch((err) => setError(err.message));
   }, [params.id]);
@@ -240,6 +374,150 @@ export default function DecisionRecordPage({ params }) {
                   (entered estimate; yield impact not yet known or measured)
                 </span>
               </p>
+            )}
+          </Section>
+
+          {inputValues.length > 0 && (
+            <Section title="Input provenance (field-level, append-only)">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="text-gray-500">
+                      <th className="py-1 pr-3 font-medium">Field</th>
+                      <th className="py-1 pr-3 font-medium">Value</th>
+                      <th className="py-1 pr-3 font-medium">Source</th>
+                      <th className="py-1 font-medium">Verified by</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const supersededIds = new Set(
+                        inputValues.map((v) => v.supersedes_input_value_id).filter(Boolean)
+                      );
+                      return inputValues.map((v) => {
+                        const superseded = supersededIds.has(v.id);
+                        return (
+                          <tr
+                            key={v.id}
+                            className={`border-t border-gray-100 ${superseded ? "text-gray-400 line-through" : ""}`}
+                          >
+                            <td className="py-1 pr-3 font-mono">{v.field_name}</td>
+                            <td className="py-1 pr-3">
+                              {v.raw_value}
+                              {v.unit ? ` ${v.unit}` : ""}
+                              {superseded ? " (superseded)" : ""}
+                            </td>
+                            <td className="py-1 pr-3">
+                              <Badge variant={SOURCE_TYPE_BADGE[v.source_type] || "outline"}>
+                                {SOURCE_TYPE_LABELS[v.source_type] || v.source_type}
+                              </Badge>
+                            </td>
+                            <td className="py-1">{v.verified_by || "—"}</td>
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-[11px] text-gray-400">
+                Corrections append a superseding row — original values are kept,
+                struck through, never overwritten. Imported values stay
+                &quot;imported, unverified&quot; until a PCA verifies them.
+              </p>
+            </Section>
+          )}
+
+          {auditEvents.length > 0 && (
+            <Section title="Immutable audit history">
+              <ol className="space-y-1.5">
+                {auditEvents.map((e) => (
+                  <li key={e.id} className="text-xs">
+                    <span className="font-mono text-gray-400">
+                      {e.created_at?.slice(0, 16).replace("T", " ")}
+                    </span>{" "}
+                    <span className="font-semibold text-gray-900">
+                      {e.event_type.replace(/_/g, " ")}
+                    </span>
+                    {e.actor && <span className="text-gray-600"> · {e.actor}</span>}
+                    {e.event_type === "reviewed" && e.after?.review_action && (
+                      <span className="text-gray-600"> · action: {e.after.review_action}</span>
+                    )}
+                    {e.event_type === "input_value_superseded" && e.after && (
+                      <span className="text-gray-600">
+                        {" "}· {e.after.field}: {String(e.after.from)} → {String(e.after.to)}
+                      </span>
+                    )}
+                    {e.before?.decision_outcome &&
+                      e.after?.decision_outcome &&
+                      e.before.decision_outcome !== e.after.decision_outcome && (
+                        <span className="text-indigo-700">
+                          {" "}· decision re-ran: {e.before.decision_outcome} →{" "}
+                          {e.after.decision_outcome}
+                        </span>
+                      )}
+                    {e.rationale && (
+                      <p className="ml-4 text-gray-500">“{e.rationale}”</p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-1 text-[11px] text-gray-400">
+                Append-only: every state change is recorded with its prior state; no
+                event is ever edited or deleted.
+              </p>
+            </Section>
+          )}
+
+          <Section title="Follow-up timeline">
+            {planned.follow_up_required && followUps.length === 0 && (
+              <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                Follow-up required: this outcome ({planned.outcome.replace(/_/g, " ")})
+                is NOT a confirmed result until follow-up evidence is recorded here.
+              </p>
+            )}
+            {followUps.length > 0 && (
+              <ol className="mt-1 space-y-1.5">
+                {followUps.map((e) => (
+                  <li key={e.id} className="text-xs">
+                    <span className="font-mono text-gray-400">{e.observed_at}</span>{" "}
+                    <span className="font-semibold text-gray-900">
+                      {e.event_type.replace(/_/g, " ")}
+                    </span>
+                    {e.severity != null && (
+                      <span className="text-gray-600"> · severity {e.severity}</span>
+                    )}
+                    {e.actual_product && (
+                      <span className="text-gray-600"> · {e.actual_product}</span>
+                    )}
+                    {e.cost != null && (
+                      <span className="text-gray-600">
+                        {" "}· {formatCost(e.cost, farm.country)}
+                      </span>
+                    )}
+                    {e.rescue_required && (
+                      <Badge variant="red" className="ml-1">rescue required</Badge>
+                    )}
+                    {(e.yield_impact || e.quality_impact) && (
+                      <span className="text-gray-600">
+                        {" "}· yield: {e.yield_impact || "unknown"} · quality:{" "}
+                        {e.quality_impact || "unknown"}
+                      </span>
+                    )}
+                    {e.evidence_notes && (
+                      <p className="ml-4 text-gray-500">{e.evidence_notes}</p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+            {followUps.length === 0 && !planned.follow_up_required && (
+              <p className="text-xs text-gray-500">
+                No follow-up events recorded{planned.outcome === "planned" ? " — record the real-world outcome first" : ""}.
+              </p>
+            )}
+            {planned.outcome !== "planned" && (
+              <FollowUpForm plannedId={planned.id} onAdded={() => loadTrail(planned.id)} />
             )}
           </Section>
 

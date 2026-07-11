@@ -325,6 +325,19 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
               (entered estimate; yield impact not yet known or measured).
             </p>
           )}
+          {planned.follow_up_required && (
+            <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+              Follow-up required ({planned.follow_up_event_count} event
+              {planned.follow_up_event_count === 1 ? "" : "s"} so far) — this is not a
+              confirmed result until follow-up evidence is recorded.{" "}
+              <a
+                href={`/decisions/${planned.id}`}
+                className="font-medium underline underline-offset-2"
+              >
+                Record follow-up on the decision record →
+              </a>
+            </p>
+          )}
         </>
       ) : (
         <>

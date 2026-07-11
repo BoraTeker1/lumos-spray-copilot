@@ -77,6 +77,138 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
         {data.review_minutes_assumption}
       </p>
 
+      {/* Confirmed vs estimated — never combined into one score. */}
+      {data.confirmed && (
+        <div className="mt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Confirmed (follow-up-backed)
+          </h4>
+          <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <Metric
+              label="Applications confirmed avoided"
+              value={data.confirmed.applications_confirmed_avoided}
+              hint={`${data.confirmed.treated_acres_confirmed_avoided} acres confirmed avoided`}
+            />
+            <Metric
+              label="Rescue treatments (failures)"
+              value={data.confirmed.confirmed_rescue_treatments}
+              hint={
+                data.confirmed.confirmed_rescue_cost
+                  ? `rescue cost ${formatCost(data.confirmed.confirmed_rescue_cost, country)}`
+                  : "reported plainly when they happen"
+              }
+            />
+            <Metric
+              label="Confirmed delay"
+              value={
+                data.confirmed.confirmed_delayed_decisions
+                  ? `${data.confirmed.confirmed_delay_days_total} day(s)`
+                  : "—"
+              }
+              hint={`${data.confirmed.confirmed_delayed_decisions} decision(s) with a dated later application`}
+            />
+            <Metric
+              label="Confirmed gross spend avoided"
+              value={formatCost(data.confirmed.confirmed_gross_spend_avoided, country)}
+              hint="entered planned costs of confirmed-avoided applications"
+            />
+            <div
+              className={`rounded-lg border p-3 ${
+                data.confirmed.confirmed_net_financial_result < 0
+                  ? "border-red-200 bg-red-50"
+                  : "bg-white"
+              }`}
+            >
+              <div className="text-xs text-gray-500">Confirmed net financial result</div>
+              <div
+                className={`mt-0.5 text-lg font-semibold ${
+                  data.confirmed.confirmed_net_financial_result < 0 ? "text-red-700" : ""
+                }`}
+              >
+                {formatCost(data.confirmed.confirmed_net_financial_result, country)}
+              </div>
+              <div className="text-[11px] text-gray-400">
+                gross avoided − scouting − rescue; negatives shown as negatives
+              </div>
+            </div>
+            <Metric
+              label="Yield / quality coverage"
+              value={`${
+                (data.confirmed.yield_impact_counts?.neutral ?? 0) +
+                (data.confirmed.yield_impact_counts?.positive ?? 0) +
+                (data.confirmed.yield_impact_counts?.negative ?? 0)
+              } known · ${data.confirmed.yield_impact_counts?.unknown ?? 0} unknown`}
+              hint={`${data.confirmed.yield_impact_counts?.negative ?? 0} negative yield · ${
+                data.confirmed.rejected_or_downgraded_count
+              } rejected/downgraded — unknown stays unknown`}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-gray-400">{data.confirmed.basis}</p>
+        </div>
+      )}
+
+      {data.estimated && (
+        <div className="mt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Estimated (no follow-up yet — not confirmed)
+          </h4>
+          <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <Metric
+              label="Potential gross savings (unconfirmed)"
+              value={formatCost(data.estimated.potential_gross_savings_unconfirmed, country)}
+              hint={`${data.estimated.avoided_outcomes_without_follow_up} avoided outcome(s) still lacking follow-up`}
+            />
+            <Metric
+              label="Planned application cost (all real decisions)"
+              value={formatCost(data.estimated.planned_application_cost_total, country)}
+              hint="entered estimates only"
+            />
+            <Metric
+              label="Follow-up completion"
+              value={
+                data.follow_up?.follow_up_completion_rate_pct != null
+                  ? `${data.follow_up.follow_up_completion_rate_pct}%`
+                  : "—"
+              }
+              hint={`${data.follow_up?.follow_up_with_events ?? 0} of ${
+                data.follow_up?.follow_up_required ?? 0
+              } decisions requiring follow-up have events`}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-gray-400">{data.estimated.basis}</p>
+        </div>
+      )}
+
+      {data.not_calculated && (
+        <ul className="mt-2 space-y-0.5 rounded bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+          {Object.entries(data.not_calculated).map(([k, v]) => (
+            <li key={k}>
+              <span className="font-medium">{k.replace(/_/g, " ")}:</span> {v}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="mt-2 text-xs text-gray-500">
+        Anonymized evidence export:{" "}
+        <a
+          className="font-medium underline underline-offset-2 hover:text-gray-900"
+          href={api.exportUrl(`/farms/${farmId}/evidence-export`)}
+          target="_blank"
+          rel="noreferrer"
+        >
+          JSON
+        </a>{" "}
+        ·{" "}
+        <a
+          className="font-medium underline underline-offset-2 hover:text-gray-900"
+          href={api.exportUrl(`/farms/${farmId}/export/evidence.csv`)}
+        >
+          CSV
+        </a>{" "}
+        (real records only; the farm appears as pilot-farm-{farmId})
+      </p>
+
       {data.demo_decisions_checked > 0 && (
         <p className="mt-2 rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
           Simulated demo decisions on this farm: {data.demo_decisions_checked} (

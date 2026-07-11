@@ -102,6 +102,56 @@ Backend + frontend both implement:
   SprayEvent). `GET /farms/{id}/decision-evidence` aggregates the YC metrics (decisions
   reviewed, sprays changed/delayed/avoided, conflicts caught, PCA acceptance rate, entered-cost
   avoided, assumption-based review minutes) with demo data excluded and caveats attached.
+- **Real Pilot Evidence Loop V1 (2026-07-11)** — the concierge pilot infrastructure:
+  - **CSV pilot import** (`POST /farms/{id}/import/csv`; templates at
+    `GET /import/templates/{planned_sprays|scout_observations}.csv`): dry-run first
+    (header-alias column mapping with per-column overrides, per-row errors/warnings,
+    in-file + against-DB duplicate detection), commit only on `dry_run=false`. Pure
+    parsing/validation lives in `app/csv_import.py`. Regulatory values are NEVER
+    guessed — absent PHI/REI/rate/harvest stay missing and are reported unverified.
+  - **Field-level provenance** — `DecisionInputValue`: append-only supersede chain per
+    compliance-critical input (product identity, EPA reg no, crop, target, rate, PHI,
+    REI, dates, AI, MoA group) with `source_type`
+    (demo/user_entered/imported_unverified/pca_verified/authoritative_provider),
+    verified_by/at, source_reference. Latest non-superseded value drives the engine.
+    Imported values are never silently verified and NEVER auto-approve (they escalate
+    to pca_review_required via the `unverified_imported_values` rule).
+  - **Immutable audit history** — `DecisionAuditEvent` (created / reviewed /
+    input_value_superseded / outcome_recorded / follow_up_added), append-only, prior
+    state in `before`. PCA reviews accept structured `proposed_*` field edits that
+    supersede input values as `pca_verified` and re-run the decision (prior snapshot
+    preserved in the audit event). `GET /planned-sprays/{id}/audit-events`,
+    `/input-values`.
+  - **Follow-up timeline** — `DecisionFollowUpEvent`, one-to-many append-only
+    (scouting_observation / actual_application / rescue_application / harvest_outcome
+    / yield_quality_outcome / note); no update/delete endpoints. Required
+    (`decision_status.follow_up_required`) for every non-as-planned outcome and for
+    "approved despite warning". `GET/POST /planned-sprays/{id}/follow-up-events`
+    (409 until an outcome is recorded). Consolidated read-only summary derived in
+    `pilot_evidence.derive_follow_up_summary`.
+  - **Confirmed vs estimated metrics** — `build_decision_evidence` now returns
+    `confirmed` (follow-up-backed only: avoided apps/acres, delay days, replacements,
+    rescues, gross avoided, scouting/rescue costs, net result — negatives shown as
+    negatives), `estimated` (entered values without follow-up), `not_calculated`
+    (AI-quantity + risk-weighted reduction, with reasons), `follow_up` completion.
+    Non-demo records only; never combined into one score.
+  - **Anonymized evidence export** — `GET /farms/{id}/evidence-export` (JSON) +
+    `GET /farms/{id}/export/evidence.csv`: farm as `pilot-farm-{id}` (no name/
+    location), per decision: inputs+provenance, triggered exceptions, review, audit
+    history, follow-up timeline, confirmed/estimated, missing evidence, methodology,
+    correlation≠causality. Demo records excluded by construction (tested).
+  - **Target-name matching** — `app/target_aliases.py`: exact normalized names or the
+    explicit curated alias dictionary ONLY; partial overlap ⇒ `pca_review_required`
+    with the ambiguity recorded (`scouting_target_ambiguity` rule). Never fuzzy.
+  - New engine checks: product-identity completeness, incomplete rate/unit pair,
+    repeated MoA group (only when structured `moa_group` data exists), stale-scouting
+    disclosure, imported-unverified escalation. Label-dependent checks (max seasonal
+    rate, max applications, retreatment interval, crop/use registration) are listed
+    under `not_evaluated` with reasons — never simulated.
+  - Frontend: `PilotImportCard` (dry-run preview + mapping correction),
+    `decisions/[id]` shows input provenance + immutable audit timeline + follow-up
+    timeline with append-only add-event form; `DecisionEvidenceCard` shows the
+    confirmed/estimated/not-calculated split + export links.
 - **Farms** (CRUD) — name, location, country (US/TR), crop_type, area, planting/harvest dates,
   `advisor_involved`. `GET /farms-overview` returns the urgency-ranked, action-oriented list
   (why + next action per farm) that drives the dashboard.
@@ -192,7 +242,10 @@ Backend + frontend both implement:
   - `app/pilot_evidence.py` — `build_pilot_evidence` + `build_pilot_case_study`.
   - `app/seed.py` — `run()` drops+recreates schema and loads the 3 demo farms.
 - **Key models:** `Farm`, `SprayEvent`, `ScoutObservation`, `PlannedSpray`, `Recommendation`,
-  `PilotFeedback`, `PilotImportBatch`, `SprayBaseline`, `PilotEvent` (workflow telemetry). Sprays/scouting carry `data_source` +
+  `PilotFeedback`, `PilotImportBatch`, `SprayBaseline`, `PilotEvent` (workflow telemetry),
+  `DecisionInputValue` (field-level provenance, append-only supersede chain),
+  `DecisionAuditEvent` (immutable audit history), `DecisionFollowUpEvent` (append-only
+  follow-up timeline), `PcaPolicy`. Sprays/scouting carry `data_source` +
   `data_confidence` + `pilot_import_batch_id`; `SprayBaseline` carries the same provenance (one
   per farm, latest wins). `PlannedSpray` snapshots the decision (`decision_*`,
   `decision_payload` JSON, legacy `check_*`), the PCA review (`review_*`, `pca_next_action`),
@@ -287,9 +340,8 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **152 passing** (README's "41" is STALE — ignore
-  it). **Always re-run `pytest` to confirm; do not trust this number.** Known harmless
-  `datetime.utcnow()` deprecation warnings.
+- **Passing test count:** repo currently shows **212 passing**. **Always re-run `pytest` to
+  confirm; do not trust this number.** Known harmless deprecation warnings.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
   date to a fixed anchor (screenshots / demo-consistency tests); unset, the anchor is today and
   re-seeding before a demo keeps the story fresh. `tests/test_demo_consistency.py` asserts the
@@ -315,6 +367,13 @@ npm run dev        # http://localhost:3000
     intended date. All timestamps anchor to the same demo day. Demo planned sprays are
     demo/simulated: excluded from real decision-evidence counts but reconciled via the
     `demo_outcomes` block so the queue and the evidence card never contradict each other.
+    Scenario 2 (PyGanic avoided via the lygus threshold) and scenario 1 both carry
+    seeded input-value/audit/follow-up trails. **Scenario 3 (2026-07-11): the honest
+    FAILURE story** — an Agri-Mek miticide planned at scouting severity 2 (below the
+    PCA threshold of 3) → INSPECT FIRST → PCA held it → severity rose to 4 → **rescue
+    application required** (extra scouting + rescue cost, nothing avoided). Spans the
+    six days before the anchor; deliberately negative — the product must show failures
+    or its evidence is not credible.
   - **Green Valley Greenhouse** (Antalya, TR, ₺) — secondary high-risk tomato demo.
   - **Sunrise Tomato House** (Mersin, TR, ₺) — secondary low-risk/healthy contrast.
 - **Never present seed data as traction.** It is illustrative, not real usage.

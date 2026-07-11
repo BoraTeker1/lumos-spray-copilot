@@ -72,6 +72,27 @@ def conflict_caught(planned) -> bool:
     return getattr(planned, "decision_severity", None) == "critical"
 
 
+# Recorded outcomes that always require a follow-up story before any confirmed claim.
+FOLLOW_UP_OUTCOMES = ("avoided", "delayed", "inspected_first", "changed_product")
+
+
+def follow_up_required(planned) -> bool:
+    """Does this decision need follow-up evidence before its result can be confirmed?
+
+    True for every non-as-planned recorded outcome, and for "approved despite a
+    warning" (sprayed as planned although the check had triggered findings). A planned
+    avoidance is NOT a confirmed reduction until follow-up events exist.
+    """
+    outcome = getattr(planned, "outcome", "planned")
+    if outcome in FOLLOW_UP_OUTCOMES:
+        return True
+    if outcome == "sprayed_as_planned" and getattr(
+        planned, "decision_severity", "none"
+    ) in ("caution", "critical"):
+        return True
+    return False
+
+
 def is_demo_record(record) -> bool:
     """Demo/simulated provenance — excluded from every real pilot metric."""
     return (
@@ -102,6 +123,11 @@ def harvest_date_changed_since_check(planned, current_harvest_date) -> bool:
     inputs = payload.get("inputs_used") or {}
     if "expected_harvest_date" not in inputs:
         return False  # legacy rows without a snapshot: nothing to compare
+    # A decision that carries its OWN harvest date (a per-record imported/verified
+    # input value) is grounded in that value, not the farm-level field — editing the
+    # farm's date does not stale it.
+    if "expected_harvest_date" in (inputs.get("field_sources") or {}):
+        return False
     checked = inputs.get("expected_harvest_date")
     current = current_harvest_date.isoformat() if current_harvest_date else None
     return checked != current

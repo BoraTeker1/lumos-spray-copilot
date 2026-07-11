@@ -83,6 +83,46 @@ The frontend talks to `http://localhost:8000` by default. To point elsewhere, co
 Full timed walkthrough: see **[DEMO_SCRIPT.md](DEMO_SCRIPT.md)**. What the seed data means:
 **[DEMO_DATA.md](DEMO_DATA.md)**. Interviewing growers: **[CUSTOMER_DISCOVERY.md](CUSTOMER_DISCOVERY.md)**.
 
+## Real Pilot Evidence Loop (V1)
+
+Lumos can now ingest **real PCA spray-decision records** and produce defensible,
+confirmed-vs-estimated pilot evidence:
+
+1. **CSV import** (`POST /farms/{id}/import/csv`, templates at
+   `GET /import/templates/{planned_sprays|scout_observations}.csv`) — dry-run
+   validation first (column mapping with correctable aliases, per-row errors/warnings,
+   in-file + against-DB duplicate detection). Nothing is written until committed.
+2. **Field-level provenance** — every compliance-critical value (product identity, EPA
+   reg. no., rate, PHI, REI, dates, AI, MoA group) is stored as an append-only
+   `DecisionInputValue` chain with a source type (`demo / user_entered /
+   imported_unverified / pca_verified / authoritative_provider`). Imported values are
+   **never silently verified** and can **never produce an automatic APPROVE** — they
+   escalate to PCA review.
+3. **Immutable audit history** — creation, reviews (including structured field edits
+   that supersede values and re-run the decision), outcomes, and follow-ups each
+   append a `DecisionAuditEvent`. History is never overwritten.
+4. **Mandatory follow-up timeline** — non-as-planned outcomes require append-only
+   `DecisionFollowUpEvent`s (scouting, actual/rescue applications, harvest and
+   yield/quality outcomes). *A planned avoidance is not a confirmed reduction until
+   follow-up is recorded*; yield/quality stay **unknown** until someone records them.
+5. **Confirmed vs. estimated metrics** (`GET /farms/{id}/decision-evidence`) — strictly
+   separated, non-demo records only, failures (rescues, negative net results) reported
+   plainly; pesticide-mass and risk-weighted reductions are shown as **"not
+   calculated"** rather than guessed.
+6. **Anonymized evidence export** — `GET /farms/{id}/evidence-export` (JSON) and
+   `GET /farms/{id}/export/evidence.csv`. The farm appears only as `pilot-farm-{id}`;
+   demo records are excluded by construction; a correlation-not-causality statement
+   and methodology travel with every export.
+
+**Operating mode (V1 = concierge pilot):** the founder/operator runs the import;
+records should be anonymized *before* upload; there is no customer login.
+**Customer-facing production use would additionally require:** authentication, tenant
+isolation, backups, and a data-security review — none of which exist in this build.
+
+Target-name matching uses exact normalized names or an explicit alias dictionary
+(`backend/app/target_aliases.py`) only — ambiguous overlaps escalate to PCA review and
+are recorded; equivalence is never fuzzily inferred.
+
 ## Scope (MVP)
 **In:** spray & scouting logging, rule-based cautious recommendations, next-action guidance,
 agronomist review workflow, pesticide cost analytics, lightweight weather-risk, weekly report.
@@ -106,7 +146,7 @@ uvicorn app.main:app --reload      # http://localhost:8000
 # Terminal 2 — frontend
 cd frontend && npm run dev          # http://localhost:3000
 ```
-Tests (run before any demo): `cd backend && source .venv/bin/activate && pytest` → expect **41 passing**.
+Tests (run before any demo): `cd backend && source .venv/bin/activate && pytest` → expect **212 passing**.
 
 ### Reset demo data (clean slate)
 ```bash

@@ -11,11 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app import clock, crud, decision_status, schemas
+from app import clock, crud, csv_import, decision_status, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
 from app.pilot_evidence import (
     build_decision_evidence,
+    build_evidence_export,
     build_instrumentation_summary,
     build_pilot_case_study,
     build_pilot_evidence,
@@ -380,6 +381,67 @@ def patch_planned_spray_outcome(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.get(
+    "/planned-sprays/{planned_id}/audit-events",
+    response_model=list[schemas.DecisionAuditEvent],
+    tags=["planned-sprays"],
+)
+def get_planned_spray_audit_events(planned_id: int, db: Session = Depends(get_db)):
+    """The immutable, append-only audit history of one decision (oldest first).
+
+    Every state change (creation, review, value supersession, outcome, follow-up)
+    appends an event with the prior state — nothing here is ever edited or deleted.
+    """
+    _require_planned_spray(db, planned_id)
+    return crud.list_audit_events(db, planned_id)
+
+
+@app.get(
+    "/planned-sprays/{planned_id}/input-values",
+    response_model=list[schemas.DecisionInputValue],
+    tags=["planned-sprays"],
+)
+def get_planned_spray_input_values(planned_id: int, db: Session = Depends(get_db)):
+    """Field-level provenance for the decision's critical inputs (full supersede chain,
+    oldest first). The latest non-superseded row per field drives the engine."""
+    _require_planned_spray(db, planned_id)
+    return crud.list_input_values(db, planned_id)
+
+
+@app.get(
+    "/planned-sprays/{planned_id}/follow-up-events",
+    response_model=list[schemas.FollowUpEvent],
+    tags=["planned-sprays"],
+)
+def get_follow_up_events(planned_id: int, db: Session = Depends(get_db)):
+    """The decision's append-only follow-up timeline (oldest first)."""
+    _require_planned_spray(db, planned_id)
+    return crud.list_follow_up_events(db, planned_id)
+
+
+@app.post(
+    "/planned-sprays/{planned_id}/follow-up-events",
+    response_model=schemas.FollowUpEvent,
+    status_code=201,
+    tags=["planned-sprays"],
+)
+def post_follow_up_event(
+    planned_id: int, payload: schemas.FollowUpEventCreate, db: Session = Depends(get_db)
+):
+    """Append one follow-up event (scouting / actual application / rescue / harvest /
+    yield-quality / note) to a decision whose outcome is recorded.
+
+    Append-only by design: there is no update or delete. A planned avoidance only
+    becomes a CONFIRMED result through this timeline; yield/quality stay "unknown"
+    until someone records them.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    try:
+        return crud.add_follow_up_event(db, planned, payload)
+    except crud.FollowUpError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/farms/{farm_id}/decision-evidence", tags=["planned-sprays"])
 def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
     """Pre-spray decision workflow metrics for the pilot/evidence dashboard.
@@ -389,7 +451,11 @@ def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
     """
     farm = _require_farm(db, farm_id)
     planned = crud.list_planned_sprays(db, farm_id)
-    return build_decision_evidence(planned, advisor_label=_advisor_label(farm))
+    return build_decision_evidence(
+        planned,
+        advisor_label=_advisor_label(farm),
+        follow_ups_by_id=crud.list_farm_follow_up_events(db, farm_id),
+    )
 
 
 @app.delete("/planned-sprays/{planned_id}", status_code=204, tags=["planned-sprays"])
@@ -716,6 +782,40 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
     )
 
 
+@app.get("/import/templates/{record_type}.csv", tags=["pilot-import"])
+def import_template(record_type: str):
+    """Downloadable CSV template (canonical headers + one clearly-marked example row)."""
+    if record_type not in csv_import.FIELDS_BY_TYPE:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No template for '{record_type}'. Available: "
+            f"{', '.join(sorted(csv_import.FIELDS_BY_TYPE))}.",
+        )
+    return Response(
+        content=csv_import.template_csv(record_type),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="lumos_{record_type}_template.csv"'
+        },
+    )
+
+
+@app.post("/farms/{farm_id}/import/csv", tags=["pilot-import"])
+def farm_csv_import(
+    farm_id: int, payload: schemas.CsvImportRequest, db: Session = Depends(get_db)
+):
+    """CSV pilot import for planned sprays or scouting observations.
+
+    Dry-run by default: returns the validation report (column mapping, per-row errors
+    and warnings, duplicates) without writing anything. Re-post with dry_run=false to
+    commit the importable rows. Imported regulatory values are stored as
+    imported_unverified field-level provenance — they are flagged by the decision
+    check and can never produce an automatic approve.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.import_csv(db, farm, payload)
+
+
 @app.post("/internal/farms/{farm_id}/pilot-import", status_code=201, tags=["internal"])
 def pilot_import(
     farm_id: int, payload: schemas.PilotImport, db: Session = Depends(get_db)
@@ -1010,6 +1110,75 @@ def export_recommendations(farm_id: int, db: Session = Depends(get_db)):
         for r in recs
     ]
     return _csv_response(f"farm{farm_id}_recommendations.csv", header, rows)
+
+
+def _farm_evidence_export(db: Session, farm_id: int) -> dict:
+    farm = _require_farm(db, farm_id)
+    return build_evidence_export(
+        farm,
+        crud.list_planned_sprays(db, farm_id),
+        crud.list_farm_follow_up_events(db, farm_id),
+        crud.list_farm_audit_events(db, farm_id),
+        crud.list_farm_input_values(db, farm_id),
+        advisor_label=_advisor_label(farm),
+        today=clock.current_date(),
+    )
+
+
+@app.get("/farms/{farm_id}/evidence-export", tags=["export"])
+def farm_evidence_export(farm_id: int, db: Session = Depends(get_db)):
+    """Anonymized pilot-evidence export (JSON): every REAL (non-demo) decision with
+    its sources and verification state, triggered exceptions, PCA action, immutable
+    audit history, follow-up timeline, confirmed vs. estimated outcomes, missing
+    evidence, and methodological limitations. Demo records are excluded by
+    construction; the farm appears only as pilot-farm-{id}."""
+    return _farm_evidence_export(db, farm_id)
+
+
+@app.get("/farms/{farm_id}/export/evidence.csv", tags=["export"])
+def export_evidence_csv(farm_id: int, db: Session = Depends(get_db)):
+    """Flat CSV of the anonymized evidence export (one row per real decision)."""
+    export = _farm_evidence_export(db, farm_id)
+    header = [
+        "farm_ref", "decision_id", "external_record_id", "field_block", "crop",
+        "treated_acres", "product_name", "active_ingredient", "moa_group",
+        "target_pest_or_disease", "intended_date", "rate_amount", "rate_unit",
+        "estimated_cost", "decision_outcome", "decision_severity",
+        "decision_authority", "triggered_exceptions", "unverified_input_fields",
+        "review_status", "reviewed_by", "recorded_outcome", "outcome_date",
+        "follow_up_event_count", "severity_before", "severity_after",
+        "rescue_required", "confirmed_avoided", "confirmed_delay_days",
+        "additional_scouting_cost", "rescue_cost", "yield_impact", "quality_impact",
+        "missing_evidence",
+    ]
+    rows = []
+    for d in export["decisions"]:
+        summary = d["follow_up_summary"]
+        unverified = sorted({
+            v["field_name"] for v in d["input_values"]
+            if v["source_type"] not in ("pca_verified", "authoritative_provider")
+        })
+        rows.append([
+            export["farm_ref"], d["decision_id"], d["external_record_id"],
+            d["field_block"], d["crop"], d["treated_acres"],
+            d["planned"]["product_name"], d["planned"]["active_ingredient"],
+            d["planned"]["moa_group"], d["planned"]["target_pest_or_disease"],
+            d["planned"]["intended_date"], d["planned"]["rate_amount"],
+            d["planned"]["rate_unit"], d["planned"]["estimated_cost"],
+            d["decision"]["outcome"], d["decision"]["severity"],
+            d["decision"]["authority"],
+            "; ".join(r["rule_id"] for r in d["decision"]["triggered_exceptions"]),
+            "; ".join(unverified),
+            d["review"]["status"], d["review"]["reviewed_by"],
+            d["recorded_action"]["outcome"], d["recorded_action"]["outcome_date"],
+            summary["event_count"], summary["severity_before"],
+            summary["severity_after"], summary["rescue_required"],
+            summary["confirmed_avoided"], summary["confirmed_delay_days"],
+            summary["additional_scouting_cost"], summary["rescue_cost"],
+            summary["yield_impact"], summary["quality_impact"],
+            "; ".join(d["missing_evidence"]),
+        ])
+    return _csv_response(f"pilot_farm_{farm_id}_evidence.csv", header, rows)
 
 
 @app.get("/export/pilot-feedback.csv", tags=["export"])

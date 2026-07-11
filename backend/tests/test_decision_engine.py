@@ -162,12 +162,20 @@ def test_no_linked_scouting_means_inspect_first():
 
 
 def test_near_miss_scouting_text_is_not_a_link():
-    # "botrytis on fruit" != "botrytis": exact normalized match only.
+    # "botrytis on fruit" != "botrytis": still NOT treated as linked evidence.
+    # Since the ambiguity milestone, a partial name overlap escalates to PCA review
+    # with the ambiguity recorded — never silently inferred as equivalent.
     d = evaluate_planned_spray(
         farm(harvest_offset_days=30), planned(target="botrytis"),
         [], [obs("botrytis on fruit", days_ago=3)], today=TODAY,
     )
-    assert d.outcome == "inspect_first"
+    assert d.outcome == "pca_review_required"
+    ambiguity = next(r for r in d.rules if r.rule_id == "scouting_target_ambiguity")
+    assert ambiguity.triggered
+    assert "botrytis on fruit" in ambiguity.detail
+    # The scouting-evidence rule itself still reports no confirmed link.
+    scouting = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert scouting.triggered
 
 
 def test_exact_normalized_match_links():
@@ -441,3 +449,120 @@ def test_phi_zero_is_a_value_not_missing_data():
     phi_rule = next(r for r in d.rules if r.rule_id == "phi_harvest_conflict")
     assert phi_rule.triggered is False
     assert "+ 0 days" in phi_rule.calculation
+
+
+# ------------------------------------------- alias matching / new import checks
+def planned_full(**overrides):
+    """A planned spray carrying the import-era fields (rate, MoA, EPA reg no)."""
+    base = planned()
+    for key, value in dict(
+        epa_reg_no=None, moa_group=None, rate_amount=None, rate_unit=None,
+    ).items():
+        setattr(base, key, value)
+    for key, value in overrides.items():
+        setattr(base, key, value)
+    return base
+
+
+def test_alias_dictionary_links_scouting_evidence():
+    # "gray mold" and "botrytis" are equivalent ONLY via the explicit alias
+    # dictionary — this is a match, not an inference.
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned(target="gray mold"),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert d.outcome == "approve"
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.triggered is False
+
+
+def test_stale_matching_scouting_is_reported_as_stale():
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned(target="botrytis"),
+        [], [obs("botrytis", days_ago=45)], today=TODAY,
+    )
+    assert d.outcome == "inspect_first"
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert "stale evidence" in rule.detail
+    assert "45 days ago" in rule.detail
+
+
+def test_repeated_moa_group_escalates_only_with_structured_data():
+    def moa_spray(days_ago):
+        s = spray(ai=f"ai-{days_ago}", days_ago=days_ago)
+        s.moa_group = "FRAC 9"
+        return s
+
+    sprays = [moa_spray(3), moa_spray(9)]
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned_full(ai="fresh-ai", moa_group="FRAC 9"),
+        sprays, [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert d.outcome == "pca_review_required"
+    rule = next(r for r in d.rules if r.rule_id == "repeated_moa_group")
+    assert rule.triggered is True
+    assert "frac 9" in rule.detail.lower()
+
+    # Without a MoA group on the plan, the rule does not exist — never inferred
+    # from the product or ingredient name.
+    d2 = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned_full(ai="fresh-ai"),
+        sprays, [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert not [r for r in d2.rules if r.rule_id == "repeated_moa_group"]
+
+
+def test_incomplete_rate_pair_requires_review():
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned_full(rate_amount=14.0),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert d.outcome == "pca_review_required"
+    rule = next(r for r in d.rules if r.rule_id == "rate_completeness")
+    assert rule.triggered is True
+    # A complete pair passes.
+    d2 = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned_full(rate_amount=14.0, rate_unit="oz/acre"),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert d2.outcome == "approve"
+
+
+def test_imported_values_can_never_auto_approve():
+    # A clean scenario that WOULD approve with user-entered values...
+    sources = {
+        name: {"source_type": "imported_unverified", "entered_by": None}
+        for name in ("product_name", "active_ingredient", "target_pest_or_disease",
+                     "intended_date", "pre_harvest_interval_days",
+                     "re_entry_interval_hours")
+    }
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned(),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+        input_sources=sources,
+    )
+    # ...escalates to PCA review when the values are imported and unverified.
+    assert d.outcome == "pca_review_required"
+    assert d.review_required is True
+    assert d.authority_level == "provisional"
+    rule = next(r for r in d.rules if r.rule_id == "unverified_imported_values")
+    assert rule.triggered is True
+    assert rule.source_authority == "imported_unverified"
+    assert "never produce an automatic approve" in rule.detail
+
+
+def test_label_dependent_checks_are_disclosed_not_simulated():
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned(),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    payload = d.as_payload()
+    checks = {c["check"] for c in payload["not_evaluated"]}
+    assert "maximum seasonal rate" in checks
+    assert "minimum retreatment interval" in checks
+    assert all("authoritative label data" in c["reason"] for c in payload["not_evaluated"])
+    # No rule pretends to have run these.
+    rule_ids = {r["rule_id"] for r in payload["rules"]}
+    assert "max_seasonal_rate" not in rule_ids

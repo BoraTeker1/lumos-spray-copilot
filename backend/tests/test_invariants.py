@@ -255,12 +255,21 @@ def test_seeded_scenarios_share_one_anchor_and_agree_with_engine_columns(
     seed.run()
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
     planned = client.get(f"/farms/{us['id']}/planned-sprays").json()
-    assert len(planned) == 2
-    for p in planned:
+    assert len(planned) == 3
+    # Scenarios 1 & 2 (captan block, PyGanic avoidance) anchor to the demo day; the
+    # failed-delay story (Agri-Mek) deliberately spans the preceding days.
+    same_day = [
+        p for p in planned if p["product_name"] in ("Captan 80 WDG", "PyGanic EC 5.0")
+    ]
+    assert len(same_day) == 2
+    for p in same_day:
         assert p["intended_date"] == PINNED
         assert p["outcome_date"] == PINNED
         assert p["created_at"][:10] == PINNED
         assert p["reviewed_at"][:10] == PINNED
+    mite = next(p for p in planned if p["product_name"] == "Agri-Mek SC")
+    assert mite["created_at"][:10] <= mite["outcome_date"] <= PINNED
+    for p in planned:
         # Snapshot payload agrees with the stored columns (no drift).
         assert p["decision_payload"]["outcome"] == p["decision_outcome"]
         assert p["decision_payload"]["authority_level"] == p["decision_authority"]
@@ -270,13 +279,15 @@ def test_seeded_scenarios_share_one_anchor_and_agree_with_engine_columns(
 def test_no_invented_threshold_for_targets_without_policy(client, pinned_clock):
     seed.run()
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
-    # A target with no policy on this farm: the scouting rule stays a heuristic.
+    # A target with no policy on this farm (and no alias link to one — "spider mites"
+    # would now correctly hit the seeded twospotted-spider-mite policy via the
+    # explicit alias dictionary): the scouting rule stays a heuristic.
     p = _planned(
         client, us["id"],
         intended_date=PINNED,
         product_name="Test Product",
         active_ingredient="novel-ai",
-        target_pest_or_disease="spider mites",
+        target_pest_or_disease="powdery mildew",
         pre_harvest_interval_days=0,
         re_entry_interval_hours=4,
     )

@@ -11,6 +11,22 @@ DataSource = Literal[
 ]
 DataConfidence = Literal["simulated", "user_provided", "pca_reviewed", "incomplete"]
 
+# Field-level provenance for compliance/decision-critical input values.
+# "authoritative_provider" is deliberately unreachable today (no label-data provider
+# exists); the vocabulary is in place so the gate is already correct when one does.
+InputSourceType = Literal[
+    "demo", "user_entered", "imported_unverified", "pca_verified",
+    "authoritative_provider",
+]
+# Append-only follow-up timeline event types (never a single mutable outcome record).
+FollowUpEventType = Literal[
+    "scouting_observation", "actual_application", "rescue_application",
+    "harvest_outcome", "yield_quality_outcome", "note",
+]
+ImpactLevel = Literal["positive", "neutral", "negative", "unknown"]
+# CSV pilot-import record types.
+ImportRecordType = Literal["planned_sprays", "scout_observations"]
+
 
 # --------------------------------------------------------------------------- Farm
 class FarmBase(BaseModel):
@@ -48,6 +64,7 @@ class Farm(FarmBase):
 class SprayEventBase(BaseModel):
     product_name: str
     active_ingredient: str | None = None
+    moa_group: str | None = None
     pesticide_class: str | None = None
     target_pest_or_disease: str | None = None
     dose: str | None = None
@@ -79,6 +96,14 @@ class ScoutObservationBase(BaseModel):
     severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
     image_url_optional: str | None = None
     notes: str | None = None
+    # Pilot CSV-import provenance (all optional).
+    external_record_id: str | None = None
+    field_block: str | None = None
+    severity_scale: str | None = None
+    count_value: float | None = None
+    observer: str | None = None
+    source_system: str | None = None
+    source_filename: str | None = None
     data_source: str | None = None
     data_confidence: str | None = None
     pilot_import_batch_id: int | None = None
@@ -145,6 +170,19 @@ class PlannedSprayCreate(BaseModel):
     pre_harvest_interval_days: int | None = Field(default=None, ge=0)
     re_entry_interval_hours: int | None = Field(default=None, ge=0)
     estimated_cost: float | None = None
+    # Real-record / import fields (all optional).
+    external_record_id: str | None = None
+    field_block: str | None = None
+    crop: str | None = None
+    treated_acres: float | None = Field(default=None, gt=0)
+    epa_reg_no: str | None = None
+    moa_group: str | None = None
+    rate_amount: float | None = Field(default=None, gt=0)
+    rate_unit: str | None = None
+    recommendation_author: str | None = None
+    source_system: str | None = None
+    source_filename: str | None = None
+    notes: str | None = None
     values_source: ValuesSource = "grower_entered"
     values_entered_by: str | None = None
     data_source: DataSource = "manual_entry"
@@ -154,17 +192,49 @@ class PlannedSprayCreate(BaseModel):
 class PlannedSprayReviewUpdate(BaseModel):
     """PCA / agronomist review of a pre-spray decision (approve / edit / reject).
 
-    An edit must include the PCA's replacement guidance; a rejection must say why.
+    An edit must include the PCA's replacement guidance and/or structured field edits;
+    a rejection must say why. Structured `proposed_*` edits append superseding
+    pca_verified input values (the old values are never overwritten — history is an
+    append-only supersede chain plus an immutable audit event) and the decision is
+    re-evaluated against the updated values.
     """
     action: ReviewAction
     review_comment: str | None = None
     reviewed_by: str | None = None
     pca_next_action: str | None = None
+    # Structured field edits (all optional; each appends a pca_verified input value).
+    proposed_product_name: str | None = None
+    proposed_active_ingredient: str | None = None
+    proposed_rate_amount: float | None = Field(default=None, gt=0)
+    proposed_rate_unit: str | None = None
+    proposed_intended_date: date | None = None
+    proposed_pre_harvest_interval_days: int | None = Field(default=None, ge=0)
+    proposed_re_entry_interval_hours: int | None = Field(default=None, ge=0)
+    # Which evidence the reviewer relied on (free text, kept in the audit event).
+    relied_on_evidence: str | None = None
+
+    def proposed_field_edits(self) -> dict:
+        """Map of planned-spray field -> proposed value (only the ones provided)."""
+        mapping = {
+            "product_name": self.proposed_product_name,
+            "active_ingredient": self.proposed_active_ingredient,
+            "rate_amount": self.proposed_rate_amount,
+            "rate_unit": self.proposed_rate_unit,
+            "intended_date": self.proposed_intended_date,
+            "pre_harvest_interval_days": self.proposed_pre_harvest_interval_days,
+            "re_entry_interval_hours": self.proposed_re_entry_interval_hours,
+        }
+        return {k: v for k, v in mapping.items() if v is not None}
 
     @model_validator(mode="after")
     def _require_substance(self):
-        if self.action == "edited" and not (self.pca_next_action or "").strip():
-            raise ValueError("pca_next_action is required when the review action is 'edited'")
+        if self.action == "edited" and not (
+            (self.pca_next_action or "").strip() or self.proposed_field_edits()
+        ):
+            raise ValueError(
+                "an 'edited' review needs pca_next_action and/or at least one proposed_* "
+                "field edit"
+            )
         if self.action == "rejected" and not (self.review_comment or "").strip():
             raise ValueError("review_comment is required when the review action is 'rejected'")
         return self
@@ -234,6 +304,19 @@ class PlannedSpray(BaseModel):
     pre_harvest_interval_days: int | None = None
     re_entry_interval_hours: int | None = None
     estimated_cost: float | None = None
+    external_record_id: str | None = None
+    field_block: str | None = None
+    crop: str | None = None
+    treated_acres: float | None = None
+    epa_reg_no: str | None = None
+    moa_group: str | None = None
+    rate_amount: float | None = None
+    rate_unit: str | None = None
+    recommendation_author: str | None = None
+    source_system: str | None = None
+    source_filename: str | None = None
+    notes: str | None = None
+    pilot_import_batch_id: int | None = None
     values_source: str
     values_entered_by: str | None = None
     decision_outcome: str
@@ -268,6 +351,108 @@ class PlannedSpray(BaseModel):
     open_conflict: bool = False
     # True when the farm's harvest date was edited after this check ran (stale snapshot).
     harvest_date_changed_since_check: bool = False
+    # Follow-up gating: outcomes other than a clean as-planned application require a
+    # follow-up event timeline before anything about them can be called "confirmed".
+    follow_up_required: bool = False
+    follow_up_event_count: int = 0
+
+
+# ------------------------------------------------- Decision input provenance
+class DecisionInputValue(BaseModel):
+    """Field-level provenance row (append-only supersede chain)."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    planned_spray_id: int
+    field_name: str
+    raw_value: str | None = None
+    normalized_value: str | None = None
+    unit: str | None = None
+    source_type: str
+    source_reference: str | None = None
+    confidence: str | None = None
+    verified_by: str | None = None
+    verified_at: datetime | None = None
+    effective_date: date | None = None
+    supersedes_input_value_id: int | None = None
+    created_at: datetime
+
+
+class DecisionAuditEvent(BaseModel):
+    """Immutable audit event on a pre-spray decision (read-only; append-only)."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    planned_spray_id: int
+    event_type: str
+    actor: str | None = None
+    rationale: str | None = None
+    system_recommendation: str | None = None
+    before: dict | None = None
+    after: dict | None = None
+    created_at: datetime
+
+
+# ------------------------------------------------------- Follow-up timeline
+class FollowUpEventCreate(BaseModel):
+    """One append-only follow-up observation after a recorded outcome.
+
+    Impact fields default to None (i.e. not yet assessed) — an outcome is NEVER
+    silently assumed positive; yield/quality stay unknown until someone records them.
+    """
+    event_type: FollowUpEventType
+    observed_at: date
+    severity: int | None = Field(default=None, ge=0)
+    severity_scale: str | None = None
+    actual_product: str | None = None
+    actual_rate_amount: float | None = Field(default=None, gt=0)
+    actual_rate_unit: str | None = None
+    actual_treated_acres: float | None = Field(default=None, gt=0)
+    cost: float | None = Field(default=None, ge=0)
+    rescue_required: bool | None = None
+    yield_impact: ImpactLevel | None = None
+    quality_impact: ImpactLevel | None = None
+    rejected_or_downgraded: bool | None = None
+    evidence_notes: str | None = None
+    entered_by: str | None = None
+    source_type: InputSourceType = "user_entered"
+    source_reference: str | None = None
+    confidence: DataConfidence = "user_provided"
+
+    @model_validator(mode="after")
+    def _require_substance(self):
+        if self.event_type in ("actual_application", "rescue_application") and not (
+            self.actual_product or ""
+        ).strip():
+            raise ValueError(
+                "actual_product is required for actual_application / rescue_application "
+                "events"
+            )
+        if self.event_type == "scouting_observation" and self.severity is None:
+            raise ValueError("severity is required for scouting_observation events")
+        return self
+
+
+class FollowUpEvent(FollowUpEventCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    planned_spray_id: int
+    created_at: datetime
+
+
+# ------------------------------------------------------- CSV pilot import
+class CsvImportRequest(BaseModel):
+    """CSV pilot import (dry-run by default — nothing is written until dry_run=False).
+
+    `mapping` optionally overrides the auto-detected header->field mapping
+    (header text -> canonical field name, or "ignore" to drop a column).
+    """
+    record_type: ImportRecordType
+    csv_text: str
+    mapping: dict[str, str] | None = None
+    dry_run: bool = True
+    source_system: str | None = None
+    source_filename: str | None = None
+    imported_by: str | None = None
+    notes: str | None = None
 
 
 # ------------------------------------------------------------------ Pilot events
