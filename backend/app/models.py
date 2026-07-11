@@ -4,7 +4,11 @@ from datetime import date, datetime
 from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app import clock, decision_status
 from app.database import Base
+
+# All created_at defaults go through the app clock so a pinned LUMOS_DEMO_TODAY keeps
+# seeded and live records on the same timeline (see app/clock.py).
 
 
 class Farm(Base):
@@ -38,6 +42,9 @@ class Farm(Base):
         back_populates="farm", cascade="all, delete-orphan"
     )
     planned_sprays: Mapped[list["PlannedSpray"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
+    pca_policies: Mapped[list["PcaPolicy"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
 
@@ -120,9 +127,9 @@ class PlannedSpray(Base):
     decision_outcome: Mapped[str] = mapped_column(String(30), default="pca_review_required")
     decision_severity: Mapped[str] = mapped_column(String(20), default="none")
     decision_confidence: Mapped[str] = mapped_column(String(20), default="low")
-    # Authority gating: definitive only when backed by verified-label / PCA-entered
-    # sources; provisional results always require PCA confirmation.
-    decision_authority: Mapped[str] = mapped_column(String(20), default="provisional")
+    # Authority gating: verified_label_grounded / pca_authorized / provisional
+    # (see app/decision_engine.py). Provisional always requires PCA confirmation.
+    decision_authority: Mapped[str] = mapped_column(String(30), default="provisional")
     required_next_action: Mapped[str] = mapped_column(String(300), default="")
     review_required: Mapped[bool] = mapped_column(Boolean, default=True)
     # Full explainable snapshot: rules, inputs, calculations, missing info, disclaimer.
@@ -150,9 +157,62 @@ class PlannedSpray(Base):
     # Concierge-pilot provenance (see SprayEvent for the allowed values).
     data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="planned_sprays")
+
+    # Derived status fields (read-only, from the canonical app/decision_status.py).
+    # Serialized on schemas.PlannedSpray so the frontend never re-derives them.
+    @property
+    def review_state(self) -> str:
+        return decision_status.review_state(self)
+
+    @property
+    def needs_review(self) -> bool:
+        return decision_status.needs_review(self)
+
+    @property
+    def applied_outcome_allowed(self) -> bool:
+        return decision_status.applied_outcome_allowed(self)
+
+    @property
+    def is_open(self) -> bool:
+        return decision_status.is_open(self)
+
+    @property
+    def open_conflict(self) -> bool:
+        return decision_status.open_conflict(self)
+
+    @property
+    def harvest_date_changed_since_check(self) -> bool:
+        return decision_status.harvest_date_changed_since_check(
+            self, self.farm.expected_harvest_date if self.farm else None
+        )
+
+
+class PcaPolicy(Base):
+    """A PCA-entered action threshold for one target on one farm.
+
+    "Treat <target> only when scouting severity >= <min_severity_to_treat>." The
+    decision engine reads it in the scouting-evidence rule with
+    source_authority="pca_entered" and the entered_by attribution — Lumos NEVER
+    invents a threshold; without a policy the rule stays a plain heuristic.
+    Latest row per (farm, target) wins, mirroring SprayBaseline.
+    """
+    __tablename__ = "pca_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+    target_pest_or_disease: Mapped[str] = mapped_column(String(200), nullable=False)
+    min_severity_to_treat: Mapped[int] = mapped_column(Integer, nullable=False)
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Provenance (mirrors SprayEvent).
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship(back_populates="pca_policies")
 
 
 class Recommendation(Base):
@@ -160,7 +220,7 @@ class Recommendation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
     next_action: Mapped[str] = mapped_column(String(120), default="")
     recommendation_text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -196,7 +256,7 @@ class SprayBaseline(Base):
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
     declared_by: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="spray_baselines")
 
@@ -209,7 +269,7 @@ class PilotFeedback(Base):
     __tablename__ = "pilot_feedback"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
     # grower / PCA / agronomist / exporter / input_supplier / other
     person_type: Mapped[str] = mapped_column(String(40), nullable=False)
     crop: Mapped[str | None] = mapped_column(String(100))
@@ -233,7 +293,7 @@ class PilotEvent(Base):
     __tablename__ = "pilot_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
     # check_started / check_completed / check_abandoned / review_recorded /
     # outcome_recorded / import_used
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -261,6 +321,6 @@ class PilotImportBatch(Base):
     data_confidence: Mapped[str | None] = mapped_column(String(40))
     spray_event_count: Mapped[int] = mapped_column(Integer, default=0)
     scouting_observation_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="pilot_import_batches")

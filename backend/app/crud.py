@@ -5,12 +5,10 @@ an auth/tenant filter later in one place.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import clock, decision_status, models, schemas
 from app.decision_engine import evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
 
@@ -24,6 +22,11 @@ APPLIED_OUTCOMES = ("sprayed_as_planned", "changed_product")
 
 class ReviewRequiredError(Exception):
     """Raised when an applied outcome is recorded before a required PCA review."""
+
+
+class OutcomeChronologyError(Exception):
+    """Raised when a recorded outcome would create an impossible timeline
+    (outcome before its check, or an application before its planned date)."""
 
 
 # ----------------------------------------------------------------------------- Farms
@@ -138,7 +141,7 @@ def generate_and_store_recommendation(
     sprays = list_spray_events(db, farm.id)
     observations = list_scout_observations(db, farm.id)
 
-    result = generate_recommendation(farm, sprays, observations)
+    result = generate_recommendation(farm, sprays, observations, today=clock.current_date())
 
     rec = models.Recommendation(
         farm_id=farm.id,
@@ -184,7 +187,11 @@ def create_planned_spray(
     """Run the pre-spray decision check against current records and persist the snapshot."""
     sprays = list_spray_events(db, farm.id)
     observations = list_scout_observations(db, farm.id)
-    decision = evaluate_planned_spray(farm, data, sprays, observations)
+    decision = evaluate_planned_spray(
+        farm, data, sprays, observations,
+        pca_policies=list_pca_policies(db, farm.id),
+        today=clock.current_date(),
+    )
 
     planned = models.PlannedSpray(
         farm_id=farm.id,
@@ -218,7 +225,7 @@ def review_planned_spray(
     planned.review_status = data.action
     planned.review_comment = data.review_comment
     planned.reviewed_by = data.reviewed_by
-    planned.reviewed_at = datetime.utcnow()
+    planned.reviewed_at = clock.current_datetime()
     planned.pca_next_action = data.pca_next_action if data.action == "edited" else None
     seconds_to_review = (planned.reviewed_at - planned.created_at).total_seconds()
     _log_event(
@@ -239,19 +246,40 @@ def record_planned_spray_outcome(
     recorded until a PCA has approved or edited the decision (rejected/not_reviewed
     raise `ReviewRequiredError`). Non-applied outcomes are always recordable.
     """
-    if (
-        data.outcome in APPLIED_OUTCOMES
-        and planned.review_required
-        and planned.review_status not in ("approved", "edited")
+    if data.outcome in APPLIED_OUTCOMES and not decision_status.applied_outcome_allowed(
+        planned
     ):
         raise ReviewRequiredError(
             "This decision requires a PCA / agronomist review (approve or edit) before an "
             "applied outcome can be recorded."
         )
 
+    # Chronology invariants: an outcome can never predate its check, and an applied
+    # outcome (or its application date) can never predate the planned date.
+    outcome_date = data.outcome_date or clock.current_date()
+    checked_on = planned.created_at.date()
+    if outcome_date < checked_on:
+        raise OutcomeChronologyError(
+            f"Outcome date {outcome_date.isoformat()} is before the check was run "
+            f"({checked_on.isoformat()}) — an outcome cannot predate its decision check."
+        )
+    if data.outcome in APPLIED_OUTCOMES:
+        application_date = data.application_date or planned.intended_date
+        if outcome_date < planned.intended_date:
+            raise OutcomeChronologyError(
+                f"Outcome date {outcome_date.isoformat()} is before the planned "
+                f"application date ({planned.intended_date.isoformat()}) — an applied "
+                f"outcome cannot predate the plan it records."
+            )
+        if application_date < planned.intended_date:
+            raise OutcomeChronologyError(
+                f"Application date {application_date.isoformat()} is before the planned "
+                f"application date ({planned.intended_date.isoformat()})."
+            )
+
     planned.outcome = data.outcome
     planned.outcome_reason = data.outcome_reason
-    planned.outcome_date = date.today()
+    planned.outcome_date = outcome_date
     planned.outcome_product_name = data.outcome_product_name
     planned.outcome_active_ingredient = data.outcome_active_ingredient
 
@@ -362,7 +390,7 @@ def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm
             farm_id=farm.id,
             product_name=sp.product_name,
             active_ingredient=sp.active_ingredient,
-            application_date=sp.application_date or date.today(),
+            application_date=sp.application_date or clock.current_date(),
             cost=sp.cost,
             pre_harvest_interval_days=sp.pre_harvest_interval_days,
             re_entry_interval_hours=sp.re_entry_interval_hours,
@@ -371,7 +399,7 @@ def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm
     if data.scouting_concern:
         db.add(models.ScoutObservation(
             farm_id=farm.id,
-            observation_date=date.today(),
+            observation_date=clock.current_date(),
             visible_issue=data.scouting_concern,
             severity_1_to_5=data.scouting_severity_1_to_5,
         ))
@@ -411,7 +439,7 @@ def import_pilot_data(
             product_name=sp.product_name,
             active_ingredient=sp.active_ingredient,
             target_pest_or_disease=sp.target_pest_or_disease,
-            application_date=sp.application_date or date.today(),
+            application_date=sp.application_date or clock.current_date(),
             cost=sp.cost,
             pre_harvest_interval_days=sp.pre_harvest_interval_days,
             re_entry_interval_hours=sp.re_entry_interval_hours,
@@ -426,7 +454,7 @@ def import_pilot_data(
     for ob in data.scouting_observations:
         db.add(models.ScoutObservation(
             farm_id=farm.id,
-            observation_date=ob.observation_date or date.today(),
+            observation_date=ob.observation_date or clock.current_date(),
             crop_stage=ob.crop_stage,
             visible_issue=ob.visible_issue,
             severity_1_to_5=ob.severity_1_to_5,
@@ -455,6 +483,34 @@ def list_pilot_import_batches(db: Session, farm_id: int) -> list[models.PilotImp
     )
 
 
+# ----------------------------------------------------------------- PCA policies
+def list_pca_policies(db: Session, farm_id: int) -> list[models.PcaPolicy]:
+    """The farm's current policies: latest row per normalized target wins
+    (history is kept, mirroring SprayBaseline)."""
+    rows = db.scalars(
+        select(models.PcaPolicy)
+        .where(models.PcaPolicy.farm_id == farm_id)
+        .order_by(models.PcaPolicy.created_at.desc(), models.PcaPolicy.id.desc())
+    )
+    current: dict[str, models.PcaPolicy] = {}
+    for policy in rows:
+        key = (policy.target_pest_or_disease or "").strip().lower()
+        if key and key not in current:
+            current[key] = policy
+    return list(current.values())
+
+
+def set_pca_policy(
+    db: Session, farm_id: int, data: schemas.PcaPolicyCreate
+) -> models.PcaPolicy:
+    """Record a new policy for the farm+target (the latest one is what the engine uses)."""
+    policy = models.PcaPolicy(farm_id=farm_id, **data.model_dump())
+    db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
 # --------------------------------------------------------------- Spray baseline
 def get_spray_baseline(db: Session, farm_id: int) -> models.SprayBaseline | None:
     """The farm's current baseline (newest wins — we keep history but use the latest)."""
@@ -474,6 +530,35 @@ def set_spray_baseline(
     db.commit()
     db.refresh(baseline)
     return baseline
+
+
+# ------------------------------------------------------------------ Demo reset
+def has_non_demo_data(db: Session) -> bool:
+    """True if anything in the DB might be real pilot data (conservative).
+
+    Guards the internal demo-reset endpoint: seeding drops EVERY table, so a reset is
+    only allowed when every provenance-carrying row is demo/simulated, no
+    provenance-less rows (recommendations, feedback) exist, and every farm actually
+    has records proving it is a demo farm.
+    """
+    provenance_models = (
+        models.SprayEvent, models.ScoutObservation, models.PlannedSpray,
+        models.SprayBaseline, models.PcaPolicy, models.PilotImportBatch,
+    )
+    for model in provenance_models:
+        for row in db.scalars(select(model)):
+            if not decision_status.is_demo_record(row):
+                return True
+    # These carry no provenance fields — any row could be real, so be conservative.
+    if db.scalars(select(models.Recommendation)).first() is not None:
+        return True
+    if db.scalars(select(models.PilotFeedback)).first() is not None:
+        return True
+    # A farm with zero records can't be proven demo.
+    for farm in db.scalars(select(models.Farm)):
+        if not (farm.spray_events or farm.scout_observations or farm.planned_sprays):
+            return True
+    return False
 
 
 # ------------------------------------------------------------- Pilot feedback

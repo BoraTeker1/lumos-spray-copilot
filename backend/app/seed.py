@@ -14,10 +14,9 @@ Creates two clearly contrasting farms:
 
 Idempotent: clears existing rows first so re-running gives a clean demo state.
 """
-import os
 from datetime import date, datetime, timedelta
 
-from app import models, schemas
+from app import clock, models, schemas
 from app.database import Base, SessionLocal, engine, init_db
 from app.decision_engine import evaluate_planned_spray
 
@@ -27,10 +26,10 @@ def demo_today() -> date:
 
     Defaults to the real today (re-seed before a demo and the story is always fresh);
     set LUMOS_DEMO_TODAY=YYYY-MM-DD to pin the whole demo to a fixed date for
-    screenshots / deterministic tests.
+    screenshots / deterministic tests. Delegates to the app clock so seeded records
+    and live API computations share one timeline (see app/clock.py).
     """
-    pinned = os.environ.get("LUMOS_DEMO_TODAY")
-    return date.fromisoformat(pinned) if pinned else date.today()
+    return clock.current_date()
 
 
 def run() -> None:
@@ -256,15 +255,15 @@ def run() -> None:
         db.add(farm3_obs)
 
         # ------------------------------------------------------------------ #
-        # Demo pre-spray decision (the end-to-end YC scenario):               #
+        # Demo scenario 1 (risky spray CHANGED after PCA review):             #
         #   a 4th captan cover spray planned 1 day before harvest is BLOCKED  #
         #   (PHI conflict + repeated chemistry), the demo PCA edits the       #
         #   guidance to a PHI-0 alternative, and the grower records           #
         #   "changed product" — Lumos changed a risky spray.                  #
         #   All demo/simulated: excluded from real pilot evidence by design.  #
         # ------------------------------------------------------------------ #
-        # Values entered by the demo PCA -> the block is DEFINITIVE under authority
-        # gating (grower-entered values would make it provisional).
+        # Values entered by the demo PCA -> the block is PCA-AUTHORIZED under
+        # authority gating (grower-entered values would make it provisional).
         planned_data = schemas.PlannedSprayCreate(
             intended_date=today,  # checked and resolved the same day it was intended
             product_name="Captan 80 WDG",
@@ -292,7 +291,7 @@ def run() -> None:
             f"Switch to Switch 62.5 WG (cyprodinil + fludioxonil, entered PHI 0 days) "
             f"for this application and rotate chemistry."
         )
-        db.add(models.PlannedSpray(
+        planned1 = models.PlannedSpray(
             farm_id=farm3.id,
             **planned_data.model_dump(),
             decision_outcome=decision.outcome,
@@ -320,10 +319,12 @@ def run() -> None:
             # Anchor the record timestamps to the same demo day so the story's
             # check -> review -> outcome all read as one consistent day.
             created_at=datetime.combine(today, datetime.min.time()),
-        ))
+        )
+        db.add(planned1)
 
-        # The spray that actually happened after the changed-product outcome.
-        db.add(models.SprayEvent(
+        # The spray that actually happened after the changed-product outcome —
+        # created and LINKED to the decision, exactly like a live recorded outcome.
+        switch_event = models.SprayEvent(
             farm_id=farm3.id,
             product_name="Switch 62.5 WG",
             active_ingredient="cyprodinil + fludioxonil",
@@ -336,6 +337,100 @@ def run() -> None:
             re_entry_interval_hours=12,
             notes="Applied instead of a 4th captan after the pre-spray check was blocked "
             "and the demo PCA edited the guidance.",
+        )
+        db.add(switch_event)
+        db.flush()  # assign switch_event.id
+        planned1.spray_event_id = switch_event.id
+
+        # ------------------------------------------------------------------ #
+        # Demo scenario 2 (unnecessary routine spray AVOIDED — the pesticide- #
+        # reduction story):                                                   #
+        #   the demo PCA has entered an action threshold for lygus ("treat    #
+        #   only if scouting severity >= 3"); a routine PyGanic cover spray   #
+        #   is checked with no lygus scouting on record -> INSPECT FIRST      #
+        #   (policy-cited, provisional). The follow-up inspection finds       #
+        #   severity 2 — below the entered threshold — and the recorded       #
+        #   outcome is AVOIDED. The threshold is PCA-entered and attributed;  #
+        #   Lumos never invents one. All demo/simulated.                      #
+        # ------------------------------------------------------------------ #
+        lygus_policy = models.PcaPolicy(
+            farm_id=farm3.id,
+            target_pest_or_disease="lygus bug",
+            min_severity_to_treat=3,
+            entered_by="Demo PCA (simulated)",
+            notes="Demo policy: hold routine lygus cover sprays below scouting severity 3.",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=datetime.combine(today, datetime.min.time()),
+        )
+        db.add(lygus_policy)
+
+        planned2_data = schemas.PlannedSprayCreate(
+            intended_date=today,
+            product_name="PyGanic EC 5.0",
+            active_ingredient="pyrethrins",
+            target_pest_or_disease="lygus bug",
+            pre_harvest_interval_days=0,   # PHI 0 is a real entered value, not missing
+            re_entry_interval_hours=12,
+            estimated_cost=95.0,
+            values_source="grower_entered",
+            values_entered_by="Demo grower (simulated)",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        # Evaluate against the records as they stood BEFORE this check's own follow-up
+        # (no lygus scouting yet, Switch spray not part of the pre-check history).
+        decision2 = evaluate_planned_spray(
+            farm3, planned2_data, farm3_sprays, [farm3_obs],
+            pca_policies=[lygus_policy], today=today,
+        )
+        assert decision2.outcome == "inspect_first", decision2.outcome
+
+        planned2 = models.PlannedSpray(
+            farm_id=farm3.id,
+            **planned2_data.model_dump(),
+            decision_outcome=decision2.outcome,
+            decision_severity=decision2.severity,
+            decision_confidence=decision2.confidence,
+            decision_authority=decision2.authority_level,
+            required_next_action=decision2.required_next_action,
+            review_required=decision2.review_required,
+            decision_payload=decision2.as_payload(),
+            check_risk_level="moderate",
+            check_text=decision2.narrative,
+            review_status="edited",
+            review_comment=(
+                "Hold this application — inspect first, per the entered lygus action "
+                "threshold."
+            ),
+            reviewed_by="Demo PCA (simulated)",
+            reviewed_at=datetime.combine(today, datetime.min.time()),
+            pca_next_action=(
+                "Hold the routine PyGanic application. Scout the field edges today; "
+                "treat only if lygus severity reaches 3 or more (entered action "
+                "threshold). Re-scout in 3–4 days."
+            ),
+            outcome="avoided",
+            outcome_reason=(
+                "Inspected first: lygus severity 2, below the PCA-entered action "
+                "threshold (treat only if severity >= 3). Routine cover spray not "
+                "applied."
+            ),
+            outcome_date=today,
+            created_at=datetime.combine(today, datetime.min.time()),
+        )
+        db.add(planned2)
+
+        # The follow-up inspection the INSPECT FIRST outcome asked for (same demo day):
+        # lygus pressure logged at severity 2 — below the PCA-entered threshold of 3.
+        db.add(models.ScoutObservation(
+            farm_id=farm3.id,
+            observation_date=today,
+            crop_stage="fruiting",
+            visible_issue="lygus bug",
+            severity_1_to_5=2,
+            notes="Follow-up inspection after the pre-spray check returned INSPECT "
+            "FIRST: a few lygus on field edges, below the entered action threshold.",
         ))
 
         # Declared spray baseline so the U.S. demo shows *measured* reduction, not just
@@ -357,6 +452,14 @@ def run() -> None:
         print(f"Seeded HIGH-risk farm:  {farm1.name} (id={farm1.id}, {farm1.country})")
         print(f"Seeded LOW-risk  farm:  {farm2.name} (id={farm2.id}, {farm2.country})")
         print(f"Seeded U.S. wedge farm: {farm3.name} (id={farm3.id}, {farm3.country})")
+        # Summary for callers (the internal demo-reset endpoint returns this).
+        return {
+            "anchor": today.isoformat(),
+            "farms": [
+                {"id": f.id, "name": f.name, "country": f.country}
+                for f in (farm1, farm2, farm3)
+            ],
+        }
     finally:
         db.close()
 

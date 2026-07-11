@@ -9,26 +9,19 @@ import {
   FlaskConical,
   MapPin,
   Plus,
+  RotateCcw,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatArea, formatDate } from "@/lib/format";
+import { URGENCY_META } from "@/lib/labels";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 
-// The backend ranks farms by urgency (/farms-overview); this maps each urgency
-// to how loud the card should be.
-const URGENCY_META = {
-  conflict: { label: "Timing conflict", variant: "red", border: "border-red-300" },
-  needs_review: { label: "Needs PCA review", variant: "amber", border: "border-amber-300" },
-  awaiting_outcome: { label: "Awaiting outcome", variant: "amber", border: "border-amber-200" },
-  flags: { label: "Risk flags", variant: "amber", border: "border-gray-200" },
-  ok: { label: "No open decisions", variant: "neutral", border: "border-gray-200" },
-};
-
 // Farms ranked by what needs attention: which farm, why, and the next action.
-// The default YC demo is the California strawberry / PCA workflow. Secondary-market
-// demo farms (Türkiye greenhouse tomatoes) stay fully supported but are hidden behind
-// a toggle so the primary story stays narrow. Real (non-demo) farms always show.
+// The YC demo is the California strawberry / PCA workflow only: secondary-market
+// demo farms (Türkiye greenhouse tomatoes) never render here — they stay seeded and
+// reachable by direct URL, but there is deliberately no link or toggle to them.
+// Real (non-demo) farms always show.
 function isSecondaryDemoFarm(f) {
   return f.is_demo && (f.country || "").toUpperCase() !== "US";
 }
@@ -37,18 +30,45 @@ export default function DashboardPage() {
   const [farms, setFarms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [showSecondary, setShowSecondary] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(null);
 
-  useEffect(() => {
+  const loadFarms = () =>
     api
       .listFarmsOverview()
       .then(setFarms)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+
+  useEffect(() => {
+    loadFarms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hiddenCount = farms.filter(isSecondaryDemoFarm).length;
-  const visibleFarms = showSecondary ? farms : farms.filter((f) => !isSecondaryDemoFarm(f));
+  async function resetDemo() {
+    if (
+      !window.confirm(
+        "Reset the YC demo? This drops and re-seeds ALL demo data, anchored to today."
+      )
+    ) {
+      return;
+    }
+    setResetting(true);
+    setResetError(null);
+    try {
+      await api.resetDemo();
+      await loadFarms();
+    } catch (err) {
+      setResetError(err.message);
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const visibleFarms = farms.filter((f) => !isSecondaryDemoFarm(f));
+  // The reset is only offered when EVERY farm is a demo farm — the backend refuses
+  // (409) on real data anyway; this just keeps the button out of real pilots.
+  const allDemo = farms.length > 0 && farms.every((f) => f.is_demo);
 
   return (
     <div className="space-y-5">
@@ -60,14 +80,32 @@ export default function DashboardPage() {
             pre-spray decisions first, then risk flags.
           </p>
         </div>
-        <Link
-          href="/pilot/new"
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-leaf px-4 text-sm font-medium text-white shadow-sm hover:bg-green-700"
-        >
-          <Plus className="h-4 w-4" />
-          Add pilot farm
-        </Link>
+        <div className="flex items-center gap-2">
+          {allDemo && (
+            <button
+              onClick={resetDemo}
+              disabled={resetting}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RotateCcw className="h-4 w-4" />
+              {resetting ? "Resetting…" : "Reset YC demo"}
+            </button>
+          )}
+          <Link
+            href="/pilot/new"
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-leaf px-4 text-sm font-medium text-white shadow-sm hover:bg-green-700"
+          >
+            <Plus className="h-4 w-4" />
+            Add pilot farm
+          </Link>
+        </div>
       </div>
+
+      {resetError && (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {resetError}
+        </div>
+      )}
 
       {loading && <p className="text-sm text-gray-500">Loading farms…</p>}
       {error && (
@@ -132,17 +170,6 @@ export default function DashboardPage() {
           );
         })}
       </div>
-
-      {!loading && hiddenCount > 0 && (
-        <button
-          onClick={() => setShowSecondary((v) => !v)}
-          className="text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
-        >
-          {showSecondary
-            ? "Hide secondary-market demo farms"
-            : `Show ${hiddenCount} secondary-market demo farm${hiddenCount === 1 ? "" : "s"} (Türkiye)`}
-        </button>
-      )}
 
       {!loading && !error && farms.length === 0 && (
         <div className="rounded-md border border-gray-200 bg-white p-4 text-sm text-gray-500">

@@ -4,6 +4,8 @@ import { useCallback, useRef, useState } from "react";
 import { FileText, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { formatCost } from "@/lib/format";
+import { RECORDED_OUTCOME_LABELS, REVIEW_STATE_LABELS } from "@/lib/labels";
 import DecisionResult, { OUTCOME_META } from "@/components/DecisionResult";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,13 +35,10 @@ const DISCLAIMER =
   "PHI and REI checks use values entered by the user and are not independently " +
   "verified against the current pesticide label.";
 
-const OUTCOME_LABELS = {
-  sprayed_as_planned: "Sprayed as planned",
-  changed_product: "Changed product",
-  delayed: "Delayed",
-  avoided: "Avoided",
-  inspected_first: "Inspected first",
-};
+// The five recordable outcomes, in display order (labels live in lib/labels.js).
+const RECORDABLE_OUTCOMES = [
+  "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first",
+];
 const OUTCOME_VARIANTS = {
   sprayed_as_planned: "neutral",
   changed_product: "indigo",
@@ -162,13 +161,14 @@ function DecisionReview({ planned, onChanged }) {
 // Records what actually happened in the field (the five real-world outcomes).
 function OutcomeRecorder({ planned, onChanged }) {
   const [reason, setReason] = useState("");
+  const [outcomeDate, setOutcomeDate] = useState("");
   const [changedProduct, setChangedProduct] = useState("");
   const [changedAi, setChangedAi] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const reviewGateActive =
-    planned.review_required && !["approved", "edited"].includes(planned.review_status);
+  // Server-derived gate (canonical decision_status semantics) — never re-derived here.
+  const reviewGateActive = !planned.applied_outcome_allowed;
 
   async function record(outcome) {
     if (outcome !== "sprayed_as_planned" && !reason.trim()) {
@@ -185,6 +185,7 @@ function OutcomeRecorder({ planned, onChanged }) {
       await api.updatePlannedSprayOutcome(planned.id, {
         outcome,
         outcome_reason: reason.trim() || null,
+        outcome_date: outcomeDate || null,
         outcome_product_name: changedProduct.trim() || null,
         outcome_active_ingredient: changedAi.trim() || null,
       });
@@ -205,6 +206,16 @@ function OutcomeRecorder({ planned, onChanged }) {
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />
+      <label className="block text-xs text-gray-500">
+        Outcome date (optional — defaults to today; the server rejects impossible
+        chronology, e.g. an application before the intended date)
+        <input
+          type="date"
+          className={inputCls}
+          value={outcomeDate}
+          onChange={(e) => setOutcomeDate(e.target.value)}
+        />
+      </label>
       <div className="grid grid-cols-2 gap-1.5">
         <input
           className={inputCls}
@@ -220,7 +231,7 @@ function OutcomeRecorder({ planned, onChanged }) {
         />
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {Object.keys(OUTCOME_LABELS).map((outcome) => (
+        {RECORDABLE_OUTCOMES.map((outcome) => (
           <Button
             key={outcome}
             type="button"
@@ -232,7 +243,7 @@ function OutcomeRecorder({ planned, onChanged }) {
             }
             onClick={() => record(outcome)}
           >
-            {OUTCOME_LABELS[outcome]}
+            {RECORDED_OUTCOME_LABELS[outcome]}
           </Button>
         ))}
       </div>
@@ -247,9 +258,11 @@ function OutcomeRecorder({ planned, onChanged }) {
 }
 
 // One planned spray: decision snapshot, review state, and outcome controls.
-export function PlannedSprayItem({ planned, onChanged, compact = false }) {
+export function PlannedSprayItem({ planned, onChanged, compact = false, country }) {
   const decided = planned.outcome !== "planned";
-  const reviewed = planned.review_status !== "not_reviewed";
+  // Server-derived review state: approved / edited / rejected are recorded reviews;
+  // "pending" means a required review is still outstanding.
+  const reviewed = ["approved", "edited", "rejected"].includes(planned.review_state);
   const meta = OUTCOME_META[planned.decision_outcome];
 
   return (
@@ -258,13 +271,13 @@ export function PlannedSprayItem({ planned, onChanged, compact = false }) {
         <span className="text-sm font-medium text-gray-900">{planned.product_name}</span>
         {meta && <Badge variant={meta.badge}>{meta.label}</Badge>}
         {reviewed && (
-          <Badge variant={REVIEW_VARIANTS[planned.review_status] || "neutral"}>
-            PCA {planned.review_status}
+          <Badge variant={REVIEW_VARIANTS[planned.review_state] || "neutral"}>
+            {REVIEW_STATE_LABELS[planned.review_state]}
           </Badge>
         )}
         {decided && (
           <Badge variant={OUTCOME_VARIANTS[planned.outcome] || "neutral"}>
-            {OUTCOME_LABELS[planned.outcome] || planned.outcome}
+            {RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
           </Badge>
         )}
       </div>
@@ -295,13 +308,24 @@ export function PlannedSprayItem({ planned, onChanged, compact = false }) {
       )}
 
       {decided ? (
-        <p className="mt-2 text-xs text-gray-600">
-          <span className="font-medium">
-            Recorded outcome: {OUTCOME_LABELS[planned.outcome] || planned.outcome}
-            {planned.outcome_product_name && ` → ${planned.outcome_product_name}`}.
-          </span>{" "}
-          {planned.outcome_reason && `Stated reason: ${planned.outcome_reason}`}
-        </p>
+        <>
+          <p className="mt-2 text-xs text-gray-600">
+            <span className="font-medium">
+              Recorded outcome: {RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
+              {planned.outcome_product_name && ` → ${planned.outcome_product_name}`}.
+            </span>{" "}
+            {planned.outcome_reason && `Stated reason: ${planned.outcome_reason}`}
+          </p>
+          {planned.outcome === "avoided" && planned.estimated_cost != null && (
+            <p className="mt-1 rounded-md bg-green-50 p-2 text-xs text-green-900">
+              Entered application cost not spent:{" "}
+              <span className="font-semibold">
+                {formatCost(planned.estimated_cost, country)}
+              </span>{" "}
+              (entered estimate; yield impact not yet known or measured).
+            </p>
+          )}
+        </>
       ) : (
         <>
           {!reviewed && <DecisionReview planned={planned} onChanged={onChanged} />}
@@ -313,7 +337,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false }) {
 }
 
 // Full list of planned sprays for the "Planned sprays" tab.
-export function PlannedSprayList({ planned, onChanged, emptyText, compact = false }) {
+export function PlannedSprayList({ planned, onChanged, emptyText, compact = false, country }) {
   if (!planned || planned.length === 0) {
     return (
       <p className="text-sm text-gray-500">
@@ -324,7 +348,13 @@ export function PlannedSprayList({ planned, onChanged, emptyText, compact = fals
   return (
     <ul className="space-y-3">
       {planned.map((p) => (
-        <PlannedSprayItem key={p.id} planned={p} onChanged={onChanged} compact={compact} />
+        <PlannedSprayItem
+          key={p.id}
+          planned={p}
+          onChanged={onChanged}
+          compact={compact}
+          country={country}
+        />
       ))}
     </ul>
   );
@@ -503,8 +533,9 @@ export default function PreSpraySheet({ farmId, onChanged }) {
               />
             </div>
             <p className="mt-1.5 text-[11px] text-gray-400">
-              Only PCA-entered values can make a BLOCK definitive; grower-entered values
-              always yield a provisional result a PCA must confirm.
+              Only PCA-entered values can make a BLOCK PCA-authorized; grower-entered
+              values always yield a provisional result a PCA must confirm. (Verified-label
+              grounding requires label data that does not exist in Lumos yet.)
             </p>
           </details>
 

@@ -248,14 +248,15 @@ def test_block_from_grower_entered_values_is_provisional():
     assert "PROVISIONAL BLOCK" in d.narrative
 
 
-def test_block_from_pca_entered_values_is_definitive():
+def test_block_from_pca_entered_values_is_pca_authorized():
     d = evaluate_planned_spray(
         farm(harvest_offset_days=3),
         planned(phi=7, values_source="pca_entered", values_entered_by="Jane Doe, PCA"),
         [], [obs("botrytis", days_ago=3)], today=TODAY,
     )
     assert d.outcome == "block"
-    assert d.authority_level == "definitive"
+    assert d.authority_level == "pca_authorized"
+    assert "PCA-authorized" in d.authority_basis
     assert "PROVISIONAL" not in d.narrative
     phi_rule = next(r for r in d.rules if r.rule_id == "phi_harvest_conflict")
     assert phi_rule.source_authority == "pca_entered"
@@ -263,9 +264,21 @@ def test_block_from_pca_entered_values_is_definitive():
     assert phi_rule.verification_status == "unverified"  # still not a verified label
 
 
-def test_approve_is_never_definitive_even_with_pca_values():
+def test_engine_output_never_contains_definitive_string():
+    # The old binary "definitive" vocabulary must be gone from every output surface.
+    import json
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=3),
+        planned(phi=7, values_source="pca_entered", values_entered_by="Jane Doe, PCA"),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert "definitive" not in json.dumps(d.as_payload()).lower()
+    assert "definitive" not in d.narrative.lower()
+
+
+def test_approve_is_never_pca_authorized_even_with_pca_values():
     # Rotation and scouting checks are heuristics, so the "all clear" claim can never
-    # be fully backed by definitive sources today.
+    # be fully backed by PCA-entered or verified sources today.
     s = complete_ok_scenario()
     s["planned"].values_source = "pca_entered"
     d = evaluate_planned_spray(s["farm"], s["planned"], s["spray_events"],
@@ -281,7 +294,9 @@ def test_every_rule_carries_source_authority_in_payload():
         [spray(days_ago=2), spray(days_ago=4)], [], today=TODAY,
     )
     payload = d.as_payload()
-    assert payload["authority_level"] in ("definitive", "provisional")
+    assert payload["authority_level"] in (
+        "verified_label_grounded", "pca_authorized", "provisional"
+    )
     assert payload["authority_basis"]
     for r in payload["rules"]:
         assert r["source_authority"] in (
@@ -326,3 +341,103 @@ def test_narrative_stays_cautious_and_carries_disclaimer():
     assert "don't spray" not in lower
     assert "do not spray" not in lower
     assert d.required_next_action  # always present
+
+
+# ------------------------------------------------- PCA-entered action thresholds
+def policy(target="lygus bug", threshold=3, entered_by="Jane Doe, PCA"):
+    return SimpleNamespace(
+        target_pest_or_disease=target,
+        min_severity_to_treat=threshold,
+        entered_by=entered_by,
+    )
+
+
+def test_policy_below_threshold_triggers_inspect_first_with_pca_citation():
+    # Linked scouting exists but pressure is below the PCA-entered threshold.
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(ai="pyrethrins", target="lygus bug", phi=0, rei=12),
+        [], [obs("lygus bug", days_ago=1, severity=2)],
+        pca_policies=[policy(threshold=3)], today=TODAY,
+    )
+    assert d.outcome == "inspect_first"
+    assert d.authority_level == "provisional"  # inspect_first is a human decision
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.triggered is True
+    assert rule.source_authority == "pca_entered"
+    assert rule.entered_by == "Jane Doe, PCA"
+    assert "PCA-entered action threshold" in rule.detail
+    assert ">= 3" in rule.detail
+    assert rule.inputs["pca_entered_threshold"] == 3
+    assert rule.inputs["max_linked_severity"] == 2
+
+
+def test_policy_no_scouting_at_all_triggers_inspect_first():
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(ai="pyrethrins", target="lygus bug", phi=0, rei=12),
+        [], [], pca_policies=[policy(threshold=3)], today=TODAY,
+    )
+    assert d.outcome == "inspect_first"
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert "no scouting observation" in rule.detail.lower()
+    assert rule.source_authority == "pca_entered"
+
+
+def test_policy_met_threshold_does_not_trigger():
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(ai="pyrethrins", target="lygus bug", phi=0, rei=12),
+        [], [obs("lygus bug", days_ago=1, severity=4)],
+        pca_policies=[policy(threshold=3)], today=TODAY,
+    )
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.triggered is False
+    assert d.outcome == "approve"
+    # The policy-backed scouting check is pca_entered, but rotation/missing-data stay
+    # heuristics, so an approve can still never be PCA-authorized.
+    assert d.authority_level == "provisional"
+
+
+def test_no_policy_keeps_heuristic_scouting_behavior():
+    # Without a policy nothing may invent a threshold: exact-match evidence passes,
+    # regardless of severity, and the rule stays a heuristic.
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(ai="pyrethrins", target="lygus bug", phi=0, rei=12),
+        [], [obs("lygus bug", days_ago=1, severity=1)], today=TODAY,
+    )
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.triggered is False
+    assert rule.source_authority == "heuristic"
+    assert "threshold" not in rule.detail.lower()
+    assert d.outcome == "approve"
+
+
+def test_policy_for_other_target_is_ignored():
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(target="botrytis"),
+        [], [obs("botrytis", days_ago=1, severity=1)],
+        pca_policies=[policy(target="lygus bug", threshold=3)], today=TODAY,
+    )
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.source_authority == "heuristic"
+    assert rule.triggered is False
+
+
+# ---------------------------------------------------------------- PHI/REI zero
+def test_phi_zero_is_a_value_not_missing_data():
+    # PHI 0 days is a real label value (e.g. Switch on strawberries): the check RUNS
+    # and passes when it clears by harvest — it must not escalate as missing data.
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(phi=0, rei=0),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    assert d.missing_information == []
+    assert d.outcome == "approve"
+    assert d.confidence == "high"
+    phi_rule = next(r for r in d.rules if r.rule_id == "phi_harvest_conflict")
+    assert phi_rule.triggered is False
+    assert "+ 0 days" in phi_rule.calculation

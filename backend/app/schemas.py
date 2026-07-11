@@ -175,10 +175,13 @@ class PlannedSprayOutcomeUpdate(BaseModel):
 
     A reason is mandatory for every non-as-planned outcome so the record stays honest.
     `changed_product` must say what was actually applied. `application_date` (applied
-    outcomes only) defaults to the intended date.
+    outcomes only) defaults to the intended date. `outcome_date` (when it was decided/
+    done) defaults to today's date; chronology is validated server-side — an outcome
+    can never predate its check, and an application can never predate its plan.
     """
     outcome: PlannedSprayOutcome
     outcome_reason: str | None = None
+    outcome_date: date | None = None
     application_date: date | None = None
     outcome_product_name: str | None = None
     outcome_active_ingredient: str | None = None
@@ -256,6 +259,15 @@ class PlannedSpray(BaseModel):
     data_source: str | None = None
     data_confidence: str | None = None
     created_at: datetime
+    # Derived status fields (canonical app/decision_status.py, via ORM properties).
+    # The frontend renders these — it must never re-derive review/open semantics.
+    review_state: str = "not_required"  # not_required / pending / approved / edited / rejected
+    needs_review: bool = False
+    applied_outcome_allowed: bool = True
+    is_open: bool = True
+    open_conflict: bool = False
+    # True when the farm's harvest date was edited after this check ran (stale snapshot).
+    harvest_date_changed_since_check: bool = False
 
 
 # ------------------------------------------------------------------ Pilot events
@@ -359,6 +371,25 @@ class PilotImport(BaseModel):
     notes: str | None = None
     spray_events: list[PilotImportSpray] = Field(default_factory=list)
     scouting_observations: list[PilotImportScouting] = Field(default_factory=list)
+
+
+# ----------------------------------------------------------------- PCA policy
+class PcaPolicyCreate(BaseModel):
+    """A PCA-entered action threshold: treat <target> only when scouting severity
+    >= <min_severity_to_treat>. Always attributed — Lumos never invents thresholds."""
+    target_pest_or_disease: str
+    min_severity_to_treat: int = Field(ge=1, le=5)
+    entered_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class PcaPolicy(PcaPolicyCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    created_at: datetime
 
 
 # --------------------------------------------------------------- Spray baseline

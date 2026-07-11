@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { formatCost } from "@/lib/format";
+import { formatArea, formatCost } from "@/lib/format";
 
 // One labelled metric tile (same look as PilotEvidenceCard's).
 function Metric({ label, value, hint }) {
@@ -18,7 +18,7 @@ function Metric({ label, value, hint }) {
 // Pre-spray decision workflow metrics: decisions reviewed, sprays changed/delayed/
 // avoided, conflicts caught, PCA acceptance, and the (assumption-based) review time.
 // Demo/simulated decisions are excluded server-side; every caveat is shown.
-export default function DecisionEvidenceCard({ farmId, country, refreshKey }) {
+export default function DecisionEvidenceCard({ farmId, country, area, refreshKey }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
@@ -66,7 +66,9 @@ export default function DecisionEvidenceCard({ farmId, country, refreshKey }) {
               ? formatCost(data.estimated_chemical_cost_avoided, country)
               : "—"
           }
-          hint="entered estimates of avoided applications"
+          hint={`entered application-cost estimates only${
+            area != null ? ` · across ${formatArea(area, country)}` : ""
+          } · yield impact not yet known/measured`}
         />
       </div>
 

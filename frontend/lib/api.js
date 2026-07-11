@@ -21,9 +21,14 @@ export const api = {
   // Farms
   listFarms: () => request("/farms"),
   listFarmsOverview: () => request("/farms-overview"),
+  // The same status entry the dashboard shows, for one farm (single derivation —
+  // the farm page must use this instead of re-deriving counts client-side).
+  getFarmOverview: (id) => request(`/farms/${id}/overview`),
   getFarm: (id) => request(`/farms/${id}`),
   createFarm: (data) =>
     request("/farms", { method: "POST", body: JSON.stringify(data) }),
+  updateFarm: (id, data) =>
+    request(`/farms/${id}`, { method: "PUT", body: JSON.stringify(data) }),
 
   // Spray events
   listSprayEvents: (farmId) => request(`/farms/${farmId}/spray-events`),
@@ -98,6 +103,17 @@ export const api = {
     }
     return res.json();
   },
+
+  // PCA-entered action thresholds (per farm + target; attributed, never invented)
+  listPcaPolicies: (farmId) => request(`/farms/${farmId}/pca-policies`),
+  setPcaPolicy: (farmId, data) =>
+    request(`/farms/${farmId}/pca-policies`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  // Demo reset (refused with 409 unless the whole DB is demo/simulated data)
+  resetDemo: () => request("/internal/demo/reset", { method: "POST" }),
 
   // Reduction measurement
   getReduction: (farmId) => request(`/farms/${farmId}/reduction`),

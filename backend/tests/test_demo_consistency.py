@@ -34,11 +34,17 @@ def test_seed_anchor_is_deterministic(seeded):
     assert farm["expected_harvest_date"] == (anchor + timedelta(days=2)).isoformat()
 
 
+def _planned_by_product(client, farm_id, product_name):
+    planned = client.get(f"/farms/{farm_id}/planned-sprays").json()
+    return next(p for p in planned if p["product_name"] == product_name)
+
+
 def test_demo_planned_spray_story_is_coherent(seeded):
     farm = _us_farm(seeded)
     planned = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()
-    assert len(planned) == 1
-    p = planned[0]
+    # Two seeded scenarios: the blocked-then-changed captan and the avoided PyGanic.
+    assert len(planned) == 2
+    p = _planned_by_product(seeded, farm["id"], "Captan 80 WDG")
     anchor = date.fromisoformat(PINNED)
 
     # The story: checked, blocked, PCA-edited, and resolved on the SAME demo day.
@@ -46,9 +52,9 @@ def test_demo_planned_spray_story_is_coherent(seeded):
     assert p["outcome_date"] == anchor.isoformat()
     assert p["decision_outcome"] == "block"
     assert p["decision_severity"] == "critical"
-    # PCA-entered values -> the block is definitive under authority gating.
+    # PCA-entered values -> the block is PCA-authorized under authority gating.
     assert p["values_source"] == "pca_entered"
-    assert p["decision_authority"] == "definitive"
+    assert p["decision_authority"] == "pca_authorized"
     assert p["review_status"] == "edited"
     assert p["outcome"] == "changed_product"
     assert p["outcome_product_name"] == "Switch 62.5 WG"
@@ -64,15 +70,60 @@ def test_demo_planned_spray_story_is_coherent(seeded):
     assert farm["expected_harvest_date"] in p["pca_next_action"]
 
 
-def test_replacement_spray_matches_recorded_outcome(seeded):
+def test_replacement_spray_matches_recorded_outcome_and_is_linked(seeded):
     farm = _us_farm(seeded)
-    planned = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()[0]
+    planned = _planned_by_product(seeded, farm["id"], "Captan 80 WDG")
     sprays = seeded.get(f"/farms/{farm['id']}/spray-events").json()
     switch = [s for s in sprays if s["product_name"] == planned["outcome_product_name"]]
     assert len(switch) == 1
     # Applied on the intended day — never before the planned date.
     assert switch[0]["application_date"] == planned["intended_date"]
     assert switch[0]["active_ingredient"] == planned["outcome_active_ingredient"]
+    # The decision links the spray it produced, exactly like a live recorded outcome.
+    assert planned["spray_event_id"] == switch[0]["id"]
+
+
+def test_scenario2_routine_spray_avoided_story(seeded):
+    """The pesticide-reduction scenario: routine spray -> INSPECT FIRST via the
+    PCA-entered threshold -> inspection below threshold -> AVOIDED. No invented
+    thresholds, no spray event, attributed policy, one demo day."""
+    farm = _us_farm(seeded)
+    p = _planned_by_product(seeded, farm["id"], "PyGanic EC 5.0")
+    anchor = date.fromisoformat(PINNED)
+
+    assert p["intended_date"] == anchor.isoformat()
+    assert p["outcome_date"] == anchor.isoformat()
+    assert p["decision_outcome"] == "inspect_first"
+    assert p["decision_authority"] == "provisional"  # a human decision by design
+    assert p["outcome"] == "avoided"
+    assert p["spray_event_id"] is None               # nothing was applied
+    assert p["estimated_cost"] == 95.0               # the entered cost not spent
+
+    # The scouting rule cites the PCA-entered threshold, attributed — never invented.
+    rule = next(
+        r for r in p["decision_payload"]["rules"] if r["rule_id"] == "scouting_evidence"
+    )
+    assert rule["triggered"] is True
+    assert rule["source_authority"] == "pca_entered"
+    assert rule["entered_by"] == "Demo PCA (simulated)"
+    assert "PCA-entered action threshold" in rule["detail"]
+    assert ">= 3" in rule["detail"]
+    # The outcome reason states the below-threshold inspection finding.
+    assert "severity 2" in p["outcome_reason"]
+    assert "PCA-entered" in p["outcome_reason"]
+
+    # The policy itself is exposed and attributed.
+    policies = seeded.get(f"/farms/{farm['id']}/pca-policies").json()
+    lygus = next(pol for pol in policies if pol["target_pest_or_disease"] == "lygus bug")
+    assert lygus["min_severity_to_treat"] == 3
+    assert lygus["entered_by"] == "Demo PCA (simulated)"
+
+    # The follow-up inspection is on record, same demo day, below threshold.
+    obs = seeded.get(f"/farms/{farm['id']}/scout-observations").json()
+    lygus_obs = [o for o in obs if o["visible_issue"] == "lygus bug"]
+    assert len(lygus_obs) == 1
+    assert lygus_obs[0]["observation_date"] == anchor.isoformat()
+    assert lygus_obs[0]["severity_1_to_5"] == 2
 
 
 def test_farm_card_flags_match_farm_page_signals(seeded):
@@ -95,15 +146,17 @@ def test_decision_evidence_reconciles_with_visible_demo_outcomes(seeded):
     farm = _us_farm(seeded)
     ev = seeded.get(f"/farms/{farm['id']}/decision-evidence").json()
     assert ev["decisions_checked"] == 0            # no real decisions yet
-    assert ev["demo_decisions_checked"] == 1       # the seeded story, reconciled
+    assert ev["demo_decisions_checked"] == 2       # both seeded stories, reconciled
     assert ev["demo_outcomes"]["changed_product"] == 1
+    assert ev["demo_outcomes"]["avoided"] == 1
     assert ev["compliance_conflicts_caught"] == 0  # demo conflicts never count as real
+    assert ev["estimated_chemical_cost_avoided"] == 0.0  # demo cost never counts as real
 
 
 def test_demo_dates_never_precede_their_own_story(seeded):
     """No record may claim an application before its planned date or a review before
     its check."""
     farm = _us_farm(seeded)
-    p = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()[0]
-    assert p["outcome_date"] >= p["intended_date"]
-    assert p["reviewed_at"][:10] >= p["created_at"][:10]
+    for p in seeded.get(f"/farms/{farm['id']}/planned-sprays").json():
+        assert p["outcome_date"] >= p["intended_date"], p["product_name"]
+        assert p["reviewed_at"][:10] >= p["created_at"][:10], p["product_name"]

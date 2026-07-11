@@ -135,9 +135,14 @@ def test_compliance_endpoint_exposes_structured_flags(client):
     farm_id = _make_farm(client, "US", "Watsonville, California")
     comp = client.get(f"/farms/{farm_id}/compliance").json()
     for key in ("phi_risk", "rei_risk", "repeated_active_ingredient_risk",
-                "weather_risk_level", "review_status", "advisor_label"):
+                "weather_risk_level", "recommendation_review_status", "decision_review",
+                "advisor_label"):
         assert key in comp
     assert comp["advisor_label"] == "PCA / agronomist"
+    # The decision-review block is the canonical pre-spray review summary.
+    assert set(comp["decision_review"]) == {
+        "pending", "approved", "edited", "rejected", "not_required", "needs_review_count"
+    }
 
 
 def test_us_seeded_strawberry_farm_triggers_all_flags(client):

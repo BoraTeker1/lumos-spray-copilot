@@ -11,30 +11,18 @@ import { Button } from "@/components/ui/button";
 // inputs, every rule with its calculation and source authority, missing data,
 // the PCA review, the final recorded outcome, and the disclaimers.
 // Print via the button (app chrome is hidden in print).
+// NOTE: this page is the always-expanded print/audit surface — unlike the in-app
+// DecisionResult card it deliberately collapses nothing.
 
-const AUTHORITY_LABELS = {
-  verified_label: "verified label",
-  pca_entered: "PCA-entered value",
-  grower_entered: "grower-entered value",
-  heuristic: "heuristic (rule-of-thumb threshold)",
-};
-
-const OUTCOME_LABELS = {
-  approve: "APPROVE",
-  block: "BLOCK",
-  delay: "DELAY",
-  inspect_first: "INSPECT FIRST",
-  pca_review_required: "PCA REVIEW REQUIRED",
-};
-
-const RECORDED_LABELS = {
-  planned: "No outcome recorded yet",
-  sprayed_as_planned: "Sprayed as planned",
-  changed_product: "Changed product",
-  delayed: "Delayed",
-  avoided: "Avoided",
-  inspected_first: "Inspected first",
-};
+import {
+  AUTHORITY_SOURCE_LABELS,
+  DECISION_OUTCOME_LABELS,
+  RECORDED_OUTCOME_LABELS,
+  REVIEW_STATE_LABELS,
+  decisionAuthorityLabel,
+  isProvisionalAuthority,
+} from "@/lib/labels";
+import { formatArea, formatCost } from "@/lib/format";
 
 function Section({ title, children }) {
   return (
@@ -76,7 +64,7 @@ export default function DecisionRecordPage({ params }) {
 
   const payload = planned.decision_payload || {};
   const rules = payload.rules || [];
-  const provisional = planned.decision_authority !== "definitive";
+  const provisional = isProvisionalAuthority(planned.decision_authority);
   const isDemo = planned.data_source === "demo" || planned.data_confidence === "simulated";
 
   return (
@@ -122,7 +110,10 @@ export default function DecisionRecordPage({ params }) {
               {provisional && ["approve", "block"].includes(planned.decision_outcome)
                 ? "PROVISIONAL "
                 : ""}
-              {OUTCOME_LABELS[planned.decision_outcome] || planned.decision_outcome}
+              {DECISION_OUTCOME_LABELS[planned.decision_outcome] || planned.decision_outcome}
+            </Badge>
+            <Badge variant={provisional ? "amber" : "green"}>
+              {decisionAuthorityLabel(planned.decision_authority)}
             </Badge>
             {isDemo && <Badge variant="outline">Simulated demo record</Badge>}
           </div>
@@ -140,11 +131,18 @@ export default function DecisionRecordPage({ params }) {
               <Row label="Expected harvest" value={farm.expected_harvest_date} />
               <Row
                 label="PHI/REI values source"
-                value={`${AUTHORITY_LABELS[planned.values_source] || planned.values_source}${
+                value={`${AUTHORITY_SOURCE_LABELS[planned.values_source] || planned.values_source}${
                   planned.values_entered_by ? ` (${planned.values_entered_by})` : ""
                 }`}
               />
             </div>
+            {planned.harvest_date_changed_since_check && (
+              <p className="mt-1.5 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                The farm&apos;s expected harvest date has changed since this check ran —
+                the calculations in this record use the harvest date entered at check
+                time. Re-run the check before relying on this decision.
+              </p>
+            )}
           </Section>
 
           <Section title="Checks performed">
@@ -156,7 +154,7 @@ export default function DecisionRecordPage({ params }) {
                       {r.triggered ? "⚠" : "✓"} {r.name}
                     </span>
                     <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
-                      {AUTHORITY_LABELS[r.source_authority] || r.source_authority} ·{" "}
+                      {AUTHORITY_SOURCE_LABELS[r.source_authority] || r.source_authority} ·{" "}
                       {r.verification_status}
                       {r.entered_by ? ` · ${r.entered_by}` : ""}
                     </span>
@@ -187,7 +185,10 @@ export default function DecisionRecordPage({ params }) {
 
           <Section title="PCA / agronomist review">
             <div className="grid gap-x-8 sm:grid-cols-2">
-              <Row label="Review status" value={planned.review_status.replace(/_/g, " ")} />
+              <Row
+                label="Review status"
+                value={REVIEW_STATE_LABELS[planned.review_state] || planned.review_state}
+              />
               <Row label="Reviewed by" value={planned.reviewed_by} />
               <Row
                 label="Reviewed on"
@@ -210,7 +211,7 @@ export default function DecisionRecordPage({ params }) {
             <div className="grid gap-x-8 sm:grid-cols-2">
               <Row
                 label="Outcome"
-                value={RECORDED_LABELS[planned.outcome] || planned.outcome}
+                value={RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
               />
               <Row label="Recorded on" value={planned.outcome_date} />
               {planned.outcome_product_name && (
@@ -223,6 +224,21 @@ export default function DecisionRecordPage({ params }) {
             {planned.outcome_reason && (
               <p className="mt-1 text-sm text-gray-700">
                 <span className="font-medium">Stated reason:</span> {planned.outcome_reason}
+              </p>
+            )}
+            {planned.outcome === "avoided" && planned.estimated_cost != null && (
+              <p className="mt-1.5 rounded bg-green-50 p-2 text-sm text-green-900">
+                Entered application cost not spent:{" "}
+                <span className="font-semibold">
+                  {formatCost(planned.estimated_cost, farm.country)}
+                </span>
+                {farm.greenhouse_area != null && (
+                  <> · planned across {formatArea(farm.greenhouse_area, farm.country)}</>
+                )}
+                <span className="text-xs text-green-800">
+                  {" "}
+                  (entered estimate; yield impact not yet known or measured)
+                </span>
               </p>
             )}
           </Section>

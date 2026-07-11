@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { api, API_BASE_URL } from "@/lib/api";
 import { formatArea, formatDate } from "@/lib/format";
+import { URGENCY_META } from "@/lib/labels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,32 +90,13 @@ function SectionCard({ title, icon, description, action, children }) {
   );
 }
 
-// Derive the single operational status chip for the farm header. Open pre-spray
-// decisions outrank record-level flags: the decision queue is the product.
-function deriveStatus(compliance, openPlanned) {
-  const openCritical = openPlanned.filter((p) => p.decision_severity === "critical");
-  const needsReview = openPlanned.filter(
-    (p) => p.review_required && !["approved", "edited", "rejected"].includes(p.review_status)
-  );
-  if (openCritical.length) return { label: "Blocked decision open", variant: "red" };
-  if (needsReview.length) return { label: "Needs PCA review", variant: "amber" };
-  if (openPlanned.length) return { label: "Awaiting outcome", variant: "amber" };
-  const anyFlag =
-    compliance &&
-    (compliance.phi_risk ||
-      compliance.rei_risk ||
-      compliance.repeated_active_ingredient_risk ||
-      compliance.high_severity_scouting);
-  if (anyFlag) return { label: "Risk flags", variant: "amber" };
-  return { label: "No open decisions", variant: "neutral" };
-}
-
 function FarmDetail({ farmId }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const [farm, setFarm] = useState(null);
+  const [overview, setOverview] = useState(null);
   const [sprays, setSprays] = useState([]);
   const [observations, setObservations] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
@@ -134,8 +116,9 @@ function FarmDetail({ farmId }) {
 
   const load = useCallback(async () => {
     try {
-      const [f, s, o, r, p, c] = await Promise.all([
+      const [f, ov, s, o, r, p, c] = await Promise.all([
         api.getFarm(farmId),
+        api.getFarmOverview(farmId),
         api.listSprayEvents(farmId),
         api.listScoutObservations(farmId),
         api.listRecommendations(farmId),
@@ -143,6 +126,7 @@ function FarmDetail({ farmId }) {
         api.getCompliance(farmId),
       ]);
       setFarm(f);
+      setOverview(ov);
       setSprays(s);
       setObservations(o);
       setRecommendations(r);
@@ -159,48 +143,22 @@ function FarmDetail({ farmId }) {
 
   const latest = recommendations[0] || null;
 
+  // Status, counts, and relative-day math all come from /farms/{id}/overview — the
+  // SAME server derivation the dashboard card uses, so the two views can never
+  // disagree. Only display-local bits (queue ordering, provenance lists) are derived
+  // here, and those use the server's per-row `is_open` field.
   const derived = useMemo(() => {
     const records = [...sprays, ...observations];
-    const isDemoFarm = records.length > 0 && records.every(isDemoRecord);
-    const openPlanned = planned.filter((p) => p.outcome === "planned");
-    const awaiting = openPlanned.length;
-    const needsReview = openPlanned.filter(
-      (p) => p.review_required && !["approved", "edited", "rejected"].includes(p.review_status)
-    ).length;
+    const openPlanned = planned.filter((p) => p.is_open);
     const hasDocumentedSkip = planned.some(
       (p) => p.outcome === "avoided" && !isDemoRecord(p)
     );
-    // Must count the SAME four signals as the dashboard card (/farms-overview
-    // flag_count) so the two views never disagree in a demo.
-    const riskFlags = compliance
-      ? [
-          compliance.phi_risk,
-          compliance.rei_risk,
-          compliance.repeated_active_ingredient_risk,
-          compliance.high_severity_scouting,
-        ].filter(Boolean).length
-      : 0;
-    const harvestDays = farm?.expected_harvest_date
-      ? Math.round(
-          (new Date(farm.expected_harvest_date) - new Date(new Date().toDateString())) / 86400000
-        )
-      : null;
     const provenanceSources = [...new Set(records.map((r) => r.data_source).filter(Boolean))];
     const provenanceConfidence = [
       ...new Set(records.map((r) => r.data_confidence).filter(Boolean)),
     ];
-    return {
-      isDemoFarm,
-      openPlanned,
-      awaiting,
-      needsReview,
-      hasDocumentedSkip,
-      riskFlags,
-      harvestDays,
-      provenanceSources,
-      provenanceConfidence,
-    };
-  }, [sprays, observations, planned, compliance, farm]);
+    return { openPlanned, hasDocumentedSkip, provenanceSources, provenanceConfidence };
+  }, [sprays, observations, planned]);
 
   if (error)
     return (
@@ -208,14 +166,16 @@ function FarmDetail({ farmId }) {
         {error} — is the backend running on <code>http://localhost:8000</code>?
       </div>
     );
-  if (!farm) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (!farm || !overview) return <p className="text-sm text-gray-500">Loading…</p>;
 
-  const status = deriveStatus(compliance, derived.openPlanned);
+  // Same urgency vocabulary as the dashboard card (shared via lib/labels.js).
+  const status = URGENCY_META[overview.urgency] || URGENCY_META.ok;
+  const isDemoFarm = overview.is_demo;
   // The decision queue: open checks first (review needed, then awaiting outcome),
   // then the most recent resolved ones.
   const queue = [
     ...derived.openPlanned,
-    ...planned.filter((p) => p.outcome !== "planned"),
+    ...planned.filter((p) => !p.is_open),
   ].slice(0, 3);
 
   return (
@@ -233,7 +193,7 @@ function FarmDetail({ farmId }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg font-semibold text-gray-900">{farm.name}</h1>
-              {derived.isDemoFarm && (
+              {isDemoFarm && (
                 <Badge variant="outline">
                   <FlaskConical />
                   Simulated demo data
@@ -252,37 +212,37 @@ function FarmDetail({ farmId }) {
         </div>
       </div>
 
-      {/* KPI row */}
+      {/* KPI row — every number is the server's overview entry (dashboard parity). */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi
           icon={CalendarClock}
           label="Upcoming harvest"
           value={formatDate(farm.expected_harvest_date)}
           hint={
-            derived.harvestDays == null
+            overview.days_to_harvest == null
               ? null
-              : derived.harvestDays >= 0
-              ? `in ${derived.harvestDays} day${derived.harvestDays === 1 ? "" : "s"}`
-              : `${-derived.harvestDays} days ago`
+              : overview.days_to_harvest >= 0
+              ? `in ${overview.days_to_harvest} day${overview.days_to_harvest === 1 ? "" : "s"}`
+              : `${-overview.days_to_harvest} days ago`
           }
         />
         <Kpi
           icon={ClipboardCheck}
           label="Decisions needing PCA review"
-          value={derived.needsReview}
-          tone={derived.needsReview > 0 ? "amber" : "neutral"}
+          value={overview.needs_review_count}
+          tone={overview.needs_review_count > 0 ? "amber" : "neutral"}
         />
         <Kpi
           icon={ListChecks}
           label="Checked sprays awaiting outcome"
-          value={derived.awaiting}
-          tone={derived.awaiting > 0 ? "amber" : "neutral"}
+          value={overview.awaiting_outcome_count}
+          tone={overview.awaiting_outcome_count > 0 ? "amber" : "neutral"}
         />
         <Kpi
           icon={TriangleAlert}
           label="Risk flags"
-          value={derived.riskFlags}
-          tone={derived.riskFlags > 0 ? "amber" : "neutral"}
+          value={overview.flag_count}
+          tone={overview.flag_count > 0 ? "amber" : "neutral"}
           hint="PHI · REI · rotation · scouting"
         />
       </div>
@@ -293,9 +253,9 @@ function FarmDetail({ farmId }) {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="planned">
             Planned sprays
-            {derived.awaiting > 0 && (
+            {overview.awaiting_outcome_count > 0 && (
               <span className="rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-800">
-                {derived.awaiting}
+                {overview.awaiting_outcome_count}
               </span>
             )}
           </TabsTrigger>
@@ -325,6 +285,7 @@ function FarmDetail({ farmId }) {
                 <PlannedSprayList
                   planned={queue}
                   onChanged={load}
+                  country={farm.country}
                   emptyText='No pre-spray decisions yet — use "Check a planned spray" before the next application.'
                 />
               </SectionCard>
@@ -367,7 +328,7 @@ function FarmDetail({ farmId }) {
                         : "—"}
                     </span>
                   </div>
-                  {derived.isDemoFarm && (
+                  {isDemoFarm && (
                     <p className="rounded bg-gray-50 px-2 py-1 text-[11px] text-gray-500">
                       Seeded demo farm — all records are simulated.
                     </p>
@@ -389,7 +350,7 @@ function FarmDetail({ farmId }) {
             icon={<ListChecks />}
             description="Every pre-spray decision with its snapshot, PCA review, and recorded outcome. Every outcome except “sprayed as planned” requires a stated reason."
           >
-            <PlannedSprayList planned={planned} onChanged={load} />
+            <PlannedSprayList planned={planned} onChanged={load} country={farm.country} />
           </SectionCard>
         </TabsContent>
 
@@ -477,7 +438,7 @@ function FarmDetail({ farmId }) {
         {/* ------------------------------------------------------------- Evidence */}
         <TabsContent value="evidence">
           <div className="space-y-4">
-            {derived.isDemoFarm && (
+            {isDemoFarm && (
               <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
@@ -498,7 +459,8 @@ function FarmDetail({ farmId }) {
               <DecisionEvidenceCard
                 farmId={farmId}
                 country={farm.country}
-                refreshKey={`${planned.length}-${planned.filter((p) => p.outcome !== "planned").length}`}
+                area={farm.greenhouse_area}
+                refreshKey={`${planned.length}-${planned.filter((p) => !p.is_open).length}`}
               />
             </SectionCard>
 

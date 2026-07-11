@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/api";
+import SprayImportCard from "@/components/SprayImportCard";
 
 const EMPTY_SPRAY = {
   product_name: "",
@@ -15,7 +16,7 @@ const EMPTY_SPRAY = {
 
 // Local-demo-friendly intake: capture a real pilot farm + its last 3 sprays + a concern.
 export default function PilotFarmIntakePage() {
-  const router = useRouter();
+  const [createdFarm, setCreatedFarm] = useState(null);
   const [farm, setFarm] = useState({
     name: "",
     location: "",
@@ -67,15 +68,44 @@ export default function PilotFarmIntakePage() {
         scouting_severity_1_to_5: concern.severity === "" ? null : Number(concern.severity),
       };
       const created = await api.createPilotFarm(payload);
-      router.push(`/farms/${created.id}`);
+      // Stay on this page: offer the full spray-history import before opening the farm.
+      setCreatedFarm(created);
     } catch (err) {
       setError(err.message);
+    } finally {
       setSaving(false);
     }
   }
 
   const input = "w-full rounded border px-2 py-1 text-sm";
   const label = "text-xs font-medium text-gray-600";
+
+  if (createdFarm) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-lg font-semibold">
+            {createdFarm.name} created
+          </h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Optional: import their full spray history now — paste rows from a
+            spreadsheet or upload a CSV. You can also do this later from the farm&apos;s
+            Records tab.
+          </p>
+        </div>
+        <section className="rounded-lg border bg-white p-5 shadow-sm">
+          <h2 className="mb-3 font-semibold">Import spray history</h2>
+          <SprayImportCard farmId={createdFarm.id} />
+        </section>
+        <Link
+          href={`/farms/${createdFarm.id}`}
+          className="inline-block rounded bg-leaf px-4 py-2 text-sm font-medium text-white"
+        >
+          Open {createdFarm.name} →
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -163,7 +193,7 @@ export default function PilotFarmIntakePage() {
 
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button type="submit" disabled={saving} className="rounded bg-leaf px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-          {saving ? "Creating…" : "Create pilot farm & open it"}
+          {saving ? "Creating…" : "Create pilot farm"}
         </button>
       </form>
     </div>

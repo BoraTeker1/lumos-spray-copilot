@@ -5,14 +5,13 @@ No auth in v1, but handlers are kept stateless so an auth dependency can be adde
 """
 import csv
 import io
-from datetime import date, datetime
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app import crud, schemas
+from app import clock, crud, decision_status, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
 from app.pilot_evidence import (
@@ -69,6 +68,77 @@ def post_farm(payload: schemas.FarmCreate, db: Session = Depends(get_db)):
     return crud.create_farm(db, payload)
 
 
+def _farm_overview_entry(db: Session, farm) -> dict:
+    """One farm's action-oriented status entry — the ONLY derivation of the dashboard
+    counts. The farm-detail page consumes the same entry via /farms/{id}/overview so
+    the card and the page can never disagree. Predicates come from decision_status.
+    """
+    today = clock.current_date()
+    sprays = crud.list_spray_events(db, farm.id)
+    observations = crud.list_scout_observations(db, farm.id)
+    planned = crud.list_planned_sprays(db, farm.id)
+    signals = generate_recommendation(farm, sprays, observations, today=today).signals
+
+    counts = decision_status.status_counts(planned)
+    flag_count = sum(
+        1 for k in (
+            "phi_risk", "rei_risk", "repeated_active_ingredient_risk",
+            "high_severity_scouting",
+        ) if signals.get(k)
+    )
+
+    if counts["open_conflict_count"]:
+        urgency, why = "conflict", (
+            f"{counts['open_conflict_count']} planned spray(s) conflict with entered "
+            f"harvest/re-entry timing"
+        )
+        next_action = "Resolve the blocked pre-spray decision with your PCA"
+    elif counts["needs_review_count"]:
+        urgency, why = "needs_review", (
+            f"{counts['needs_review_count']} pre-spray decision(s) awaiting PCA review"
+        )
+        next_action = "Review the pending pre-spray decision(s)"
+    elif counts["awaiting_outcome_count"]:
+        urgency, why = "awaiting_outcome", (
+            f"{counts['awaiting_outcome_count']} checked spray(s) without a recorded outcome"
+        )
+        next_action = "Record what actually happened for the checked spray(s)"
+    elif flag_count:
+        urgency, why = "flags", (
+            f"{flag_count} PHI/REI/resistance/scouting flag(s) from current records"
+        )
+        next_action = "Open the pre-spray risk snapshot and review the flags"
+    else:
+        urgency, why = "ok", "No open decisions or risk flags from current records"
+        next_action = "Run a pre-spray check before the next planned application"
+
+    records = list(sprays) + list(observations)
+    return {
+        "id": farm.id,
+        "name": farm.name,
+        "location": farm.location,
+        "country": farm.country,
+        "crop_type": farm.crop_type,
+        "area": farm.greenhouse_area,
+        "expected_harvest_date": _iso(farm.expected_harvest_date),
+        # Server-computed so every "in N days" label agrees with the engine's day math
+        # (client-side Date parsing is timezone-dependent and can be off by one).
+        "days_to_harvest": (
+            (farm.expected_harvest_date - today).days
+            if farm.expected_harvest_date else None
+        ),
+        "urgency": urgency,
+        "why": why,
+        "next_action": next_action,
+        **counts,
+        "flag_count": flag_count,
+        "spray_count": len(sprays),
+        "is_demo": bool(records) and all(
+            decision_status.is_demo_record(r) for r in records
+        ),
+    }
+
+
 # NOTE: declared before /farms/{farm_id} so "overview" isn't parsed as a farm id.
 @app.get("/farms-overview", tags=["farms"])
 def farms_overview(db: Session = Depends(get_db)):
@@ -79,74 +149,7 @@ def farms_overview(db: Session = Depends(get_db)):
     awaits PCA review) > awaiting_outcome > flags (record-level PHI/REI/resistance/
     scouting flags) > ok.
     """
-    out = []
-    for farm in crud.list_farms(db):
-        sprays = crud.list_spray_events(db, farm.id)
-        observations = crud.list_scout_observations(db, farm.id)
-        planned = crud.list_planned_sprays(db, farm.id)
-        signals = generate_recommendation(farm, sprays, observations).signals
-
-        open_planned = [p for p in planned if p.outcome == "planned"]
-        needs_review = [
-            p for p in open_planned
-            if p.review_required and p.review_status not in ("approved", "edited", "rejected")
-        ]
-        open_critical = [p for p in open_planned if p.decision_severity == "critical"]
-        flag_count = sum(
-            1 for k in (
-                "phi_risk", "rei_risk", "repeated_active_ingredient_risk",
-                "high_severity_scouting",
-            ) if signals.get(k)
-        )
-
-        if open_critical:
-            urgency, why = "conflict", (
-                f"{len(open_critical)} planned spray(s) conflict with entered "
-                f"harvest/re-entry timing"
-            )
-            next_action = "Resolve the blocked pre-spray decision with your PCA"
-        elif needs_review:
-            urgency, why = "needs_review", (
-                f"{len(needs_review)} pre-spray decision(s) awaiting PCA review"
-            )
-            next_action = "Review the pending pre-spray decision(s)"
-        elif open_planned:
-            urgency, why = "awaiting_outcome", (
-                f"{len(open_planned)} checked spray(s) without a recorded outcome"
-            )
-            next_action = "Record what actually happened for the checked spray(s)"
-        elif flag_count:
-            urgency, why = "flags", (
-                f"{flag_count} PHI/REI/resistance/scouting flag(s) from current records"
-            )
-            next_action = "Open the pre-spray risk snapshot and review the flags"
-        else:
-            urgency, why = "ok", "No open decisions or risk flags from current records"
-            next_action = "Run a pre-spray check before the next planned application"
-
-        records = list(sprays) + list(observations)
-        out.append({
-            "id": farm.id,
-            "name": farm.name,
-            "location": farm.location,
-            "country": farm.country,
-            "crop_type": farm.crop_type,
-            "area": farm.greenhouse_area,
-            "expected_harvest_date": _iso(farm.expected_harvest_date),
-            "urgency": urgency,
-            "why": why,
-            "next_action": next_action,
-            "needs_review_count": len(needs_review),
-            "awaiting_outcome_count": len(open_planned),
-            "open_conflict_count": len(open_critical),
-            "flag_count": flag_count,
-            "spray_count": len(sprays),
-            "is_demo": bool(records) and all(
-                (r.data_source == "demo" or r.data_confidence == "simulated")
-                for r in records
-            ),
-        })
-
+    out = [_farm_overview_entry(db, farm) for farm in crud.list_farms(db)]
     rank = {"conflict": 0, "needs_review": 1, "awaiting_outcome": 2, "flags": 3, "ok": 4}
     out.sort(key=lambda f: (rank.get(f["urgency"], 9), f["id"]))
     return out
@@ -157,6 +160,13 @@ def _require_farm(db: Session, farm_id: int):
     if farm is None:
         raise HTTPException(status_code=404, detail="Farm not found")
     return farm
+
+
+@app.get("/farms/{farm_id}/overview", tags=["farms"])
+def farm_overview(farm_id: int, db: Session = Depends(get_db)):
+    """The same status entry the dashboard shows for this farm (single derivation)."""
+    farm = _require_farm(db, farm_id)
+    return _farm_overview_entry(db, farm)
 
 
 @app.get("/farms/{farm_id}", response_model=schemas.Farm, tags=["farms"])
@@ -279,7 +289,7 @@ async def analyze_field_photo(
     except Exception as exc:  # surface model/transport failures cleanly, never 500-crash the demo
         raise HTTPException(status_code=502, detail=f"Photo analysis failed: {exc}") from exc
 
-    return build_analysis_result(finding)
+    return build_analysis_result(finding, today=clock.current_date())
 
 
 # --------------------------------------------------------------- Planned sprays
@@ -366,6 +376,8 @@ def patch_planned_spray_outcome(
         return crud.record_planned_spray_outcome(db, planned, payload)
     except crud.ReviewRequiredError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except crud.OutcomeChronologyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/farms/{farm_id}/decision-evidence", tags=["planned-sprays"])
@@ -430,7 +442,7 @@ def farm_analytics(farm_id: int, db: Session = Depends(get_db)):
     """Pesticide cost analytics for one farm's current crop cycle."""
     _require_farm(db, farm_id)
     sprays = crud.list_spray_events(db, farm_id)
-    return compute_cost_analytics(sprays)
+    return compute_cost_analytics(sprays, today=clock.current_date())
 
 
 # ------------------------------------------------------------------- Weather
@@ -452,10 +464,12 @@ def farm_compliance(farm_id: int, db: Session = Depends(get_db)):
     farm = _require_farm(db, farm_id)
     sprays = crud.list_spray_events(db, farm_id)
     observations = crud.list_scout_observations(db, farm_id)
-    result = generate_recommendation(farm, sprays, observations)
+    result = generate_recommendation(farm, sprays, observations, today=clock.current_date())
     weather = default_weather_service.get_weather_risk(farm.location)
     recs = crud.list_recommendations(db, farm_id)
     latest = recs[0] if recs else None
+    planned = crud.list_planned_sprays(db, farm_id)
+    review_states = [decision_status.review_state(p) for p in planned]
 
     return {
         "risk_level": result.risk_level,
@@ -468,7 +482,21 @@ def farm_compliance(farm_id: int, db: Session = Depends(get_db)):
         "max_recent_severity": result.signals.get("max_recent_severity", 0),
         "high_severity_scouting": result.signals.get("high_severity_scouting", False),
         "weather_risk_level": weather["risk_level"],
-        "review_status": latest.agronomist_status if latest else "none",
+        # Review status of the latest farm-wide WEEKLY recommendation — NOT the
+        # pre-spray decisions. Renamed so the UI can never present it as the decision
+        # queue's review state (that lives in `decision_review` below).
+        "recommendation_review_status": latest.agronomist_status if latest else "none",
+        # Canonical pre-spray decision review summary (decision_status semantics).
+        "decision_review": {
+            "pending": review_states.count("pending"),
+            "approved": review_states.count("approved"),
+            "edited": review_states.count("edited"),
+            "rejected": review_states.count("rejected"),
+            "not_required": review_states.count("not_required"),
+            "needs_review_count": sum(
+                1 for p in planned if decision_status.needs_review(p)
+            ),
+        },
         "advisor_label": _advisor_label(farm),
         # Honest framing for the UI: these signals come from user-entered PHI/REI values,
         # not from a verified pesticide-label database.
@@ -490,10 +518,12 @@ def weekly_report(farm_id: int, db: Session = Depends(get_db)):
     observations = crud.list_scout_observations(db, farm_id)
     recs = crud.list_recommendations(db, farm_id)
     latest_rec = recs[0] if recs else None
-    analytics = compute_cost_analytics(sprays)
+    analytics = compute_cost_analytics(sprays, today=clock.current_date())
     weather = default_weather_service.get_weather_risk(farm.location)
     # Current compliance signals (PHI / REI / repeated-AI) for the report's flag block.
-    signals = generate_recommendation(farm, sprays, observations).signals
+    signals = generate_recommendation(
+        farm, sprays, observations, today=clock.current_date()
+    ).signals
 
     text = _build_weekly_report_text(
         farm, len(sprays), len(observations), latest_rec, analytics, weather, signals
@@ -544,7 +574,7 @@ def _build_weekly_report_text(
 
     lines = [
         f"{crop_icon} Lumos Weekly Report — {farm.name}",
-        f"Location: {farm.location} · {date.today().isoformat()}",
+        f"Location: {farm.location} · {clock.current_date().isoformat()}",
         "",
         f"Weather risk: {weather['risk_level'].upper()} — {weather['summary']}",
         "",
@@ -590,11 +620,41 @@ def _build_weekly_report_text(
     return "\n".join(lines)
 
 
+# ----------------------------------------------------------------- PCA policies
+@app.get(
+    "/farms/{farm_id}/pca-policies",
+    response_model=list[schemas.PcaPolicy],
+    tags=["pca-policies"],
+)
+def get_pca_policies(farm_id: int, db: Session = Depends(get_db)):
+    """The farm's current PCA-entered action thresholds (latest per target wins)."""
+    _require_farm(db, farm_id)
+    return crud.list_pca_policies(db, farm_id)
+
+
+@app.put(
+    "/farms/{farm_id}/pca-policies",
+    response_model=schemas.PcaPolicy,
+    tags=["pca-policies"],
+)
+def put_pca_policy(
+    farm_id: int, payload: schemas.PcaPolicyCreate, db: Session = Depends(get_db)
+):
+    """Record a PCA-entered action threshold for one target (attributed, never invented).
+
+    The pre-spray check's scouting rule reads it with source_authority=pca_entered:
+    without recent linked scouting at or above the threshold, the check returns
+    INSPECT FIRST instead of relying on a rule-of-thumb heuristic.
+    """
+    _require_farm(db, farm_id)
+    return crud.set_pca_policy(db, farm_id, payload)
+
+
 # ------------------------------------------------------ Reduction measurement
 def _farm_reduction(db: Session, farm, sprays) -> dict:
     """Measure spray reduction for a farm against its current baseline (if any)."""
     baseline = crud.get_spray_baseline(db, farm.id)
-    return compute_reduction(farm, sprays, baseline)
+    return compute_reduction(farm, sprays, baseline, today=clock.current_date())
 
 
 @app.get("/farms/{farm_id}/spray-baseline", tags=["reduction"])
@@ -640,7 +700,7 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
     sprays = crud.list_spray_events(db, farm_id)
     observations = crud.list_scout_observations(db, farm_id)
     recs = crud.list_recommendations(db, farm_id)
-    analytics = compute_cost_analytics(sprays)
+    analytics = compute_cost_analytics(sprays, today=clock.current_date())
     weather = default_weather_service.get_weather_risk(farm.location)
     return build_pilot_evidence(
         farm,
@@ -652,6 +712,7 @@ def farm_pilot_evidence(farm_id: int, db: Session = Depends(get_db)):
         advisor_label=_advisor_label(farm),
         reduction=_farm_reduction(db, farm, sprays),
         planned_sprays=crud.list_planned_sprays(db, farm_id),
+        today=clock.current_date(),
     )
 
 
@@ -693,12 +754,13 @@ def farm_pilot_case_study(farm_id: int, db: Session = Depends(get_db)):
     sprays = crud.list_spray_events(db, farm_id)
     observations = crud.list_scout_observations(db, farm_id)
     recs = crud.list_recommendations(db, farm_id)
-    analytics = compute_cost_analytics(sprays)
+    analytics = compute_cost_analytics(sprays, today=clock.current_date())
     weather = default_weather_service.get_weather_risk(farm.location)
     advisor = _advisor_label(farm)
     evidence = build_pilot_evidence(
         farm, sprays, observations, recs, analytics, weather["risk_level"],
         advisor_label=advisor, reduction=_farm_reduction(db, farm, sprays),
+        today=clock.current_date(),
     )
     records = list(sprays) + list(observations)
     data_sources = _distinct_provenance(records, "data_source")
@@ -722,9 +784,9 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
     sprays = crud.list_spray_events(db, farm_id)
     observations = crud.list_scout_observations(db, farm_id)
     recs = crud.list_recommendations(db, farm_id)
-    analytics = compute_cost_analytics(sprays)
+    analytics = compute_cost_analytics(sprays, today=clock.current_date())
     weather = default_weather_service.get_weather_risk(farm.location)
-    result = generate_recommendation(farm, sprays, observations)
+    result = generate_recommendation(farm, sprays, observations, today=clock.current_date())
     batches = crud.list_pilot_import_batches(db, farm_id)
     latest_rec = recs[0] if recs else None
     report_text = _build_weekly_report_text(
@@ -732,7 +794,7 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
     )
 
     return {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": clock.current_datetime().isoformat() + "Z",
         "advisor_label": _advisor_label(farm),
         "farm_profile": {
             "id": farm.id,
@@ -850,6 +912,30 @@ def post_pilot_event(payload: schemas.PilotEventCreate, db: Session = Depends(ge
     automatically by their own endpoints — clients should not send those.
     """
     return crud.create_pilot_event(db, payload)
+
+
+@app.post("/internal/demo/reset", tags=["internal"])
+def reset_demo(db: Session = Depends(get_db)):
+    """Drop and re-seed the demo database, anchored to the current app-clock date.
+
+    Refuses (409) when ANYTHING in the DB might be real pilot data — seeding drops
+    every table, and real records must never be one accidental click away from
+    deletion. The dashboard's "Reset YC demo" button calls this.
+    """
+    if crud.has_non_demo_data(db):
+        raise HTTPException(
+            status_code=409,
+            detail="Refusing to reset: this database contains data that is not "
+            "demo/simulated. The demo reset drops every table and is only allowed "
+            "on an all-demo database.",
+        )
+    # seed.run() drops all tables on its own connection; release this request's
+    # session first so SQLite isn't locked by our open transaction.
+    db.close()
+    from app import seed  # local import: seeding is not part of normal request flow
+
+    summary = seed.run()
+    return {"status": "reseeded", **(summary or {})}
 
 
 @app.get("/internal/instrumentation", tags=["internal"])

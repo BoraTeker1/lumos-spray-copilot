@@ -64,8 +64,23 @@ AUTHORITY_LABELS = {
     AUTHORITY_HEURISTIC: "heuristic (rule-of-thumb threshold)",
 }
 
-LEVEL_DEFINITIVE = "definitive"
+# Decision authority levels — how strongly the determining inputs back the verdict.
+# Three honest levels replace the old binary "definitive"/"provisional":
+#   verified_label_grounded — every determining check backed by verified label data.
+#     Deliberately unreachable today (no label database exists); the level exists so
+#     the gate is already correct the day label data arrives.
+#   pca_authorized — every determining check backed by PCA-entered (or verified)
+#     values. A licensed PCA supplied the inputs; still not label-verified.
+#   provisional — anything else; a PCA must confirm before it is relied on.
+LEVEL_VERIFIED_LABEL = "verified_label_grounded"
+LEVEL_PCA_AUTHORIZED = "pca_authorized"
 LEVEL_PROVISIONAL = "provisional"
+
+DECISION_AUTHORITY_LABELS = {
+    LEVEL_VERIFIED_LABEL: "Verified-label grounded",
+    LEVEL_PCA_AUTHORIZED: "PCA-authorized",
+    LEVEL_PROVISIONAL: "Provisional",
+}
 
 # Appended verbatim to every decision so nobody mistakes user-entered PHI/REI values
 # for label-verified ones.
@@ -119,8 +134,9 @@ class PlannedSprayDecision:
     review_required: bool = True
     narrative: str = ""            # cautious plain-text summary (stored as check_text)
     disclaimer: str = PLANNED_SPRAY_DISCLAIMER
-    # Authority gating: "definitive" only when the determining rules are backed by a
-    # verified label or PCA-entered values; otherwise "provisional" (PCA must confirm).
+    # Authority gating: verified_label_grounded / pca_authorized only when the
+    # determining rules are backed by those sources; otherwise provisional (a PCA
+    # must confirm before the result is relied on).
     authority_level: str = LEVEL_PROVISIONAL
     authority_basis: str = ""
 
@@ -177,6 +193,7 @@ def evaluate_planned_spray(
     planned,
     spray_events,
     scout_observations,
+    pca_policies=None,
     today: date | None = None,
 ) -> PlannedSprayDecision:
     """Check an intended spray before it happens and return one explainable outcome.
@@ -187,6 +204,9 @@ def evaluate_planned_spray(
     planned: object with `intended_date`, `product_name`, `active_ingredient`,
         `target_pest_or_disease`, `pre_harvest_interval_days`, `re_entry_interval_hours`.
     spray_events / scout_observations: the farm's current records (duck-typed).
+    pca_policies: PCA-entered action thresholds (objects with `target_pest_or_disease`,
+        `min_severity_to_treat`, `entered_by`). Optional — without a matching policy
+        the scouting rule stays a plain heuristic; a threshold is NEVER invented.
     today: injectable "current date" for deterministic testing.
     """
     if today is None:
@@ -194,6 +214,7 @@ def evaluate_planned_spray(
 
     spray_events = list(spray_events or [])
     scout_observations = list(scout_observations or [])
+    pca_policies = list(pca_policies or [])
 
     decision = PlannedSprayDecision()
 
@@ -236,12 +257,14 @@ def evaluate_planned_spray(
             "Expected harvest date is not set on the farm — the PHI and harvest re-entry "
             "checks could not run."
         )
-    if not phi:
+    # `is None` deliberately: PHI 0 days / REI 0 hours are real label values (the check
+    # runs and passes), not missing data.
+    if phi is None:
         missing.append(
             "No PHI (days) entered for this product — the pre-harvest interval check "
             "could not run."
         )
-    if not rei_hours:
+    if rei_hours is None:
         missing.append(
             "No REI (hours) entered for this product — the re-entry interval checks "
             "could not run."
@@ -259,7 +282,7 @@ def evaluate_planned_spray(
 
     # ------------------------------------------- Rule 1: PHI vs. expected harvest
     phi_conflict = False
-    if harvest is not None and phi:
+    if harvest is not None and phi is not None:
         phi_clears_on = intended + timedelta(days=phi)
         phi_conflict = harvest < phi_clears_on
         decision.rules.append(DecisionRule(
@@ -293,7 +316,7 @@ def evaluate_planned_spray(
     # Hand-harvest crews cannot enter while the REI is active. Rounded up to whole
     # days (cautious) because records have date granularity.
     rei_harvest_conflict = False
-    if harvest is not None and rei_hours:
+    if harvest is not None and rei_hours is not None:
         rei_days = math.ceil(rei_hours / 24)
         rei_clears_on = intended + timedelta(days=rei_days)
         rei_harvest_conflict = harvest < rei_clears_on
@@ -393,7 +416,11 @@ def evaluate_planned_spray(
 
     # --------------------------------------- Rule 5: linked scouting evidence
     # Exact normalized match only — anything less counts as "not explicitly linked",
-    # which is all this rule claims.
+    # which is all this rule claims. When the farm has a PCA-entered action threshold
+    # for this target, the rule additionally requires the linked scouting pressure to
+    # reach that threshold, and the rule's authority becomes pca_entered (attributed).
+    # Without a policy the behavior is the plain heuristic — a threshold is NEVER
+    # invented by Lumos.
     scouting_linked = False
     if target:
         recent_obs = _recent(scout_observations, "observation_date", today)
@@ -401,25 +428,86 @@ def evaluate_planned_spray(
             o for o in recent_obs
             if (getattr(o, "visible_issue", None) or "").strip().lower() == target
         ]
-        scouting_linked = bool(linked)
-        decision.rules.append(DecisionRule(
-            rule_id="scouting_evidence",
-            name="Scouting evidence for the stated target",
-            triggered=not scouting_linked,
-            severity=SEVERITY_NONE if scouting_linked else SEVERITY_CAUTION,
-            detail=(
-                f"A recent scouting observation explicitly referencing '{target}' was "
-                f"found (logged {linked[0].observation_date.isoformat()})."
-                if scouting_linked
-                else f"No scouting observation explicitly referencing '{target}' in the "
-                f"last {RECENT_WINDOW_DAYS} days — no logged evidence of pressure."
+        policy = next(
+            (
+                p for p in pca_policies
+                if (getattr(p, "target_pest_or_disease", None) or "").strip().lower()
+                == target
             ),
-            calculation=None,
-            inputs={
-                "target_pest_or_disease": target,
-                "recent_observations_checked": len(recent_obs),
-            },
-        ))
+            None,
+        )
+        if policy is not None:
+            threshold = policy.min_severity_to_treat
+            severities = [
+                s for s in (getattr(o, "severity_1_to_5", None) for o in linked)
+                if s is not None
+            ]
+            max_linked_severity = max(severities) if severities else None
+            evidence_sufficient = (
+                max_linked_severity is not None and max_linked_severity >= threshold
+            )
+            if evidence_sufficient:
+                detail = (
+                    f"Recent scouting for '{target}' shows severity "
+                    f"{max_linked_severity}, at or above the PCA-entered action "
+                    f"threshold of {threshold} (logged "
+                    f"{linked[0].observation_date.isoformat()})."
+                )
+            elif linked:
+                detail = (
+                    f"PCA-entered action threshold for '{target}': treat only if "
+                    f"scouting severity >= {threshold}; the latest linked scouting "
+                    f"severity is {max_linked_severity if max_linked_severity is not None else 'not recorded'}"
+                    f" — below the entered threshold."
+                )
+            else:
+                detail = (
+                    f"PCA-entered action threshold for '{target}': treat only if "
+                    f"scouting severity >= {threshold}; no scouting observation "
+                    f"referencing '{target}' in the last {RECENT_WINDOW_DAYS} days."
+                )
+            decision.rules.append(DecisionRule(
+                rule_id="scouting_evidence",
+                name="Scouting evidence vs. PCA-entered action threshold",
+                triggered=not evidence_sufficient,
+                severity=SEVERITY_NONE if evidence_sufficient else SEVERITY_CAUTION,
+                detail=detail,
+                calculation=(
+                    f"max linked severity "
+                    f"{max_linked_severity if max_linked_severity is not None else '—'} "
+                    f"vs. PCA-entered threshold {threshold}"
+                ),
+                inputs={
+                    "target_pest_or_disease": target,
+                    "recent_observations_checked": len(recent_obs),
+                    "max_linked_severity": max_linked_severity,
+                    "pca_entered_threshold": threshold,
+                    "policy_entered_by": getattr(policy, "entered_by", None),
+                },
+                source_authority=AUTHORITY_PCA,
+                entered_by=getattr(policy, "entered_by", None),
+            ))
+            scouting_linked = evidence_sufficient
+        else:
+            scouting_linked = bool(linked)
+            decision.rules.append(DecisionRule(
+                rule_id="scouting_evidence",
+                name="Scouting evidence for the stated target",
+                triggered=not scouting_linked,
+                severity=SEVERITY_NONE if scouting_linked else SEVERITY_CAUTION,
+                detail=(
+                    f"A recent scouting observation explicitly referencing '{target}' was "
+                    f"found (logged {linked[0].observation_date.isoformat()})."
+                    if scouting_linked
+                    else f"No scouting observation explicitly referencing '{target}' in the "
+                    f"last {RECENT_WINDOW_DAYS} days — no logged evidence of pressure."
+                ),
+                calculation=None,
+                inputs={
+                    "target_pest_or_disease": target,
+                    "recent_observations_checked": len(recent_obs),
+                },
+            ))
 
     # --------------------------------------- Rule 6: missing-data escalation
     decision.rules.append(DecisionRule(
@@ -459,8 +547,8 @@ def evaluate_planned_spray(
     # A verdict is only as authoritative as the weakest source that determined it.
     # block: determined by the triggered critical rules. approve: determined by EVERY
     # rule that ran (the "all clear" claim rests on all of them). Since the rotation
-    # and scouting checks are heuristics, a definitive approve is impossible until
-    # verified label data exists — by design.
+    # and scouting checks are heuristics, a label-grounded or PCA-authorized approve
+    # is impossible until verified label data exists — by design.
     if decision.outcome == OUTCOME_BLOCK:
         determining = [
             r for r in decision.triggered_rules if r.severity == SEVERITY_CRITICAL
@@ -471,12 +559,23 @@ def evaluate_planned_spray(
         determining = []  # delay / inspect_first / pca_review are inherently provisional
 
     if determining and all(
+        r.source_authority == AUTHORITY_VERIFIED_LABEL for r in determining
+    ):
+        # Unreachable today (no label database) — kept so the gate is already correct
+        # the day verified label data exists.
+        decision.authority_level = LEVEL_VERIFIED_LABEL
+        decision.authority_basis = (
+            "Verified-label grounded: every determining check is backed by verified "
+            "label data."
+        )
+    elif determining and all(
         r.source_authority in DEFINITIVE_AUTHORITIES for r in determining
     ):
-        decision.authority_level = LEVEL_DEFINITIVE
+        decision.authority_level = LEVEL_PCA_AUTHORIZED
         sources = sorted({AUTHORITY_LABELS[r.source_authority] for r in determining})
         decision.authority_basis = (
-            f"Definitive: every determining check is backed by {' and '.join(sources)}."
+            f"PCA-authorized: every determining check is backed by {' and '.join(sources)} "
+            f"— a licensed PCA supplied the inputs; not independently label-verified."
         )
     else:
         decision.authority_level = LEVEL_PROVISIONAL
@@ -551,7 +650,8 @@ def _build_narrative(decision: PlannedSprayDecision, product: str) -> str:
         header = header.replace("Outcome: ", "Outcome: PROVISIONAL ", 1)
     lines = [
         header,
-        f"Authority: {decision.authority_level} — {decision.authority_basis}",
+        f"Authority: {DECISION_AUTHORITY_LABELS[decision.authority_level]} — "
+        f"{decision.authority_basis}",
         f"Required next action: {decision.required_next_action}",
         f"Confidence: {decision.confidence} (based on how complete the entered data is).",
         "",

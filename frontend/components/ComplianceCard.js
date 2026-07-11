@@ -50,10 +50,31 @@ export default function ComplianceCard({ data }) {
           okText="Low"
         />
       </div>
+      {/* Pre-spray decision reviews (the canonical decision-queue state) — kept
+          strictly separate from the weekly recommendation's review status so an
+          edited decision can never read as "review: none". */}
+      {data.decision_review && (
+        <div className="mt-2 border-t border-gray-100 pt-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-gray-600">Pre-spray decisions</span>
+            <Badge variant={data.decision_review.needs_review_count > 0 ? "amber" : "neutral"}>
+              {data.decision_review.needs_review_count > 0
+                ? `${data.decision_review.needs_review_count} pending review`
+                : "none pending"}
+            </Badge>
+          </div>
+          <p className="mt-1 text-[11px] text-gray-500">
+            {data.decision_review.approved} approved · {data.decision_review.edited} edited ·{" "}
+            {data.decision_review.rejected} rejected
+          </p>
+        </div>
+      )}
       <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2">
-        <span className="text-xs text-gray-600">{data.advisor_label} review</span>
-        <Badge variant={REVIEW_VARIANTS[data.review_status] || "neutral"}>
-          {data.review_status}
+        <span className="text-xs text-gray-600">
+          Weekly review (recommendations)
+        </span>
+        <Badge variant={REVIEW_VARIANTS[data.recommendation_review_status] || "neutral"}>
+          {data.recommendation_review_status}
         </Badge>
       </div>
     </div>

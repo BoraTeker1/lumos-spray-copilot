@@ -20,8 +20,10 @@ def _create_farm(client, **overrides):
 
 
 def _create_planned(client, farm_id, **overrides):
+    # Intended today: recording an outcome "today" then satisfies the chronology
+    # invariant (outcome/application date must never precede the intended date).
     payload = {
-        "intended_date": (date.today() + timedelta(days=1)).isoformat(),
+        "intended_date": date.today().isoformat(),
         "product_name": "Captan 80WDG",
         "active_ingredient": "captan",
         "target_pest_or_disease": "botrytis",
@@ -47,7 +49,7 @@ def _approve(client, planned_id, **overrides):
 def test_create_planned_spray_returns_explainable_decision(client):
     farm_row = _create_farm(client)
     planned_row = _create_planned(client, farm_row["id"])
-    # PHI 7d from tomorrow clears after the day-3 harvest -> block.
+    # PHI 7d from today clears after the day-3 harvest -> block.
     assert planned_row["decision_outcome"] == "block"
     assert planned_row["decision_severity"] == "critical"
     assert planned_row["review_required"] is True
@@ -93,7 +95,7 @@ def test_values_source_flows_through_and_gates_authority(client):
         values_source="pca_entered", values_entered_by="Jane Doe, PCA",
     )
     assert planned_row["decision_outcome"] == "block"
-    assert planned_row["decision_authority"] == "definitive"
+    assert planned_row["decision_authority"] == "pca_authorized"
     assert planned_row["values_entered_by"] == "Jane Doe, PCA"
     phi_rule = next(
         r for r in planned_row["decision_payload"]["rules"]

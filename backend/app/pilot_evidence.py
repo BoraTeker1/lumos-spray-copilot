@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app import decision_status
 from app.recommendation_engine import RECENT_WINDOW_DAYS, generate_recommendation
 
 # Recommendation statuses that represent a recorded advisor decision (an audit trail entry).
@@ -58,19 +59,13 @@ def _scouting_backed(spray, scout_observations) -> bool:
 _PLANNED_OUTCOMES = (
     "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first"
 )
-# Review statuses that count as a recorded PCA decision on a pre-spray check.
-_DECISION_REVIEWED = ("approved", "edited", "rejected")
 # Explicit, stated assumption behind the review-minutes-saved estimate. Not a measurement.
 ASSUMED_MANUAL_CHECK_MINUTES = 10
 
 
 def _real_planned(planned_sprays) -> list:
     """Planned sprays excluding demo/simulated records (real pilot decisions only)."""
-    return [
-        p for p in (planned_sprays or [])
-        if getattr(p, "data_source", None) != "demo"
-        and getattr(p, "data_confidence", None) != "simulated"
-    ]
+    return [p for p in (planned_sprays or []) if not decision_status.is_demo_record(p)]
 
 
 def _pre_spray_decisions(planned_sprays) -> dict:
@@ -122,17 +117,22 @@ def build_decision_evidence(planned_sprays, advisor_label: str = "agronomist") -
         if o in demo_outcomes:
             demo_outcomes[o] += 1
 
-    reviewed = [p for p in real if getattr(p, "review_status", None) in _DECISION_REVIEWED]
+    reviewed = [
+        p for p in real
+        if decision_status.review_state(p) in decision_status.RESOLVED_REVIEW_STATUSES
+    ]
     accepted = sum(
-        1 for p in reviewed if getattr(p, "review_status", None) in ("approved", "edited")
+        1 for p in reviewed
+        if decision_status.review_state(p)
+        in decision_status.APPLIED_OUTCOME_UNLOCK_STATUSES
     )
     acceptance_rate_pct = (
         round(100.0 * accepted / len(reviewed), 1) if reviewed else None
     )
 
-    conflicts_caught = sum(
-        1 for p in real if getattr(p, "decision_severity", None) == "critical"
-    )
+    # Conflicts the check surfaced, resolved or not (unlike the dashboard's open-only
+    # count — decision_status names both semantics).
+    conflicts_caught = sum(1 for p in real if decision_status.conflict_caught(p))
 
     # Chemical cost NOT spent on avoided applications (entered estimates only).
     avoided_cost = sum(
@@ -148,6 +148,8 @@ def build_decision_evidence(planned_sprays, advisor_label: str = "agronomist") -
         "check caused. This is workflow evidence, not a controlled study.",
         "Estimated chemical cost avoided sums the user-entered cost estimates of avoided "
         "applications — chemicals not applied, not a net-savings or yield claim.",
+        "Yield impact of avoided applications is not yet known or measured — cost "
+        "figures are entered application-cost estimates only.",
         (
             f"Review time uses a stated assumption ({ASSUMED_MANUAL_CHECK_MINUTES} min per "
             f"manual PHI/REI/rotation cross-check), not a measurement."
