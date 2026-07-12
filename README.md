@@ -123,12 +123,38 @@ Target-name matching uses exact normalized names or an explicit alias dictionary
 (`backend/app/target_aliases.py`) only — ambiguous overlaps escalate to PCA review and
 are recorded; equivalence is never fuzzily inferred.
 
+## AI-Driven Layer (V1)
+
+Real AI (Claude) now works **around** the deterministic engine — **AI proposes, the
+engine + PCA decide**. The compliance verdict stays 100% deterministic; AI never says
+"spray" and never names products. Without `ANTHROPIC_API_KEY` everything falls back to
+a deterministic mock (demo/tests work offline); calls are on-demand only.
+
+- **Document/message extraction** (`POST /farms/{id}/import/document`): a PDF, photo,
+  or pasted PCA email/WhatsApp becomes draft import rows — extracted only as literally
+  written (regulatory values are never guessed), each row with a verbatim source
+  snippet, abstaining on non-recommendation input. Rows flow through the **same**
+  dry-run validation as the CSV import, get human-corrected, and commit via
+  `POST /farms/{id}/import/rows` as `ai_extracted` + `imported_unverified` — so they
+  can never auto-approve.
+- **AI review brief** (`POST /planned-sprays/{id}/ai-brief`): a qualitative
+  rescue-risk note grounded ONLY in comparable real decisions on the same farm (alias/
+  chemistry matched, demo excluded) plus next actions enum-locked to **evidence
+  gathering only**. Below 2 real comparables a server-side guard forces abstention —
+  no fabricated probabilities.
+- **Append-only AI judgment log + calibration** (`GET /internal/ai-calibration`):
+  every AI output is logged with model, prompt version, input digest, confidence, and
+  abstention; predictions are joined to realized rescue outcomes from follow-ups, with
+  rates gated behind a minimum-n (counts + "insufficient data" until then). Judgments
+  are never seeded or fabricated.
+
 ## Scope (MVP)
 **In:** spray & scouting logging, rule-based cautious recommendations, next-action guidance,
 agronomist review workflow, pesticide cost analytics, lightweight weather-risk, weekly report.
-**Out (deliberately):** financing, marketplace, payments, IoT/drones, computer vision,
-complex AI, autonomous "must spray" advice, definitive disease diagnosis, authentication.
-See `ENGINEERING_GUIDELINES.md`.
+**Out (deliberately):** financing, marketplace, payments, IoT/drones, chatbots,
+autonomous AI decisions or "must spray" advice, definitive disease diagnosis,
+authentication. (AI exists only as suggest-and-confirm layers around the deterministic
+engine — photo scouting, document extraction, review briefs.) See `ENGINEERING_GUIDELINES.md`.
 
 ---
 

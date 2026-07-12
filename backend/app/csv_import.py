@@ -376,69 +376,37 @@ def _regulatory_warnings(record_type: str, values: dict) -> list[str]:
     return out
 
 
-def parse_csv(
+def validate_rows(
     record_type: str,
-    csv_text: str,
-    mapping_overrides: dict | None = None,
+    raw_rows: list[dict],
     existing_keys: dict | None = None,
+    report: DryRunReport | None = None,
 ) -> DryRunReport:
-    """Parse + validate CSV text into a DryRunReport (never writes anything).
+    """Validate pre-structured rows (canonical field -> raw value) into a DryRunReport.
 
-    `existing_keys` maps duplicate keys (see duplicate_key_for_*) of records already
-    in the database to a human-readable label ("planned spray #12"), so re-imports are
-    caught against prior imports, not just inside the file.
+    THE single validation path: the CSV importer feeds mapped rows through here, and
+    the AI document extraction feeds its extracted rows through the exact same code —
+    same type/required checks, same regulatory warnings, same duplicate detection.
+    Never writes anything; values are never guessed.
     """
     if record_type not in FIELDS_BY_TYPE:
         raise ValueError(f"Unknown record type '{record_type}'")
     specs = FIELDS_BY_TYPE[record_type]
-    report = DryRunReport(record_type=record_type)
-    existing_keys = existing_keys or {}
-
-    text = (csv_text or "").strip("﻿").strip()
-    if not text:
-        report.parse_error = "The CSV is empty."
-        return report
-
-    # Delimiter: prefer the sniffer, fall back to tab-vs-comma on the header line.
-    first_line = text.splitlines()[0]
-    try:
-        dialect = csv.Sniffer().sniff(first_line, delimiters=",;\t")
-        delimiter = dialect.delimiter
-    except csv.Error:
-        delimiter = "\t" if "\t" in first_line else ","
-
-    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-    try:
-        raw_headers = next(reader)
-    except StopIteration:
-        report.parse_error = "The CSV has no header row."
-        return report
-
-    headers = [h.strip() for h in raw_headers]
-    report.headers = headers
-    mapping, unmapped = build_mapping(headers, specs, mapping_overrides)
-    report.mapping = mapping
-    report.unmapped_headers = unmapped
-
-    mapped_fields = {f for f in mapping.values() if f != IGNORE}
-    report.missing_required_columns = [
-        s.name for s in specs if s.required and s.name not in mapped_fields
-    ]
-
     spec_by_name = {s.name: s for s in specs}
+    if report is None:
+        report = DryRunReport(record_type=record_type)
+    existing_keys = existing_keys or {}
     seen_in_file: dict[tuple, int] = {}
 
-    for i, cells in enumerate(reader, start=1):
-        if not any((c or "").strip() for c in cells):
-            continue  # blank line
+    for i, raw in enumerate(raw_rows, start=1):
         row = ParsedRow(row_number=i)
-        for col_index, header in enumerate(headers):
-            fname = mapping.get(header, IGNORE)
-            if fname == IGNORE:
+        for fname, raw_cell in (raw or {}).items():
+            if fname not in spec_by_name:
+                row.errors.append(f"unknown field '{fname}'")
                 continue
-            raw_cell = cells[col_index] if col_index < len(cells) else ""
-            row.raw[fname] = raw_cell
-            value, error = _parse_value(spec_by_name[fname], raw_cell)
+            text = "" if raw_cell is None else str(raw_cell)
+            row.raw[fname] = text
+            value, error = _parse_value(spec_by_name[fname], text)
             if error:
                 row.errors.append(error)
             elif value is not None:
@@ -480,3 +448,68 @@ def parse_csv(
         report.rows.append(row)
 
     return report
+
+
+def parse_csv(
+    record_type: str,
+    csv_text: str,
+    mapping_overrides: dict | None = None,
+    existing_keys: dict | None = None,
+) -> DryRunReport:
+    """Parse + validate CSV text into a DryRunReport (never writes anything).
+
+    `existing_keys` maps duplicate keys (see duplicate_key_for_*) of records already
+    in the database to a human-readable label ("planned spray #12"), so re-imports are
+    caught against prior imports, not just inside the file. Validation itself is
+    shared with the row-based path — see `validate_rows`.
+    """
+    if record_type not in FIELDS_BY_TYPE:
+        raise ValueError(f"Unknown record type '{record_type}'")
+    specs = FIELDS_BY_TYPE[record_type]
+    report = DryRunReport(record_type=record_type)
+
+    text = (csv_text or "").strip("﻿").strip()
+    if not text:
+        report.parse_error = "The CSV is empty."
+        return report
+
+    # Delimiter: prefer the sniffer, fall back to tab-vs-comma on the header line.
+    first_line = text.splitlines()[0]
+    try:
+        dialect = csv.Sniffer().sniff(first_line, delimiters=",;\t")
+        delimiter = dialect.delimiter
+    except csv.Error:
+        delimiter = "\t" if "\t" in first_line else ","
+
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    try:
+        raw_headers = next(reader)
+    except StopIteration:
+        report.parse_error = "The CSV has no header row."
+        return report
+
+    headers = [h.strip() for h in raw_headers]
+    report.headers = headers
+    mapping, unmapped = build_mapping(headers, specs, mapping_overrides)
+    report.mapping = mapping
+    report.unmapped_headers = unmapped
+
+    mapped_fields = {f for f in mapping.values() if f != IGNORE}
+    report.missing_required_columns = [
+        s.name for s in specs if s.required and s.name not in mapped_fields
+    ]
+
+    # Map each CSV line to a canonical-field raw dict, then share the validation path.
+    raw_rows: list[dict] = []
+    for cells in reader:
+        if not any((c or "").strip() for c in cells):
+            continue  # blank line
+        raw: dict = {}
+        for col_index, header in enumerate(headers):
+            fname = mapping.get(header, IGNORE)
+            if fname == IGNORE:
+                continue
+            raw[fname] = cells[col_index] if col_index < len(cells) else ""
+        raw_rows.append(raw)
+
+    return validate_rows(record_type, raw_rows, existing_keys, report=report)

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
 DataSource = Literal[
     "demo", "grower_interview", "spreadsheet", "whatsapp", "email", "manual_entry",
-    "photo_ai", "unknown"
+    "photo_ai", "ai_extracted", "unknown"
 ]
 DataConfidence = Literal["simulated", "user_provided", "pca_reviewed", "incomplete"]
 
@@ -436,6 +436,43 @@ class FollowUpEvent(FollowUpEventCreate):
     id: int
     planned_spray_id: int
     created_at: datetime
+
+
+# ---------------------------------------------------------- AI judgment log
+class AiJudgment(BaseModel):
+    """Append-only record of one AI output (read-only; never edited or deleted)."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    kind: str
+    farm_id: int | None = None
+    planned_spray_id: int | None = None
+    model_id: str
+    prompt_version: str
+    input_digest: str
+    output: dict | None = None
+    confidence: str
+    abstained: bool
+    abstain_reason: str | None = None
+    is_mock: bool
+    created_at: datetime
+
+
+# ------------------------------------------------- Row import (AI extraction commit)
+class RowImportRequest(BaseModel):
+    """Commit path for human-reviewed extracted rows (and any pre-structured rows).
+
+    Rows are re-validated server-side with the SAME validation/duplicate detection as
+    the CSV import before anything is written; dry_run previews without writing.
+    """
+    record_type: ImportRecordType
+    rows: list[dict]
+    dry_run: bool = True
+    source_label: str | None = None
+    source_filename: str | None = None
+    imported_by: str | None = None
+    notes: str | None = None
+    # Links committed rows back to the extraction judgment they came from.
+    ai_judgment_id: int | None = None
 
 
 # ------------------------------------------------------- CSV pilot import

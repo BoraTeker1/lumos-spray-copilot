@@ -340,6 +340,36 @@ class DecisionFollowUpEvent(Base):
     planned_spray: Mapped["PlannedSpray"] = relationship(back_populates="follow_up_events")
 
 
+class AiJudgment(Base):
+    """One append-only record of an AI output (extraction, risk note, evidence action).
+
+    NEVER updated or deleted. Every AI suggestion is logged with its model, prompt
+    version, an input digest, its confidence, and whether it abstained — so that once
+    real outcomes exist, predictions can be compared against reality (calibration)
+    instead of being taken on faith. AI outputs are suggestions for humans and inputs
+    to the deterministic engine; they never decide anything, and judgments are never
+    fabricated (no seeded/demo judgments).
+    """
+    __tablename__ = "ai_judgments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # extraction / risk_note / next_evidence_action
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    farm_id: Mapped[int | None] = mapped_column(Integer)
+    planned_spray_id: Mapped[int | None] = mapped_column(Integer)
+    model_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    # sha256 of the exact inputs sent to the model (reproducibility / audit).
+    input_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    output: Mapped[dict | None] = mapped_column(JSON)
+    # low / medium / high / none (none when the judgment abstained)
+    confidence: Mapped[str] = mapped_column(String(20), default="none")
+    abstained: Mapped[bool] = mapped_column(Boolean, default=False)
+    abstain_reason: Mapped[str | None] = mapped_column(Text)
+    is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
 class PcaPolicy(Base):
     """A PCA-entered action threshold for one target on one farm.
 
@@ -472,6 +502,8 @@ class PilotImportBatch(Base):
     # CSV pilot imports: what kind of records the batch carried and the file it came from.
     record_type: Mapped[str | None] = mapped_column(String(40))
     source_filename: Mapped[str | None] = mapped_column(String(255))
+    # Set when the batch's rows came from an AI extraction (links to the judgment log).
+    ai_judgment_id: Mapped[int | None] = mapped_column(ForeignKey("ai_judgments.id"))
     spray_event_count: Mapped[int] = mapped_column(Integer, default=0)
     scouting_observation_count: Mapped[int] = mapped_column(Integer, default=0)
     planned_spray_count: Mapped[int] = mapped_column(Integer, default=0)

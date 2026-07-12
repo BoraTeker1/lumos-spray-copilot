@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 // NOTE: this page is the always-expanded print/audit surface — unlike the in-app
 // DecisionResult card it deliberately collapses nothing.
 
+import AiBriefCard from "@/components/AiBriefCard";
 import {
   AUTHORITY_SOURCE_LABELS,
   DECISION_OUTCOME_LABELS,
@@ -520,6 +521,8 @@ export default function DecisionRecordPage({ params }) {
               <FollowUpForm plannedId={planned.id} onAdded={() => loadTrail(planned.id)} />
             )}
           </Section>
+
+          <AiBriefCard plannedId={planned.id} />
 
           <Section title="Disclaimers">
             <ul className="space-y-1 text-[11px] leading-snug text-gray-500">

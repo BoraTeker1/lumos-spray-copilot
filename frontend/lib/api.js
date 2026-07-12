@@ -89,6 +89,36 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // AI document/message extraction (never writes; returns draft rows + dry-run report).
+  // Multipart, so it bypasses the JSON helper.
+  extractDocument: async (farmId, { recordType, text, file }) => {
+    const body = new FormData();
+    body.append("record_type", recordType);
+    if (text) body.append("text", text);
+    if (file) body.append("file", file);
+    const res = await fetch(`${BASE_URL}/farms/${farmId}/import/document`, {
+      method: "POST",
+      cache: "no-store",
+      body, // browser sets the multipart boundary; do NOT set Content-Type
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
+  // Commit path for human-reviewed extracted rows (server re-validates everything).
+  importRows: (farmId, data) =>
+    request(`/farms/${farmId}/import/rows`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // AI review brief for one decision (on-demand; never changes the decision).
+  generateAiBrief: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/ai-brief`, { method: "POST" }),
+  getAiCalibration: () => request("/internal/ai-calibration"),
+
   // Anonymized evidence export (JSON; CSV via exportUrl)
   getEvidenceExport: (farmId) => request(`/farms/${farmId}/evidence-export`),
 

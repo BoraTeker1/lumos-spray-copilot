@@ -59,6 +59,74 @@ function InstrumentationSummary() {
   );
 }
 
+function AiCalibrationSummary() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    api.getAiCalibration().then(setData).catch((err) => setError(err.message));
+  }, []);
+
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!data) return <p className="text-sm text-gray-500">Loading AI calibration…</p>;
+
+  const rows = [
+    ["Risk notes logged", data.risk_notes_total],
+    ["Risk notes abstained", data.risk_notes_abstained],
+    [
+      "Abstention rate",
+      data.abstention_rate_pct != null ? `${data.abstention_rate_pct}%` : "—",
+    ],
+    ["Extraction judgments", data.extraction_judgments],
+    ["Extraction abstained", data.extraction_abstained],
+    ["Mock vs real-model judgments", `${data.mock_judgments} mock · ${data.real_model_judgments} real`],
+  ];
+
+  return (
+    <div>
+      <dl className="divide-y divide-gray-100 text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-3 py-1.5">
+            <dt className="text-gray-500">{label}</dt>
+            <dd className="text-right font-medium text-gray-900">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <table className="mt-3 w-full text-left text-xs">
+        <thead>
+          <tr className="text-gray-500">
+            <th className="py-1 pr-3 font-medium">Predicted risk</th>
+            <th className="py-1 pr-3 font-medium">Predictions</th>
+            <th className="py-1 pr-3 font-medium">With follow-up</th>
+            <th className="py-1 pr-3 font-medium">Realized rescues</th>
+            <th className="py-1 font-medium">Realized rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(data.predictions_by_level || {}).map(([level, block]) => (
+            <tr key={level} className="border-t border-gray-100">
+              <td className="py-1 pr-3 font-medium uppercase">{level}</td>
+              <td className="py-1 pr-3">{block.predictions}</td>
+              <td className="py-1 pr-3">{block.with_follow_up}</td>
+              <td className="py-1 pr-3">{block.realized_rescues}</td>
+              <td className="py-1">
+                {block.realized_rescue_rate_pct != null
+                  ? `${block.realized_rescue_rate_pct}%`
+                  : `— (${block.note})`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul className="mt-2 space-y-0.5 text-[11px] text-gray-400">
+        {(data.notes || []).map((n, i) => (
+          <li key={i}>• {n}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function InternalToolsPage() {
   const [farms, setFarms] = useState([]);
   const [farmId, setFarmId] = useState("");
@@ -97,6 +165,16 @@ export default function InternalToolsPage() {
           changed decisions, and how data gets entered. Never customer-facing.
         </p>
         <InstrumentationSummary />
+      </section>
+
+      <section className="rounded-lg border bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">AI calibration</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Every AI output (extraction, risk note, evidence action) is logged append-only;
+          this compares predicted rescue risk against realized rescues from follow-up
+          records. Rates are published only past the minimum-n gate — counts until then.
+        </p>
+        <AiCalibrationSummary />
       </section>
 
       <section className="rounded-lg border bg-white p-5 shadow-sm">

@@ -102,6 +102,38 @@ Backend + frontend both implement:
   SprayEvent). `GET /farms/{id}/decision-evidence` aggregates the YC metrics (decisions
   reviewed, sprays changed/delayed/avoided, conflicts caught, PCA acceptance rate, entered-cost
   avoided, assumption-based review minutes) with demo data excluded and caveats attached.
+- **AI-Driven Layer V1 (2026-07-12)** — real AI around the deterministic engine.
+  **Architecture rule: AI proposes, the deterministic engine + PCA decide.** The
+  approve/block/delay/inspect/review outcome stays 100% rule-engine; AI never says
+  "spray", never names products, never diagnoses. All AI calls are on-demand
+  (buttons), never in the hot decision path; mock service without `ANTHROPIC_API_KEY`.
+  - **Shared LLM service** — `app/llm.py` (mirrors vision.py): `LlmService` ABC,
+    `ClaudeLlmService` (structured outputs via `client.messages.parse`, model
+    `claude-opus-4-8`, override `LUMOS_LLM_MODEL`), `MockLlmService` with per-schema
+    registered builders (offline tests/demo), `default_llm_service` gated on the key.
+  - **Append-only AI judgment log** — `AiJudgment` (kind extraction/risk_note/
+    next_evidence_action, model_id, prompt_version, input_digest, output JSON,
+    confidence, abstained, is_mock). NO update/delete; judgments are NEVER seeded or
+    fabricated. `GET /internal/ai-calibration` joins risk-note predictions to
+    realized rescues from follow-ups — rates gated behind `CALIBRATION_MIN_N=10`
+    follow-up-backed predictions per level (counts + "insufficient data" until then).
+  - **AI document/message extraction** — `app/extraction.py` +
+    `POST /farms/{id}/import/document` (PDF ≤10MB native document block, image, or
+    pasted text): Claude extracts ONLY what is literally written (regulatory values
+    never guessed), per-row verbatim `source_snippet` + confidence, abstains on
+    non-recommendation input. Returns the SAME DryRunReport as the CSV import
+    (shared `csv_import.validate_rows`); never writes. Human-corrected rows commit
+    via `POST /farms/{id}/import/rows` (server re-validates, `data_source=
+    "ai_extracted"`, field-level `imported_unverified` ⇒ can never auto-approve).
+  - **AI review brief** — `app/ai_brief.py` + `POST /planned-sprays/{id}/ai-brief`:
+    retrieval-grounded (deterministic `crud.comparable_decisions`: same farm,
+    non-demo, alias-matched target or same AI/MoA — no embeddings, no fuzzy)
+    qualitative rescue-risk note + next actions **enum-locked to evidence gathering
+    only** (rescout/verify-label/confirm-threshold/record-follow-up/wait/consult) —
+    product recommendations are structurally inexpressible. Deterministic post-guard
+    forces ABSTAIN below 2 real comparables regardless of model output; never
+    touches decision columns; logs two judgments. UI: `AiBriefCard` on
+    `/decisions/[id]` (no-print, never auto-runs).
 - **Real Pilot Evidence Loop V1 (2026-07-11)** — the concierge pilot infrastructure:
   - **CSV pilot import** (`POST /farms/{id}/import/csv`; templates at
     `GET /import/templates/{planned_sprays|scout_observations}.csv`): dry-run first
@@ -340,8 +372,9 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **212 passing**. **Always re-run `pytest` to
-  confirm; do not trust this number.** Known harmless deprecation warnings.
+- **Passing test count:** repo currently shows **236 passing**. **Always re-run `pytest` to
+  confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
+  the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
   date to a fixed anchor (screenshots / demo-consistency tests); unset, the anchor is today and
   re-seeding before a demo keeps the story fresh. `tests/test_demo_consistency.py` asserts the
@@ -379,10 +412,14 @@ npm run dev        # http://localhost:3000
 - **Never present seed data as traction.** It is illustrative, not real usage.
 - **Never imply real pilots** unless a validation doc proves it (none currently do — see §11).
 - **Avoid fake AI claims.** The recommendation/compliance **engine is a deterministic rule
-  engine, not ML** — say so. The **photo-scouting copilot IS real AI** (multimodal Claude), but
-  describe it honestly: it *suggests* what it appears to see for a human to confirm; it does not
-  diagnose disease, is not the decider, and never says "spray." Don't blur the two — the spray
-  decision is still the rule engine + PCA, not the photo model.
+  engine, not ML** — say so. The **photo-scouting copilot, document extraction, and AI review
+  brief ARE real AI** (Claude), but describe them honestly: they *suggest* (a draft scouting
+  note, draft import rows with verbatim snippets, a retrieval-grounded risk note that abstains
+  without comparables) for a human to confirm; they do not diagnose, are not the decider, never
+  say "spray," and never name products. Every AI output is logged append-only (`AiJudgment`)
+  for calibration against real outcomes; AI judgments are NEVER seeded or fabricated, and
+  mock-service outputs must never be presented as model performance. Don't blur the layers —
+  the spray decision is still the rule engine + PCA.
 - Always use **"decision support only"** language; never "diagnoses," never "tells you to spray."
 
 ---

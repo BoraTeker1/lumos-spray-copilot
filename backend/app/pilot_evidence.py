@@ -656,6 +656,88 @@ def build_pilot_case_study(
     }
 
 
+# ------------------------------------------------------------- AI calibration
+# Below this many follow-up-backed predictions per level, no rate is published —
+# counts only. Publishing a "rate" off a handful of cases would be misleading.
+CALIBRATION_MIN_N = 10
+
+
+def build_ai_calibration(judgments, decisions_by_id: dict, follow_ups_by_id: dict) -> dict:
+    """Predicted rescue risk vs. realized rescues — the honest 'is the AI any good?' view.
+
+    Internal-only. Judgments tied to demo decisions are excluded (there should be
+    none — judgments are never seeded — but the guard is cheap). Rates appear only
+    at CALIBRATION_MIN_N follow-up-backed predictions per level; until then the
+    report shows counts with an explicit insufficient-data note.
+    """
+    judgments = list(judgments or [])
+
+    def _is_demo_parent(j) -> bool:
+        parent = decisions_by_id.get(j.planned_spray_id)
+        return parent is not None and decision_status.is_demo_record(parent)
+
+    real = [j for j in judgments if not _is_demo_parent(j)]
+    risk = [j for j in real if j.kind == "risk_note"]
+    extraction = [j for j in real if j.kind == "extraction"]
+    predictions = [j for j in risk if not j.abstained]
+
+    per_level: dict[str, dict] = {}
+    for level in ("low", "medium", "high"):
+        level_js = [
+            j for j in predictions if (j.output or {}).get("rescue_risk") == level
+        ]
+        with_follow_up = 0
+        realized_rescues = 0
+        for j in level_js:
+            parent = decisions_by_id.get(j.planned_spray_id)
+            if parent is None:
+                continue
+            summary = derive_follow_up_summary(
+                parent, follow_ups_by_id.get(parent.id, [])
+            )
+            if summary["has_follow_up"]:
+                with_follow_up += 1
+                if summary["rescue_required"]:
+                    realized_rescues += 1
+        enough = with_follow_up >= CALIBRATION_MIN_N
+        per_level[level] = {
+            "predictions": len(level_js),
+            "with_follow_up": with_follow_up,
+            "realized_rescues": realized_rescues,
+            "realized_rescue_rate_pct": (
+                round(100.0 * realized_rescues / with_follow_up, 1) if enough else None
+            ),
+            "note": None if enough else (
+                f"insufficient data for a rate (need {CALIBRATION_MIN_N} follow-up-"
+                f"backed predictions at this level) — counts only"
+            ),
+        }
+
+    return {
+        "risk_notes_total": len(risk),
+        "risk_notes_abstained": sum(1 for j in risk if j.abstained),
+        "abstention_rate_pct": (
+            round(100.0 * sum(1 for j in risk if j.abstained) / len(risk), 1)
+            if risk else None
+        ),
+        "predictions_by_level": per_level,
+        "extraction_judgments": len(extraction),
+        "extraction_abstained": sum(1 for j in extraction if j.abstained),
+        "mock_judgments": sum(1 for j in real if j.is_mock),
+        "real_model_judgments": sum(1 for j in real if not j.is_mock),
+        "calibration_min_n": CALIBRATION_MIN_N,
+        "notes": [
+            "Every AI output is logged append-only with model, prompt version, and "
+            "input digest; nothing here is ever edited, deleted, or fabricated.",
+            "Predicted rescue risk is qualitative and retrieval-grounded — rates are "
+            "published only once enough follow-up-backed predictions exist.",
+            "Mock judgments come from the offline demo service and must never be "
+            "presented as model performance.",
+            "Internal telemetry — never customer-facing.",
+        ],
+    }
+
+
 # ---------------------------------------------------------------- Evidence export
 EVIDENCE_EXPORT_METHODOLOGY = (
     "Each row is one planned spray decision: the recommendation as imported/entered, "

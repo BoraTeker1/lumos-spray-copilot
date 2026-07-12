@@ -717,6 +717,19 @@ def add_follow_up_event(
     return event
 
 
+def list_all_follow_up_events(db: Session) -> dict[int, list[models.DecisionFollowUpEvent]]:
+    """Follow-up events across ALL farms keyed by planned_spray_id (calibration join)."""
+    out: dict[int, list[models.DecisionFollowUpEvent]] = {}
+    rows = db.scalars(
+        select(models.DecisionFollowUpEvent).order_by(
+            models.DecisionFollowUpEvent.observed_at, models.DecisionFollowUpEvent.id
+        )
+    )
+    for row in rows:
+        out.setdefault(row.planned_spray_id, []).append(row)
+    return out
+
+
 def list_farm_follow_up_events(
     db: Session, farm_id: int
 ) -> dict[int, list[models.DecisionFollowUpEvent]]:
@@ -803,39 +816,46 @@ def _existing_duplicate_keys(db: Session, farm_id: int, record_type: str) -> dic
     return keys
 
 
-def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) -> dict:
-    """CSV pilot import: dry-run validation report, or commit the importable rows.
+def commit_import(
+    db: Session,
+    farm: models.Farm,
+    record_type: str,
+    report: csv_import.DryRunReport,
+    *,
+    data_source: str,
+    data_confidence: str = "user_provided",
+    source_label: str | None = None,
+    source_filename: str | None = None,
+    source_system: str | None = None,
+    imported_by: str | None = None,
+    notes: str | None = None,
+    ai_judgment_id: int | None = None,
+    entry_source: str = "csv",
+) -> dict:
+    """Commit a validated DryRunReport's importable rows (shared by CSV + AI extraction).
 
-    Committed rows carry full provenance: a PilotImportBatch, per-row
-    data_source="spreadsheet", source filename/system, and (for planned sprays)
-    field-level DecisionInputValue rows tagged imported_unverified — imported
+    Committed rows carry full provenance: a PilotImportBatch, per-row `data_source`
+    ("spreadsheet" or "ai_extracted"), source filename/system, and (for planned
+    sprays) field-level DecisionInputValue rows tagged imported_unverified — imported
     regulatory values never silently become verified and never auto-approve.
     """
-    report = csv_import.parse_csv(
-        req.record_type,
-        req.csv_text,
-        mapping_overrides=req.mapping,
-        existing_keys=_existing_duplicate_keys(db, farm.id, req.record_type),
-    )
     payload = report.as_payload()
-    if req.dry_run:
-        return {"dry_run": True, "committed": False, "report": payload, "batch": None}
-
     batch = models.PilotImportBatch(
         farm_id=farm.id,
-        source_label=req.source_filename or f"CSV import ({req.record_type})",
-        imported_by=req.imported_by,
-        notes=req.notes,
-        data_source="spreadsheet",
-        data_confidence="user_provided",
-        record_type=req.record_type,
-        source_filename=req.source_filename,
+        source_label=source_label or source_filename or f"import ({record_type})",
+        imported_by=imported_by,
+        notes=notes,
+        data_source=data_source,
+        data_confidence=data_confidence,
+        record_type=record_type,
+        source_filename=source_filename,
+        ai_judgment_id=ai_judgment_id,
     )
     db.add(batch)
     db.flush()
 
     created_ids: list[int] = []
-    if req.record_type == csv_import.RECORD_TYPE_PLANNED:
+    if record_type == csv_import.RECORD_TYPE_PLANNED:
         for row in report.importable_rows:
             values = row.values
             data = schemas.PlannedSprayCreate(
@@ -855,19 +875,19 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
                 rate_amount=values.get("rate_amount"),
                 rate_unit=values.get("rate_unit"),
                 recommendation_author=values.get("recommendation_author"),
-                source_system=req.source_system,
-                source_filename=req.source_filename,
+                source_system=source_system,
+                source_filename=source_filename,
                 notes=values.get("notes"),
                 values_source="grower_entered",  # display only; provenance is field-level
-                values_entered_by=req.imported_by,
-                data_source="spreadsheet",
-                data_confidence="user_provided",
+                values_entered_by=imported_by,
+                data_source=data_source,
+                data_confidence=data_confidence,
             )
             planned = create_planned_spray(
                 db, farm, data,
                 input_source_type="imported_unverified",
                 source_reference=(
-                    f"{req.source_filename or 'csv'} row {row.row_number}"
+                    f"{source_filename or entry_source} row {row.row_number}"
                 ),
                 expected_harvest_date=values.get("expected_harvest_date"),
                 pilot_import_batch_id=batch.id,
@@ -881,7 +901,7 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
         for row in report.importable_rows:
             values = row.values
             severity = values.get("severity")
-            notes = values.get("notes")
+            row_notes = values.get("notes")
             if severity is not None and severity not in (1, 2, 3, 4, 5):
                 # A non-1-5 severity is only importable with its scale stated; keep the
                 # raw reading visible instead of silently dropping it.
@@ -889,7 +909,7 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
                     f"[imported severity {severity} on scale "
                     f"{values.get('severity_scale')}]"
                 )
-                notes = f"{notes} {scale_note}".strip() if notes else scale_note
+                row_notes = f"{row_notes} {scale_note}".strip() if row_notes else scale_note
             obs = models.ScoutObservation(
                 farm_id=farm.id,
                 observation_date=values["observation_date"],
@@ -898,16 +918,16 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
                 severity_1_to_5=(
                     severity if severity in (1, 2, 3, 4, 5) else None
                 ),
-                notes=notes,
+                notes=row_notes,
                 external_record_id=values.get("external_record_id"),
                 field_block=values.get("field_block"),
                 severity_scale=values.get("severity_scale"),
                 count_value=values.get("count_value"),
                 observer=values.get("observer"),
-                source_system=req.source_system,
-                source_filename=req.source_filename,
-                data_source="spreadsheet",
-                data_confidence="user_provided",
+                source_system=source_system,
+                source_filename=source_filename,
+                data_source=data_source,
+                data_confidence=data_confidence,
                 pilot_import_batch_id=batch.id,
             )
             db.add(obs)
@@ -916,9 +936,9 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
         batch.scouting_observation_count = len(created_ids)
 
     _log_event(
-        db, "import_used", farm_id=farm.id, entry_source="csv",
+        db, "import_used", farm_id=farm.id, entry_source=entry_source,
         meta={
-            "record_type": req.record_type,
+            "record_type": record_type,
             "imported": len(created_ids),
             "duplicates_skipped": payload["duplicate_count"],
             "rows_with_errors": payload["error_count"],
@@ -935,12 +955,163 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
             "record_type": batch.record_type,
             "source_filename": batch.source_filename,
             "imported_by": batch.imported_by,
+            "ai_judgment_id": batch.ai_judgment_id,
             "planned_spray_count": batch.planned_spray_count,
             "scouting_observation_count": batch.scouting_observation_count,
             "imported_at": batch.created_at.isoformat(),
         },
         "created_record_ids": created_ids,
     }
+
+
+# Public name for callers outside this module (routes reuse the same dedupe keys).
+def existing_duplicate_keys(db: Session, farm_id: int, record_type: str) -> dict:
+    return _existing_duplicate_keys(db, farm_id, record_type)
+
+
+def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) -> dict:
+    """CSV pilot import: dry-run validation report, or commit the importable rows."""
+    report = csv_import.parse_csv(
+        req.record_type,
+        req.csv_text,
+        mapping_overrides=req.mapping,
+        existing_keys=_existing_duplicate_keys(db, farm.id, req.record_type),
+    )
+    if req.dry_run:
+        return {
+            "dry_run": True, "committed": False, "report": report.as_payload(),
+            "batch": None,
+        }
+    return commit_import(
+        db, farm, req.record_type, report,
+        data_source="spreadsheet",
+        source_label=req.source_filename or f"CSV import ({req.record_type})",
+        source_filename=req.source_filename,
+        source_system=req.source_system,
+        imported_by=req.imported_by,
+        notes=req.notes,
+        entry_source="csv",
+    )
+
+
+def import_rows(db: Session, farm: models.Farm, req: schemas.RowImportRequest) -> dict:
+    """Commit path for human-reviewed structured rows (AI extraction preview → import).
+
+    The rows are RE-validated server-side through the exact same path as the CSV
+    import (types, required fields, regulatory warnings, duplicates) — a corrected
+    preview can never bypass validation. Rows land as `ai_extracted` provenance with
+    field-level imported_unverified values, so they can never auto-approve.
+    """
+    report = csv_import.validate_rows(
+        req.record_type,
+        req.rows,
+        existing_keys=_existing_duplicate_keys(db, farm.id, req.record_type),
+    )
+    if req.dry_run:
+        return {
+            "dry_run": True, "committed": False, "report": report.as_payload(),
+            "batch": None,
+        }
+    return commit_import(
+        db, farm, req.record_type, report,
+        data_source="ai_extracted",
+        source_label=req.source_label or "AI-extracted import",
+        source_filename=req.source_filename,
+        imported_by=req.imported_by,
+        notes=req.notes,
+        ai_judgment_id=req.ai_judgment_id,
+        entry_source="ai_document",
+    )
+
+
+def comparable_decisions(db: Session, planned: models.PlannedSpray) -> list[dict]:
+    """Deterministic retrieval of comparable REAL decisions for the AI review brief.
+
+    Same farm, non-demo, excluding the decision itself; comparable = same target via
+    the explicit alias dictionary (never fuzzy), or same active ingredient, or same
+    MoA group. Each comparable carries its follow-up summary so the brief is grounded
+    in recorded outcomes, not model knowledge. No embeddings, no scoring — plain
+    predicates a PCA can verify by eye.
+    """
+    from app.pilot_evidence import derive_follow_up_summary
+
+    follow_ups = list_farm_follow_up_events(db, planned.farm_id)
+    target = planned.target_pest_or_disease
+    ai = (planned.active_ingredient or "").strip().lower()
+    moa = (planned.moa_group or "").strip().lower()
+
+    out: list[dict] = []
+    for p in list_planned_sprays(db, planned.farm_id):
+        if p.id == planned.id or decision_status.is_demo_record(p):
+            continue
+        basis = []
+        if target and target_aliases.match_targets(
+            target, p.target_pest_or_disease
+        ) == target_aliases.MATCH:
+            basis.append("same_target")
+        if ai and (p.active_ingredient or "").strip().lower() == ai:
+            basis.append("same_active_ingredient")
+        if moa and (p.moa_group or "").strip().lower() == moa:
+            basis.append("same_moa_group")
+        if not basis:
+            continue
+        summary = derive_follow_up_summary(p, follow_ups.get(p.id, []))
+        out.append({
+            "id": p.id,
+            "match_basis": basis,
+            "product_name": p.product_name,
+            "active_ingredient": p.active_ingredient,
+            "moa_group": p.moa_group,
+            "target_pest_or_disease": p.target_pest_or_disease,
+            "intended_date": p.intended_date.isoformat() if p.intended_date else None,
+            "decision_outcome": p.decision_outcome,
+            "recorded_outcome": p.outcome,
+            "follow_up": {
+                "has_follow_up": summary["has_follow_up"],
+                "rescue_required": summary["rescue_required"],
+                "confirmed_avoided": summary["confirmed_avoided"],
+                "spray_ultimately_applied": summary["spray_ultimately_applied"],
+                "severity_before": summary["severity_before"],
+                "severity_after": summary["severity_after"],
+                "yield_impact": summary["yield_impact"],
+            },
+        })
+    return out
+
+
+# ---------------------------------------------------------------- AI judgment log
+def log_ai_judgment(
+    db: Session, *, kind: str, model_id: str, prompt_version: str, input_digest: str,
+    output: dict | None, confidence: str, abstained: bool, abstain_reason: str | None,
+    is_mock: bool, farm_id: int | None = None, planned_spray_id: int | None = None,
+) -> models.AiJudgment:
+    """Append one immutable AI-judgment record (there is no update or delete)."""
+    judgment = models.AiJudgment(
+        kind=kind, farm_id=farm_id, planned_spray_id=planned_spray_id,
+        model_id=model_id, prompt_version=prompt_version, input_digest=input_digest,
+        output=output, confidence=confidence, abstained=abstained,
+        abstain_reason=abstain_reason, is_mock=is_mock,
+    )
+    db.add(judgment)
+    db.commit()
+    db.refresh(judgment)
+    return judgment
+
+
+def list_ai_judgments(
+    db: Session, *, farm_id: int | None = None, planned_spray_id: int | None = None,
+    kind: str | None = None,
+) -> list[models.AiJudgment]:
+    stmt = select(models.AiJudgment).order_by(
+        models.AiJudgment.created_at, models.AiJudgment.id
+    )
+    if farm_id is not None:
+        stmt = stmt.where(models.AiJudgment.farm_id == farm_id)
+    if planned_spray_id is not None:
+        stmt = stmt.where(models.AiJudgment.planned_spray_id == planned_spray_id)
+    if kind is not None:
+        stmt = stmt.where(models.AiJudgment.kind == kind)
+    return list(db.scalars(stmt))
 
 
 def delete_planned_spray(db: Session, planned: models.PlannedSpray) -> None:

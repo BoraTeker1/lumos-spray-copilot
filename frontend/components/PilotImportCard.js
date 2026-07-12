@@ -1,15 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { FileDown, ShieldCheck, Upload } from "lucide-react";
+import { FileDown, ShieldCheck, Sparkles, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
 // CSV pilot import for REAL records (planned spray recommendations + scouting).
-// Server-side dry-run first: column mapping (correctable), per-row errors/warnings,
-// duplicate detection — nothing is written until the operator confirms the import.
-// Imported values are stored as imported_unverified provenance: the decision check
-// flags them and they can never produce an automatic approve.
+// Two input modes, one pipeline:
+//  - CSV: server-side dry-run (column mapping, per-row errors/warnings, duplicates).
+//  - AI extract: a PDF/photo or pasted email/WhatsApp goes through Claude (mock
+//    without an API key), producing DRAFT rows with verbatim source snippets that a
+//    human reviews/corrects — then the SAME validation runs before anything commits.
+// Imported values are stored as imported_unverified provenance either way: the
+// decision check flags them and they can never produce an automatic approve.
 
 const RECORD_TYPES = [
   { value: "planned_sprays", label: "Planned sprays (recommendations)" },
@@ -17,7 +20,7 @@ const RECORD_TYPES = [
 ];
 
 // Canonical fields per record type (mirrors backend csv_import.py) for the
-// mapping-correction dropdowns.
+// mapping-correction dropdowns and the AI-row editor.
 const FIELD_OPTIONS = {
   planned_sprays: [
     "external_record_id", "field_block", "crop", "treated_acres", "intended_date",
@@ -32,12 +35,19 @@ const FIELD_OPTIONS = {
   ],
 };
 
+const AI_ROW_METADATA = ["source_snippet", "row_confidence"];
+
 export default function PilotImportCard({ farmId, onImported }) {
+  const [mode, setMode] = useState("csv"); // "csv" | "ai"
   const [recordType, setRecordType] = useState("planned_sprays");
   const [text, setText] = useState("");
   const [filename, setFilename] = useState(null);
+  const [aiFile, setAiFile] = useState(null);
   const [mapping, setMapping] = useState(null); // header -> field overrides
   const [report, setReport] = useState(null);
+  const [extraction, setExtraction] = useState(null);
+  const [aiRows, setAiRows] = useState([]);
+  const [aiJudgmentId, setAiJudgmentId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [committed, setCommitted] = useState(null);
   const [error, setError] = useState(null);
@@ -47,13 +57,17 @@ export default function PilotImportCard({ farmId, onImported }) {
     setCommitted(null);
     setError(null);
     setMapping(null);
+    setExtraction(null);
+    setAiRows([]);
+    setAiJudgmentId(null);
+    setAiFile(null);
     if (!keepText) {
       setText("");
       setFilename(null);
     }
   }
 
-  async function onFile(e) {
+  async function onCsvFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     reset();
@@ -62,6 +76,15 @@ export default function PilotImportCard({ farmId, onImported }) {
     e.target.value = "";
   }
 
+  function onAiFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAiFile(file);
+    setFilename(file.name);
+    e.target.value = "";
+  }
+
+  // ------------------------------------------------------------- CSV pipeline
   async function runImport(dryRun, overrides) {
     setBusy(true);
     setError(null);
@@ -102,19 +125,94 @@ export default function PilotImportCard({ farmId, onImported }) {
     runImport(true, next); // re-validate with the corrected mapping
   }
 
+  // -------------------------------------------------------------- AI pipeline
+  async function runExtraction() {
+    setBusy(true);
+    setError(null);
+    setCommitted(null);
+    try {
+      const result = await api.extractDocument(farmId, {
+        recordType,
+        text: text.trim() || null,
+        file: aiFile,
+      });
+      setExtraction(result.extraction);
+      setReport(result.report);
+      setAiJudgmentId(result.judgment_id);
+      setAiRows(
+        (result.extraction.rows || []).map((row) => {
+          const clean = {};
+          for (const [k, v] of Object.entries(row)) {
+            if (!AI_ROW_METADATA.includes(k) && v !== null && v !== "") clean[k] = v;
+          }
+          return clean;
+        })
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function commitAiRows() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.importRows(farmId, {
+        record_type: recordType,
+        rows: aiRows,
+        dry_run: false,
+        source_label: `AI-extracted (${filename || "pasted text"})`,
+        source_filename: filename,
+        ai_judgment_id: aiJudgmentId,
+      });
+      setReport(result.report);
+      setCommitted(result);
+      onImported && (await onImported());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function editAiRow(index, field, value) {
+    setAiRows((rows) =>
+      rows.map((row, i) => {
+        if (i !== index) return row;
+        const next = { ...row };
+        if (value === "") delete next[field];
+        else next[field] = value;
+        return next;
+      })
+    );
+  }
+
   const importable = report?.importable_count ?? 0;
+  const aiFieldColumns = FIELD_OPTIONS[recordType].filter((f) =>
+    aiRows.some((row) => row[f] !== undefined)
+  );
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-gray-500">
-        Import real pilot records from a CSV. Everything is validated in a{" "}
-        <span className="font-medium text-gray-700">dry run first</span> — fix the
-        column mapping below if a header was not recognized, then confirm. Imported
-        values are stored as <span className="font-medium">imported, unverified</span>:
-        the pre-spray check flags them and they can never auto-approve.
-      </p>
-
       <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex overflow-hidden rounded-md border border-gray-300 text-xs">
+          <button
+            type="button"
+            className={`px-2.5 py-1.5 ${mode === "csv" ? "bg-gray-900 text-white" : "bg-white text-gray-600"}`}
+            onClick={() => { setMode("csv"); reset(); }}
+          >
+            CSV / paste rows
+          </button>
+          <button
+            type="button"
+            className={`px-2.5 py-1.5 ${mode === "ai" ? "bg-gray-900 text-white" : "bg-white text-gray-600"}`}
+            onClick={() => { setMode("ai"); reset(); }}
+          >
+            AI extract (PDF / text)
+          </button>
+        </div>
         <select
           className="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
           value={recordType}
@@ -127,18 +225,44 @@ export default function PilotImportCard({ farmId, onImported }) {
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
-        <a
-          className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
-          href={api.exportUrl(`/import/templates/${recordType}.csv`)}
-        >
-          <FileDown className="h-3.5 w-3.5" /> Download template
-        </a>
+        {mode === "csv" && (
+          <a
+            className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
+            href={api.exportUrl(`/import/templates/${recordType}.csv`)}
+          >
+            <FileDown className="h-3.5 w-3.5" /> Download template
+          </a>
+        )}
       </div>
+
+      <p className="text-xs text-gray-500">
+        {mode === "csv" ? (
+          <>
+            Import real pilot records from a CSV. Everything is validated in a{" "}
+            <span className="font-medium text-gray-700">dry run first</span> — fix the
+            column mapping below if a header was not recognized, then confirm.
+          </>
+        ) : (
+          <>
+            Paste a PCA email/WhatsApp or upload a PDF/photo of a recommendation.{" "}
+            <span className="font-medium text-gray-700">Real AI</span> drafts rows with
+            verbatim source snippets — it extracts only what is written and never
+            guesses PHI/REI/rates. You review and correct every row before import.
+          </>
+        )}{" "}
+        Imported values are stored as{" "}
+        <span className="font-medium">imported, unverified</span>: the pre-spray check
+        flags them and they can never auto-approve.
+      </p>
 
       <textarea
         className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 font-mono text-xs"
         rows={5}
-        placeholder="Paste CSV rows here (header row first), or upload a file below."
+        placeholder={
+          mode === "csv"
+            ? "Paste CSV rows here (header row first), or upload a file below."
+            : "Paste the recommendation text here (email / WhatsApp / notes), or upload a PDF/photo below."
+        }
         value={text}
         onChange={(e) => {
           setText(e.target.value);
@@ -147,36 +271,63 @@ export default function PilotImportCard({ farmId, onImported }) {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy || !text.trim()}
-          onClick={() => runImport(true)}
-        >
-          <ShieldCheck />
-          {busy ? "Validating…" : "Validate (dry run)"}
-        </Button>
-        {report && !committed && (
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy || importable === 0}
-            onClick={() => runImport(false)}
-          >
-            <Upload />
-            {busy ? "Importing…" : `Import ${importable} valid row(s)`}
-          </Button>
+        {mode === "csv" ? (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy || !text.trim()}
+              onClick={() => runImport(true)}
+            >
+              <ShieldCheck />
+              {busy ? "Validating…" : "Validate (dry run)"}
+            </Button>
+            {report && !committed && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || importable === 0}
+                onClick={() => runImport(false)}
+              >
+                <Upload />
+                {busy ? "Importing…" : `Import ${importable} valid row(s)`}
+              </Button>
+            )}
+            <label className="cursor-pointer text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline">
+              …or upload a CSV file
+              <input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onCsvFile} />
+            </label>
+          </>
+        ) : (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy || (!text.trim() && !aiFile)}
+              onClick={runExtraction}
+            >
+              <Sparkles />
+              {busy ? "Extracting…" : "Extract with AI"}
+            </Button>
+            {extraction && !extraction.abstained && aiRows.length > 0 && !committed && (
+              <Button type="button" size="sm" disabled={busy} onClick={commitAiRows}>
+                <Upload />
+                {busy ? "Importing…" : `Import ${aiRows.length} reviewed row(s)`}
+              </Button>
+            )}
+            <label className="cursor-pointer text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline">
+              …or upload a PDF / photo
+              <input
+                type="file"
+                accept="application/pdf,image/jpeg,image/png,image/webp,image/gif"
+                className="hidden"
+                onChange={onAiFile}
+              />
+            </label>
+          </>
         )}
-        <label className="cursor-pointer text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline">
-          …or upload a CSV file
-          <input
-            type="file"
-            accept=".csv,text/csv,text/plain"
-            className="hidden"
-            onChange={onFile}
-          />
-        </label>
         {filename && <span className="text-[11px] text-gray-400">{filename}</span>}
       </div>
 
@@ -185,10 +336,71 @@ export default function PilotImportCard({ farmId, onImported }) {
       {committed && (
         <p className="rounded bg-green-50 px-3 py-2 text-sm text-green-700">
           Imported {committed.created_record_ids?.length ?? 0} record(s) (batch #
-          {committed.batch?.id}), tagged spreadsheet / imported-unverified.
+          {committed.batch?.id}), tagged{" "}
+          {mode === "ai" ? "AI-extracted / imported-unverified" : "spreadsheet / imported-unverified"}.
           {report?.duplicate_count > 0 &&
             ` ${report.duplicate_count} duplicate row(s) were skipped and are listed below.`}
         </p>
+      )}
+
+      {extraction && (
+        <div className="space-y-2 rounded-md border border-indigo-200 bg-indigo-50/50 p-3">
+          <p className="text-xs font-medium text-indigo-900">
+            AI extraction ({extraction.is_mock ? "mock — set ANTHROPIC_API_KEY for real extraction" : extraction.model}
+            {" · "}confidence: {extraction.overall_confidence})
+          </p>
+          {extraction.abstained ? (
+            <p className="text-xs text-amber-800">
+              The AI abstained: {extraction.abstain_reason || "input not recognized as the requested record type."}
+            </p>
+          ) : (
+            aiRows.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="text-gray-500">
+                      {aiFieldColumns.map((f) => (
+                        <th key={f} className="py-1 pr-2 font-medium">{f.replace(/_/g, " ")}</th>
+                      ))}
+                      <th className="py-1 font-medium">source snippet</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {aiRows.map((row, i) => (
+                      <tr key={i} className="border-t border-indigo-100 align-top">
+                        {aiFieldColumns.map((f) => (
+                          <td key={f} className="py-1 pr-2">
+                            <input
+                              className="w-full min-w-20 rounded border border-gray-300 bg-white px-1 py-0.5 text-[11px]"
+                              value={row[f] ?? ""}
+                              onChange={(e) => editAiRow(i, f, e.target.value)}
+                            />
+                          </td>
+                        ))}
+                        <td className="py-1 text-gray-500">
+                          {extraction.rows[i]?.source_snippet || "—"}
+                          {extraction.rows[i]?.row_confidence && (
+                            <span className="ml-1 text-gray-400">
+                              ({extraction.rows[i].row_confidence})
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+          {extraction.caveats?.length > 0 && (
+            <ul className="space-y-0.5 text-[11px] text-indigo-900/70">
+              {extraction.caveats.map((c, i) => (
+                <li key={i}>• {c}</li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[11px] text-gray-500">{extraction.disclaimer}</p>
+        </div>
       )}
 
       {report && (

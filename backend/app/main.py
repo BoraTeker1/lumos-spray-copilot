@@ -6,15 +6,16 @@ No auth in v1, but handlers are kept stateless so an auth dependency can be adde
 import csv
 import io
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app import clock, crud, csv_import, decision_status, schemas
+from app import ai_brief, clock, crud, csv_import, decision_status, extraction, llm, schemas
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
 from app.pilot_evidence import (
+    build_ai_calibration,
     build_decision_evidence,
     build_evidence_export,
     build_instrumentation_summary,
@@ -442,6 +443,83 @@ def post_follow_up_event(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/planned-sprays/{planned_id}/ai-brief", tags=["planned-sprays"])
+def post_ai_brief(planned_id: int, db: Session = Depends(get_db)):
+    """AI review brief: retrieval-grounded rescue-risk note + next EVIDENCE actions.
+
+    On-demand only. Grounded exclusively in this decision's audit payload and
+    comparable real decisions on the same farm (explicit alias/chemistry match) with
+    their recorded follow-ups. Enum-locked to evidence-gathering actions — product or
+    spray recommendations are structurally inexpressible. Abstains (deterministic
+    server-side guard) with fewer than 2 real comparables. NEVER changes the
+    decision; both judgments are logged append-only for future calibration.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    comparables = crud.comparable_decisions(db, planned)
+
+    payload = planned.decision_payload or {}
+    decision_summary = {
+        "id": planned.id,
+        "product_name": planned.product_name,
+        "active_ingredient": planned.active_ingredient,
+        "moa_group": planned.moa_group,
+        "target_pest_or_disease": planned.target_pest_or_disease,
+        "intended_date": _iso(planned.intended_date),
+        "decision_outcome": planned.decision_outcome,
+        "decision_severity": planned.decision_severity,
+        "decision_authority": planned.decision_authority,
+        "triggered_rules": [
+            {"rule_id": r.get("rule_id"), "detail": r.get("detail")}
+            for r in payload.get("rules", []) if r.get("triggered")
+        ],
+        "missing_information": payload.get("missing_information", []),
+        "unverified_field_sources": (payload.get("inputs_used") or {}).get(
+            "field_sources", {}
+        ),
+        "recorded_outcome": planned.outcome,
+        "follow_up_required": planned.follow_up_required,
+        "follow_up_event_count": planned.follow_up_event_count,
+    }
+
+    service = llm.default_llm_service
+    try:
+        brief, model_id = service.parse(
+            ai_brief.build_system_prompt(),
+            ai_brief.build_content_blocks(decision_summary, comparables),
+            ai_brief.AiBrief,
+        )
+    except llm.LlmError as exc:
+        raise HTTPException(status_code=502, detail=f"AI brief failed: {exc}") from exc
+
+    brief = ai_brief.apply_post_guards(brief, len(comparables))
+    digest = ai_brief.input_digest(decision_summary, comparables)
+
+    risk_judgment = crud.log_ai_judgment(
+        db, kind="risk_note", model_id=model_id,
+        prompt_version=ai_brief.PROMPT_VERSION, input_digest=digest,
+        output={
+            "rescue_risk": brief.rescue_risk, "rationale": brief.rationale,
+            "comparable_count": len(comparables),
+        },
+        confidence=brief.confidence, abstained=brief.abstained,
+        abstain_reason=brief.abstain_reason, is_mock=service.is_mock,
+        farm_id=planned.farm_id, planned_spray_id=planned.id,
+    )
+    action_judgment = crud.log_ai_judgment(
+        db, kind="next_evidence_action", model_id=model_id,
+        prompt_version=ai_brief.PROMPT_VERSION, input_digest=digest,
+        output={"actions": [a.model_dump() for a in brief.next_evidence_actions]},
+        confidence=brief.confidence, abstained=brief.abstained,
+        abstain_reason=brief.abstain_reason, is_mock=service.is_mock,
+        farm_id=planned.farm_id, planned_spray_id=planned.id,
+    )
+
+    return ai_brief.brief_payload(
+        brief, model_id, service.is_mock, len(comparables),
+        [risk_judgment.id, action_judgment.id], comparables,
+    )
+
+
 @app.get("/farms/{farm_id}/decision-evidence", tags=["planned-sprays"])
 def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
     """Pre-spray decision workflow metrics for the pilot/evidence dashboard.
@@ -816,6 +894,105 @@ def farm_csv_import(
     return crud.import_csv(db, farm, payload)
 
 
+@app.post("/farms/{farm_id}/import/document", tags=["pilot-import"])
+async def farm_document_extraction(
+    farm_id: int,
+    record_type: str = Form(...),
+    text: str | None = Form(None),
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """AI extraction of draft rows from a messy document (PDF/photo) or pasted text.
+
+    REAL AI (Claude structured outputs; deterministic mock without an API key), and
+    honest about it: values are extracted only as literally written (regulatory
+    values are never guessed), every row carries a verbatim source snippet, the model
+    abstains when the input isn't a spray/scouting record, and the extraction is
+    logged to the append-only AI judgment log. This endpoint NEVER writes records —
+    it returns the same dry-run report as the CSV import; a human reviews/corrects
+    the rows and commits them via POST /farms/{id}/import/rows.
+    """
+    farm = _require_farm(db, farm_id)
+    if record_type not in csv_import.FIELDS_BY_TYPE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown record_type '{record_type}'. Use one of: "
+            f"{', '.join(sorted(csv_import.FIELDS_BY_TYPE))}.",
+        )
+
+    file_bytes = None
+    media_type = None
+    if file is not None:
+        media_type = (file.content_type or "").lower()
+        allowed = extraction.ALLOWED_DOCUMENT_TYPES + extraction.ALLOWED_IMAGE_TYPES
+        if media_type not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{media_type}'. Use PDF or an image "
+                f"(JPEG/PNG/WebP/GIF), or paste the text instead.",
+            )
+        file_bytes = await file.read()
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Empty file upload.")
+        if len(file_bytes) > extraction.MAX_DOCUMENT_BYTES:
+            raise HTTPException(status_code=400, detail="File too large (max 10 MB).")
+    if file_bytes is None and not (text or "").strip():
+        raise HTTPException(
+            status_code=422, detail="Provide a file or pasted text to extract from."
+        )
+
+    output_model = extraction.OUTPUT_MODELS[record_type]
+    blocks = extraction.build_content_blocks(text, file_bytes, media_type)
+    service = llm.default_llm_service
+    try:
+        result, model_id = service.parse(
+            extraction.build_system_prompt(record_type), blocks, output_model
+        )
+    except llm.LlmError as exc:  # refusal, truncation, transport — never a 500
+        raise HTTPException(status_code=502, detail=f"AI extraction failed: {exc}") from exc
+
+    judgment = crud.log_ai_judgment(
+        db,
+        kind="extraction",
+        model_id=model_id,
+        prompt_version=extraction.PROMPT_VERSION,
+        input_digest=extraction.input_digest(record_type, text, file_bytes),
+        output={"record_type": record_type, "rows": len(result.rows),
+                "abstained": result.abstained, "caveats": result.caveats},
+        confidence="none" if result.abstained else result.overall_confidence,
+        abstained=result.abstained,
+        abstain_reason=result.abstain_reason,
+        is_mock=service.is_mock,
+        farm_id=farm.id,
+    )
+
+    report = csv_import.validate_rows(
+        record_type,
+        extraction.rows_to_raw(result),
+        existing_keys=crud.existing_duplicate_keys(db, farm.id, record_type),
+    )
+    return {
+        "judgment_id": judgment.id,
+        "record_type": record_type,
+        "extraction": extraction.extraction_payload(result, model_id, service.is_mock),
+        "report": report.as_payload(),
+    }
+
+
+@app.post("/farms/{farm_id}/import/rows", tags=["pilot-import"])
+def farm_row_import(
+    farm_id: int, payload: schemas.RowImportRequest, db: Session = Depends(get_db)
+):
+    """Commit human-reviewed structured rows (the AI-extraction commit path).
+
+    Rows are RE-validated server-side through the exact same path as the CSV import
+    before anything is written; committed rows carry `ai_extracted` provenance and
+    field-level imported_unverified values — they can never auto-approve.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.import_rows(db, farm, payload)
+
+
 @app.post("/internal/farms/{farm_id}/pilot-import", status_code=201, tags=["internal"])
 def pilot_import(
     farm_id: int, payload: schemas.PilotImport, db: Session = Depends(get_db)
@@ -1036,6 +1213,17 @@ def reset_demo(db: Session = Depends(get_db)):
 
     summary = seed.run()
     return {"status": "reseeded", **(summary or {})}
+
+
+@app.get("/internal/ai-calibration", tags=["internal"])
+def internal_ai_calibration(db: Session = Depends(get_db)):
+    """INTERNAL: predicted AI rescue-risk vs. realized rescues, abstention rate, and
+    judgment counts. Rates are gated behind a minimum n — counts only until then."""
+    judgments = crud.list_ai_judgments(db)
+    decisions_by_id = {p.id: p for p in crud.list_all_planned_sprays(db)}
+    return build_ai_calibration(
+        judgments, decisions_by_id, crud.list_all_follow_up_events(db)
+    )
 
 
 @app.get("/internal/instrumentation", tags=["internal"])
