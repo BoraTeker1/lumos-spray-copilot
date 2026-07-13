@@ -11,6 +11,10 @@ frontend/.next/
 frontend/out/
 .env.local
 
+# Secrets
+.env
+backend/.env
+
 # OS
 .DS_Store
 docs/~$*
