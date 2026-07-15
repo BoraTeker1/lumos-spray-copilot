@@ -344,8 +344,8 @@ export default function PilotImportCard({ farmId, onImported }) {
       )}
 
       {extraction && (
-        <div className="space-y-2 rounded-md border border-indigo-200 bg-indigo-50/50 p-3">
-          <p className="text-xs font-medium text-indigo-900">
+        <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50/50 p-3">
+          <p className="text-xs font-medium text-blue-900">
             AI extraction ({extraction.is_mock ? "mock — set ANTHROPIC_API_KEY for real extraction" : extraction.model}
             {" · "}confidence: {extraction.overall_confidence})
           </p>
@@ -367,7 +367,7 @@ export default function PilotImportCard({ farmId, onImported }) {
                   </thead>
                   <tbody>
                     {aiRows.map((row, i) => (
-                      <tr key={i} className="border-t border-indigo-100 align-top">
+                      <tr key={i} className="border-t border-blue-100 align-top">
                         {aiFieldColumns.map((f) => (
                           <td key={f} className="py-1 pr-2">
                             <input
@@ -393,7 +393,7 @@ export default function PilotImportCard({ farmId, onImported }) {
             )
           )}
           {extraction.caveats?.length > 0 && (
-            <ul className="space-y-0.5 text-[11px] text-indigo-900/70">
+            <ul className="space-y-0.5 text-[11px] text-blue-900/70">
               {extraction.caveats.map((c, i) => (
                 <li key={i}>• {c}</li>
               ))}

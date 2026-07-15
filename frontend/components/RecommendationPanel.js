@@ -6,12 +6,11 @@ import RiskBadge from "./RiskBadge";
 import NextActionCard from "./NextActionCard";
 import AgronomistReview from "./AgronomistReview";
 import { formatDate } from "@/lib/format";
+import { RISK_LEVEL_TONES, tone } from "@/lib/tones";
 
-const BOX_STYLES = {
-  low: "border-green-200 bg-green-50",
-  moderate: "border-amber-200 bg-amber-50",
-  elevated: "border-red-200 bg-red-50",
-};
+const BOX_STYLES = Object.fromEntries(
+  Object.entries(RISK_LEVEL_TONES).map(([k, t]) => [k, tone(t).box])
+);
 
 // Shows the latest recommendation (next action + risk + agronomist review) and
 // lets the user generate a fresh one.
@@ -41,7 +40,7 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
         <button
           onClick={generate}
           disabled={generating}
-          className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-50"
+          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-50"
         >
           {generating ? "Generating…" : latest ? "Re-generate" : "Generate recommendation"}
         </button>

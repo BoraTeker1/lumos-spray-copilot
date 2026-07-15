@@ -7,7 +7,7 @@ const STATUS_STYLES = {
   pending: "bg-gray-100 text-gray-700",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
-  edited: "bg-indigo-100 text-indigo-800",
+  edited: "bg-blue-100 text-blue-800",
 };
 
 // Agronomist review controls for a single recommendation:
@@ -60,7 +60,7 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
             <button
               onClick={() => apply({ agronomist_status: "edited", recommendation_text: draft })}
               disabled={saving}
-              className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               Save edited guidance
             </button>
@@ -95,7 +95,7 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
             <button
               onClick={() => setEditing(true)}
               disabled={saving}
-              className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               Edit recommendation
             </button>

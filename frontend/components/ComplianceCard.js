@@ -1,30 +1,25 @@
 import { CircleCheck, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { REVIEW_STATE_TONES, tone } from "@/lib/tones";
 
-// One compliance signal row: neutral check when OK, amber warning when at risk.
+// One compliance signal row: green pill when OK, amber pill when at risk. The
+// wording stays cautious ("May be active", not "violation") — these signals
+// come from user-entered values, not verified label data.
 function Row({ label, danger, okText = "OK", warnText = "Review" }) {
   return (
     <div className="flex items-center justify-between gap-2 border-b border-gray-100 py-1.5 last:border-0">
       <span className="text-xs text-gray-600">{label}</span>
-      <span
-        className={`inline-flex shrink-0 items-center gap-1 text-xs font-medium ${
-          danger ? "text-amber-700" : "text-gray-500"
-        }`}
-      >
-        {danger ? <TriangleAlert className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
+      <Badge variant={danger ? "amber" : "green"} className="shrink-0 uppercase">
+        {danger ? <TriangleAlert /> : <CircleCheck />}
         {danger ? warnText : okText}
-      </span>
+      </Badge>
     </div>
   );
 }
 
-const REVIEW_VARIANTS = {
-  approved: "green",
-  edited: "indigo",
-  rejected: "red",
-  pending: "amber",
-  none: "neutral",
-};
+const REVIEW_VARIANTS = Object.fromEntries(
+  Object.entries(REVIEW_STATE_TONES).map(([k, t]) => [k, tone(t).badge])
+);
 
 // Compact compliance snapshot for the right rail. Receives `data` from the page
 // (the farm detail page already fetches /compliance for the header KPIs).

@@ -42,7 +42,7 @@ export default function ActivityTimeline({ sprays = [], observations = [], count
         <li key={item.id} className="relative pb-4 last:pb-0">
           <span
             className={`absolute -left-[27px] top-0.5 flex h-5 w-5 items-center justify-center rounded-full ring-4 ring-white ${
-              item.type === "spray" ? "bg-sky-100 text-sky-700" : "bg-gray-100 text-gray-600"
+              item.type === "spray" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"
             }`}
           >
             {item.type === "spray" ? (

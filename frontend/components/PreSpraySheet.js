@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatCost } from "@/lib/format";
 import { RECORDED_OUTCOME_LABELS, REVIEW_STATE_LABELS } from "@/lib/labels";
+import { RECORDED_OUTCOME_TONES, REVIEW_STATE_TONES, tone } from "@/lib/tones";
 import DecisionResult, { OUTCOME_META } from "@/components/DecisionResult";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,19 +40,18 @@ const DISCLAIMER =
 const RECORDABLE_OUTCOMES = [
   "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first",
 ];
-const OUTCOME_VARIANTS = {
-  sprayed_as_planned: "neutral",
-  changed_product: "indigo",
-  delayed: "amber",
-  avoided: "green",
-  inspected_first: "green",
-};
-const REVIEW_VARIANTS = { approved: "green", edited: "indigo", rejected: "red" };
+const OUTCOME_VARIANTS = Object.fromEntries(
+  Object.entries(RECORDED_OUTCOME_TONES).map(([k, t]) => [k, tone(t).badge])
+);
+const REVIEW_VARIANTS = Object.fromEntries(
+  Object.entries(REVIEW_STATE_TONES).map(([k, t]) => [k, tone(t).badge])
+);
 
-const inputCls = "w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm";
+const inputCls =
+  "w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:border-leaf-600 focus:outline-none focus:ring-1 focus:ring-leaf-600";
 
 // PCA review controls for one pre-spray decision (approve / edit / reject + comment).
-function DecisionReview({ planned, onChanged }) {
+export function DecisionReview({ planned, onChanged }) {
   const [comment, setComment] = useState("");
   const [reviewer, setReviewer] = useState("");
   const [editedAction, setEditedAction] = useState("");
@@ -90,7 +90,7 @@ function DecisionReview({ planned, onChanged }) {
       <div className="mb-1.5 text-xs font-semibold text-gray-700">
         PCA / agronomist review
         {planned.review_required && (
-          <span className="ml-1.5 font-normal text-indigo-700">
+          <span className="ml-1.5 font-normal text-blue-700">
             required before this spray can be logged as applied
           </span>
         )}
@@ -159,7 +159,7 @@ function DecisionReview({ planned, onChanged }) {
 }
 
 // Records what actually happened in the field (the five real-world outcomes).
-function OutcomeRecorder({ planned, onChanged }) {
+export function OutcomeRecorder({ planned, onChanged }) {
   const [reason, setReason] = useState("");
   const [outcomeDate, setOutcomeDate] = useState("");
   const [changedProduct, setChangedProduct] = useState("");
@@ -248,7 +248,7 @@ function OutcomeRecorder({ planned, onChanged }) {
         ))}
       </div>
       {reviewGateActive && (
-        <p className="text-[11px] text-indigo-700">
+        <p className="text-[11px] text-blue-700">
           Applied outcomes unlock after a PCA approves or edits this decision.
         </p>
       )}

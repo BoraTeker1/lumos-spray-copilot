@@ -40,9 +40,9 @@ export default function AiBriefCard({ plannedId }) {
   }
 
   return (
-    <div className="no-print space-y-2 rounded-md border border-indigo-200 bg-indigo-50/40 p-3">
+    <div className="no-print space-y-2 rounded-md border border-blue-200 bg-blue-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-indigo-900">
+        <p className="text-xs font-semibold text-blue-900">
           AI review brief (beta) — suggestion only; the verdict above stays deterministic
         </p>
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={generate}>

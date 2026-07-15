@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { api, API_BASE_URL } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { fieldClass } from "@/components/ui/input";
+import Breadcrumbs from "@/components/Breadcrumbs";
 
 const PERSON_TYPES = ["grower", "PCA", "agronomist", "exporter", "input_supplier", "other"];
 const RECORDS = ["paper", "spreadsheet", "whatsapp", "software", "none", "other"];
@@ -64,19 +67,20 @@ export default function FeedbackPage() {
     }
   }
 
-  const input = "w-full rounded border px-2 py-1 text-sm";
+  const input = fieldClass;
   const label = "text-xs font-medium text-gray-600";
 
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={[{ label: "Feedback" }]} />
       <div>
-        <h1 className="text-2xl font-semibold">Pilot feedback</h1>
+        <h1 className="text-lg font-semibold text-gray-900">Pilot feedback</h1>
         <p className="mt-1 text-sm text-gray-500">
           Capture what growers, PCAs, and operators say after a demo. Stored locally.
         </p>
       </div>
 
-      <form onSubmit={submit} className="grid gap-3 rounded-lg border bg-white p-5 shadow-sm sm:grid-cols-2">
+      <form onSubmit={submit} className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-2">
         <div>
           <span className={label}>Person type *</span>
           <select className={input} value={form.person_type} onChange={(e) => update("person_type", e.target.value)}>
@@ -129,16 +133,19 @@ export default function FeedbackPage() {
         </div>
         {error && <p className="text-sm text-red-600 sm:col-span-2">{error}</p>}
         <div className="sm:col-span-2">
-          <button type="submit" disabled={saving} className="rounded bg-leaf px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+          <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save feedback"}
-          </button>
+          </Button>
         </div>
       </form>
 
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">Captured feedback ({items.length})</h2>
         {items.length > 0 && (
-          <a href={`${API_BASE_URL}/export/pilot-feedback.csv`} className="rounded border px-3 py-1.5 text-sm hover:border-leaf">
+          <a
+            href={`${API_BASE_URL}/export/pilot-feedback.csv`}
+            className="rounded-lg border border-leaf-600/40 bg-white px-3 py-1.5 text-sm font-medium text-leaf-700 shadow-sm hover:bg-leaf-50"
+          >
             Export CSV
           </a>
         )}
@@ -146,7 +153,7 @@ export default function FeedbackPage() {
 
       <div className="space-y-2">
         {items.map((it) => (
-          <div key={it.id} className="rounded-lg border bg-white p-3 text-sm shadow-sm">
+          <div key={it.id} className="rounded-xl border border-gray-200 bg-white p-3 text-sm shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{it.person_type}</span>
               {it.crop && <span className="text-xs text-gray-500">{it.crop}</span>}

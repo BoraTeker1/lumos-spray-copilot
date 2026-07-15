@@ -3,5 +3,22 @@
 @tailwind utilities;
 
 body {
-  @apply bg-gray-50 text-gray-900;
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+/* Print: hide app chrome and interactive controls so printable pages
+   (e.g. the decision record) come out as a clean one-column document. */
+@media print {
+  aside,
+  header,
+  footer,
+  .no-print {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  body {
+    background: white;
+  }
 }

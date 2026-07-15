@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { RISK_LEVEL_TONES, tone } from "@/lib/tones";
 
-const RISK_VARIANTS = { low: "neutral", moderate: "amber", elevated: "red" };
+const RISK_VARIANTS = Object.fromEntries(
+  Object.entries(RISK_LEVEL_TONES).map(([k, t]) => [k, tone(t).badge])
+);
 
 // Compact, provenance-labelled weather info for the right rail. Demo data —
 // deliberately not presented as a major compliance signal.

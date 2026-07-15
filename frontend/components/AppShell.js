@@ -1,28 +1,51 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Leaf, Sprout, ClipboardList, MessageSquare, PanelLeft } from "lucide-react";
+import {
+  Building2,
+  CalendarClock,
+  ClipboardList,
+  Droplets,
+  Eye,
+  FileCheck,
+  LayoutDashboard,
+  Leaf,
+  MessageSquare,
+  PanelLeft,
+  ShieldCheck,
+  Sprout,
+} from "lucide-react";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { FarmProvider, useFarmContext } from "@/lib/farm-context";
 import { cn } from "@/lib/utils";
 
+// Sidebar sections. Every farm-scoped page reads the active farm from
+// FarmProvider; /internal stays deliberately unlinked (operator tooling).
 const MAIN_NAV = [
-  { href: "/", label: "Farms", icon: Sprout },
-  { href: "/pilot/new", label: "Pilot setup", icon: ClipboardList },
+  { href: "/", label: "Operations", icon: LayoutDashboard, exact: true },
+  { href: "/farms", label: "Farms & fields", icon: Sprout },
+  { href: "/decisions", label: "Decisions", icon: ShieldCheck },
+  { href: "/scouting", label: "Scouting", icon: Eye },
+  { href: "/applications", label: "Applications", icon: Droplets },
+  { href: "/evidence", label: "Evidence & reports", icon: FileCheck },
 ];
-const BOTTOM_NAV = [{ href: "/feedback", label: "Feedback", icon: MessageSquare }];
+const BOTTOM_NAV = [
+  { href: "/pilot/new", label: "Pilot setup", icon: ClipboardList },
+  { href: "/feedback", label: "Feedback", icon: MessageSquare },
+];
 
 const DISCLAIMER =
   "Decision support only. Always confirm PHI, REI, rates, crop use, and restrictions with the product label and a licensed PCA / agronomist.";
 
-function isActive(pathname, href) {
-  if (href === "/") return pathname === "/" || pathname.startsWith("/farms");
-  return pathname === href || pathname.startsWith(`${href}/`);
+function isActive(pathname, item) {
+  if (item.exact) return pathname === item.href;
+  return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
 function NavLink({ item, pathname, collapsed, onNavigate }) {
-  const active = isActive(pathname, item.href);
+  const active = isActive(pathname, item);
   const Icon = item.icon;
   return (
     <Link
@@ -30,12 +53,14 @@ function NavLink({ item, pathname, collapsed, onNavigate }) {
       onClick={onNavigate}
       title={collapsed ? item.label : undefined}
       className={cn(
-        "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-        active ? "bg-gray-100 text-gray-900" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
+        "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
+        active
+          ? "bg-leaf-50 text-leaf-700 ring-1 ring-inset ring-green-200"
+          : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
         collapsed && "justify-center px-0"
       )}
     >
-      <Icon className="h-4 w-4 shrink-0" />
+      <Icon className={cn("h-4 w-4 shrink-0", active && "text-leaf-700")} />
       {!collapsed && <span>{item.label}</span>}
     </Link>
   );
@@ -44,17 +69,13 @@ function NavLink({ item, pathname, collapsed, onNavigate }) {
 function Brand({ collapsed }) {
   return (
     <Link href="/" className="flex items-center gap-2 px-1">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-leaf text-white">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-leaf text-white">
         <Leaf className="h-4 w-4" />
       </span>
       {!collapsed && (
         <span className="min-w-0">
-          <span className="block truncate text-sm font-semibold text-gray-900">
-            Lumos Spray Copilot
-          </span>
-          <span className="block text-[11px] leading-tight text-gray-500">
-            Decision &amp; compliance
-          </span>
+          <span className="block truncate text-sm font-semibold text-gray-900">Lumos</span>
+          <span className="block text-[11px] leading-tight text-gray-500">Spray Copilot</span>
         </span>
       )}
     </Link>
@@ -90,9 +111,53 @@ function SidebarNav({ pathname, collapsed = false, onNavigate }) {
   );
 }
 
-// Global application frame: collapsible sidebar on desktop, sheet sidebar on
-// mobile, one decision-support disclaimer in the footer.
-export default function AppShell({ children }) {
+// Farm switcher chip — real farms from /farms-overview (secondary demo farms
+// excluded by the shared visibility rule). A styled native select: zero deps,
+// keyboard- and mobile-friendly.
+function FarmSwitcher() {
+  const { farms, activeFarm, setActiveFarmId } = useFarmContext();
+  if (!farms.length) return null;
+  return (
+    <label className="hidden items-center gap-1.5 rounded-full border border-gray-200 bg-white py-1 pl-2.5 pr-1 text-xs text-gray-700 sm:inline-flex">
+      <Building2 className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+      <select
+        aria-label="Active farm"
+        value={activeFarm?.id ?? ""}
+        onChange={(e) => setActiveFarmId(e.target.value)}
+        className="max-w-[180px] cursor-pointer truncate bg-transparent pr-1 text-xs font-medium focus:outline-none"
+      >
+        {farms.map((f) => (
+          <option key={f.id} value={f.id}>
+            {f.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// Today's date chip — rendered after mount only (SSR-safe).
+function DateChip() {
+  const [today, setToday] = useState(null);
+  useEffect(() => {
+    setToday(
+      new Date().toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    );
+  }, []);
+  if (!today) return null;
+  return (
+    <span className="hidden items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 sm:inline-flex">
+      <CalendarClock className="h-3.5 w-3.5 text-gray-400" />
+      {today}
+    </span>
+  );
+}
+
+function ShellFrame({ children }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -113,11 +178,11 @@ export default function AppShell({ children }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Top bar: mobile nav trigger + desktop collapse toggle */}
+        {/* Top bar: nav triggers left, farm switcher + date right */}
         <header className="sticky top-0 z-40 flex h-12 items-center gap-2 border-b border-gray-200 bg-white px-3">
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetTrigger
-              className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:hidden"
+              className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:hidden"
               aria-label="Open navigation"
             >
               <PanelLeft className="h-4 w-4" />
@@ -134,7 +199,7 @@ export default function AppShell({ children }) {
           </Sheet>
           <button
             onClick={() => setCollapsed((v) => !v)}
-            className="hidden rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:inline-flex"
+            className="hidden rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:inline-flex"
             aria-label="Toggle sidebar"
           >
             <PanelLeft className="h-4 w-4" />
@@ -142,6 +207,10 @@ export default function AppShell({ children }) {
           <span className="text-sm font-semibold text-gray-900 md:hidden">
             Lumos Spray Copilot
           </span>
+          <div className="ml-auto flex items-center gap-2">
+            <FarmSwitcher />
+            <DateChip />
+          </div>
         </header>
 
         <main className="flex-1 px-4 py-5 md:px-6">
@@ -153,5 +222,15 @@ export default function AppShell({ children }) {
         </footer>
       </div>
     </div>
+  );
+}
+
+// Global application frame: collapsible sidebar on desktop, sheet sidebar on
+// mobile, one decision-support disclaimer in the footer.
+export default function AppShell({ children }) {
+  return (
+    <FarmProvider>
+      <ShellFrame>{children}</ShellFrame>
+    </FarmProvider>
   );
 }

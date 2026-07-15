@@ -13,51 +13,45 @@ import {
   decisionAuthorityLabel,
   isProvisionalAuthority,
 } from "@/lib/labels";
+import { DECISION_OUTCOME_TONES, tone } from "@/lib/tones";
 
 // One outcome, one look. Wording stays cautious: BLOCK blocks an application,
-// nothing here ever instructs anyone to spray.
-export const OUTCOME_META = {
+// nothing here ever instructs anyone to spray. Colors come from the shared
+// tone table (lib/tones.js); labels/icons/captions live here.
+const OUTCOME_CONTENT = {
   approve: {
     label: "APPROVE",
     icon: CircleCheck,
-    box: "border-green-300 bg-green-50",
-    text: "text-green-900",
-    badge: "green",
     caption: "No conflicts found from entered records",
   },
   block: {
     label: "BLOCK",
     icon: OctagonX,
-    box: "border-red-300 bg-red-50",
-    text: "text-red-900",
-    badge: "red",
     caption: "Conflicts with entered harvest / re-entry timing",
   },
   delay: {
     label: "DELAY",
     icon: Clock,
-    box: "border-amber-300 bg-amber-50",
-    text: "text-amber-900",
-    badge: "amber",
     caption: "A re-entry interval is still active",
   },
   inspect_first: {
     label: "INSPECT FIRST",
     icon: Search,
-    box: "border-amber-300 bg-amber-50",
-    text: "text-amber-900",
-    badge: "amber",
     caption: "No sufficient scouting evidence for the target",
   },
   pca_review_required: {
     label: "PCA REVIEW REQUIRED",
     icon: CircleHelp,
-    box: "border-indigo-300 bg-indigo-50",
-    text: "text-indigo-900",
-    badge: "indigo",
     caption: "Needs a PCA / agronomist decision",
   },
 };
+
+export const OUTCOME_META = Object.fromEntries(
+  Object.entries(OUTCOME_CONTENT).map(([key, content]) => {
+    const t = tone(DECISION_OUTCOME_TONES[key]);
+    return [key, { ...content, box: t.box, text: t.text, badge: t.badge, dot: t.dot }];
+  })
+);
 
 function SourceChip({ rule }) {
   const verified = rule.verification_status === "verified";
@@ -139,7 +133,7 @@ export default function DecisionResult({ planned, compact = false }) {
         {/* Server-derived review state — an edited/approved/rejected decision can
             never show "review required" (review_state, not review_required). */}
         {planned.review_state === "pending" && (
-          <Badge variant="indigo">PCA review required</Badge>
+          <Badge variant="blue">PCA review required</Badge>
         )}
       </div>
 

@@ -158,7 +158,7 @@ export default function InternalToolsPage() {
         </div>
       )}
 
-      <section className="rounded-lg border bg-white p-5 shadow-sm">
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="font-semibold">Pilot instrumentation</h2>
         <p className="mb-3 mt-1 text-xs text-gray-500">
           Workflow telemetry for running a real pilot: the check funnel, review latency,
@@ -167,7 +167,7 @@ export default function InternalToolsPage() {
         <InstrumentationSummary />
       </section>
 
-      <section className="rounded-lg border bg-white p-5 shadow-sm">
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="font-semibold">AI calibration</h2>
         <p className="mb-3 mt-1 text-xs text-gray-500">
           Every AI output (extraction, risk note, evidence action) is logged append-only;
@@ -177,7 +177,7 @@ export default function InternalToolsPage() {
         <AiCalibrationSummary />
       </section>
 
-      <section className="rounded-lg border bg-white p-5 shadow-sm">
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="font-semibold">Concierge import</h2>
         <p className="mb-3 mt-1 text-xs text-gray-500">
           Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an

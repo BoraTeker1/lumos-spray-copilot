@@ -7,7 +7,16 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        leaf: "#16a34a",
+        // Brand green scale. DEFAULT matches Tailwind green-600 so existing
+        // `bg-leaf` call sites keep rendering identically.
+        leaf: {
+          DEFAULT: "#16a34a",
+          50: "#f0fdf4",
+          100: "#dcfce7",
+          600: "#16a34a",
+          700: "#15803d",
+          800: "#166534",
+        },
       },
     },
   },

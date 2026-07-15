@@ -1,27 +1,27 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  ArrowLeft,
   CalendarClock,
   ClipboardCheck,
-  Download,
+  CloudSun,
   Droplets,
   Eye,
   FlaskConical,
   ListChecks,
   MapPin,
   Plus,
+  Sprout,
   TriangleAlert,
+  Users,
 } from "lucide-react";
-import { api, API_BASE_URL } from "@/lib/api";
+import { api } from "@/lib/api";
 import { formatArea, formatDate } from "@/lib/format";
 import { URGENCY_META } from "@/lib/labels";
+import { useFarmContext } from "@/lib/farm-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -32,20 +32,19 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ActivityTimeline from "@/components/ActivityTimeline";
-import AnalyticsCard from "@/components/AnalyticsCard";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import ComplianceCard from "@/components/ComplianceCard";
-import DecisionEvidenceCard from "@/components/DecisionEvidenceCard";
+import EvidencePanel from "@/components/EvidencePanel";
+import KpiTile from "@/components/KpiTile";
+import NextActionBanner from "@/components/NextActionBanner";
 import PhotoScoutCard from "@/components/PhotoScoutCard";
-import PilotEvidenceCard from "@/components/PilotEvidenceCard";
-import PreSpraySheet, { PlannedSprayList } from "@/components/PreSpraySheet";
-import RecommendationPanel from "@/components/RecommendationPanel";
-import ReductionCard from "@/components/ReductionCard";
-import ScoutObservationForm from "@/components/ScoutObservationForm";
-import SprayEventForm from "@/components/SprayEventForm";
 import PilotImportCard from "@/components/PilotImportCard";
+import PreSpraySheet, { PlannedSprayList } from "@/components/PreSpraySheet";
+import ScoutObservationForm from "@/components/ScoutObservationForm";
+import SectionCard from "@/components/SectionCard";
+import SprayEventForm from "@/components/SprayEventForm";
 import SprayImportCard from "@/components/SprayImportCard";
 import WeatherCard from "@/components/WeatherCard";
-import WeeklyReport from "@/components/WeeklyReport";
 
 const TABS = ["overview", "planned", "records", "evidence"];
 
@@ -56,45 +55,17 @@ function isDemoRecord(r) {
   return r.data_source === "demo" || r.data_confidence === "simulated";
 }
 
-function Kpi({ icon: Icon, label, value, hint, tone = "neutral" }) {
-  const toneCls =
-    tone === "amber" ? "text-amber-700" : tone === "green" ? "text-green-700" : "text-gray-900";
-  return (
-    <Card>
-      <CardContent className="p-3.5 pt-3.5">
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <Icon className="h-3.5 w-3.5" />
-          {label}
-        </div>
-        <div className={`mt-1 truncate text-lg font-semibold ${toneCls}`}>{value}</div>
-        {hint && <div className="text-[11px] text-gray-400">{hint}</div>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function SectionCard({ title, icon, description, action, children }) {
-  return (
-    <Card>
-      <CardHeader className="flex-row items-start justify-between gap-2 space-y-0">
-        <div>
-          <CardTitle>
-            {icon}
-            {title}
-          </CardTitle>
-          {description && <p className="mt-0.5 text-xs text-gray-500">{description}</p>}
-        </div>
-        {action}
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
-  );
-}
-
 function FarmDetail({ farmId }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { farms, setActiveFarmId } = useFarmContext();
+
+  // Visiting a farm makes it the active farm for the farm-scoped sidebar pages
+  // (only if it's in the visible switcher list — TR demo farms stay unlinked).
+  useEffect(() => {
+    if (farms.some((f) => f.id === Number(farmId))) setActiveFarmId(farmId);
+  }, [farmId, farms, setActiveFarmId]);
 
   const [farm, setFarm] = useState(null);
   const [overview, setOverview] = useState(null);
@@ -158,12 +129,23 @@ function FarmDetail({ farmId }) {
     const provenanceConfidence = [
       ...new Set(records.map((r) => r.data_confidence).filter(Boolean)),
     ];
-    return { openPlanned, hasDocumentedSkip, provenanceSources, provenanceConfidence };
+    // Most recent observation that recorded a crop stage — the honest stand-in
+    // for "growth stage" (it's what was last scouted, not a live sensor).
+    const lastScoutedStage = [...observations]
+      .sort((a, b) => (a.observation_date < b.observation_date ? 1 : -1))
+      .find((o) => o.crop_stage)?.crop_stage;
+    return {
+      openPlanned,
+      hasDocumentedSkip,
+      provenanceSources,
+      provenanceConfidence,
+      lastScoutedStage,
+    };
   }, [sprays, observations, planned]);
 
   if (error)
     return (
-      <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
         {error} — is the backend running on <code>http://localhost:8000</code>?
       </div>
     );
@@ -183,39 +165,63 @@ function FarmDetail({ farmId }) {
     <div className="space-y-5">
       {/* Farm header */}
       <div>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Farms
-        </Link>
-        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3">
+        <Breadcrumbs
+          items={[{ label: "Farms & fields", href: "/farms" }, { label: farm.name }]}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg font-semibold text-gray-900">{farm.name}</h1>
+              <Badge variant={status.variant}>{status.label}</Badge>
               {isDemoFarm && (
                 <Badge variant="outline">
                   <FlaskConical />
                   Simulated demo data
                 </Badge>
               )}
-              <Badge variant={status.variant}>{status.label}</Badge>
             </div>
-            <p className="mt-0.5 flex items-center gap-1 text-xs text-gray-500">
-              <MapPin className="h-3.5 w-3.5" />
-              {farm.location || "—"} · {farm.crop_type?.replace(/_/g, " ")}
-              {farm.greenhouse_area != null &&
-                ` · ${formatArea(farm.greenhouse_area, farm.country)}`}
-            </p>
+            {/* Meta strip — real farm fields only */}
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+              <span className="inline-flex items-center gap-1">
+                <MapPin className="h-3.5 w-3.5" />
+                {farm.location || "—"}
+              </span>
+              <span className="inline-flex items-center gap-1 capitalize">
+                <Sprout className="h-3.5 w-3.5" />
+                {farm.crop_type?.replace(/_/g, " ") || "—"}
+                {farm.greenhouse_area != null &&
+                  ` · ${formatArea(farm.greenhouse_area, farm.country)}`}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <CalendarClock className="h-3.5 w-3.5" />
+                harvest {formatDate(farm.expected_harvest_date)}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <Users className="h-3.5 w-3.5" />
+                PCA involved: {farm.advisor_involved ? "yes" : "no"}
+              </span>
+              {derived.lastScoutedStage && (
+                <span className="inline-flex items-center gap-1 capitalize">
+                  <Eye className="h-3.5 w-3.5" />
+                  last scouted stage: {derived.lastScoutedStage.replace(/_/g, " ")}
+                </span>
+              )}
+            </div>
           </div>
           <PreSpraySheet farmId={farmId} onChanged={load} />
         </div>
       </div>
 
+      {/* Server-computed next action for this farm */}
+      <NextActionBanner
+        nextAction={overview.next_action}
+        why={overview.why}
+        urgency={overview.urgency}
+      />
+
       {/* KPI row — every number is the server's overview entry (dashboard parity). */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi
+        <KpiTile
           icon={CalendarClock}
           label="Upcoming harvest"
           value={formatDate(farm.expected_harvest_date)}
@@ -226,24 +232,26 @@ function FarmDetail({ farmId }) {
               ? `in ${overview.days_to_harvest} day${overview.days_to_harvest === 1 ? "" : "s"}`
               : `${-overview.days_to_harvest} days ago`
           }
+          tone="neutral"
         />
-        <Kpi
+        <KpiTile
           icon={ClipboardCheck}
-          label="Decisions needing PCA review"
+          label="Needs PCA review"
           value={overview.needs_review_count}
-          tone={overview.needs_review_count > 0 ? "amber" : "neutral"}
+          tone={overview.needs_review_count > 0 ? "warn" : "neutral"}
         />
-        <Kpi
+        <KpiTile
           icon={ListChecks}
-          label="Checked sprays awaiting outcome"
+          label="Awaiting outcome"
           value={overview.awaiting_outcome_count}
-          tone={overview.awaiting_outcome_count > 0 ? "amber" : "neutral"}
+          hint="checked sprays, no recorded result"
+          tone={overview.awaiting_outcome_count > 0 ? "warn" : "neutral"}
         />
-        <Kpi
+        <KpiTile
           icon={TriangleAlert}
           label="Risk flags"
           value={overview.flag_count}
-          tone={overview.flag_count > 0 ? "amber" : "neutral"}
+          tone={overview.flag_count > 0 ? "warn" : "good"}
           hint="PHI · REI · rotation · scouting"
         />
       </div>
@@ -276,7 +284,7 @@ function FarmDetail({ farmId }) {
                   planned.length > 3 && (
                     <button
                       onClick={() => setTab("planned")}
-                      className="text-xs font-medium text-gray-500 hover:text-gray-900"
+                      className="text-xs font-medium text-leaf-700 hover:underline"
                     >
                       View all ({planned.length})
                     </button>
@@ -304,11 +312,49 @@ function FarmDetail({ farmId }) {
             {/* Right rail */}
             <div className="space-y-4">
               <SectionCard
+                title="Field conditions"
+                icon={<CloudSun />}
+                description="Simulated demo weather — not a live feed."
+              >
+                <WeatherCard farmId={farmId} />
+              </SectionCard>
+
+              <SectionCard
                 title="Pre-spray risk snapshot"
                 icon={<ClipboardCheck />}
                 description="From user-entered PHI/REI values — not label-verified."
               >
                 <ComplianceCard data={compliance} />
+              </SectionCard>
+
+              <SectionCard title="Field details" icon={<Sprout />}>
+                <dl className="space-y-1.5 text-xs">
+                  {[
+                    ["Crop", farm.crop_type?.replace(/_/g, " ") || "—"],
+                    [
+                      "Area",
+                      farm.greenhouse_area != null
+                        ? formatArea(farm.greenhouse_area, farm.country)
+                        : "—",
+                    ],
+                    ["Planted", farm.planting_date ? formatDate(farm.planting_date) : "—"],
+                    [
+                      "Expected harvest",
+                      farm.expected_harvest_date
+                        ? formatDate(farm.expected_harvest_date)
+                        : "—",
+                    ],
+                    ["Country", (farm.country || "US").toUpperCase()],
+                    ["PCA / advisor involved", farm.advisor_involved ? "Yes" : "No"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex items-center justify-between gap-2">
+                      <dt className="text-gray-500">{label}</dt>
+                      <dd className="text-right font-medium capitalize text-gray-800">
+                        {value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
               </SectionCard>
 
               <SectionCard title="Data provenance" icon={<FlaskConical />}>
@@ -335,10 +381,6 @@ function FarmDetail({ farmId }) {
                     </p>
                   )}
                 </div>
-              </SectionCard>
-
-              <SectionCard title="Weather (demo)" icon={<Eye />}>
-                <WeatherCard farmId={farmId} />
               </SectionCard>
             </div>
           </div>
@@ -446,103 +488,18 @@ function FarmDetail({ farmId }) {
 
         {/* ------------------------------------------------------------- Evidence */}
         <TabsContent value="evidence">
-          <div className="space-y-4">
-            {isDemoFarm && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <div className="font-semibold">SIMULATED DEMO DATA — NOT A CUSTOMER RESULT</div>
-                  <p className="text-xs">
-                    Every record on this farm is seeded for demonstration. Numbers below are
-                    illustrative of the workflow, not evidence from a real operation.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <SectionCard
-              title="Decision evidence"
-              icon={<ListChecks />}
-              description="What the pre-spray decision workflow documented — counts and entered estimates, demo data excluded."
-            >
-              <DecisionEvidenceCard
-                farmId={farmId}
-                country={farm.country}
-                area={farm.greenhouse_area}
-                refreshKey={`${planned.length}-${planned.filter((p) => !p.is_open).length}`}
-              />
-            </SectionCard>
-
-            <SectionCard
-              title="Measured spray reduction"
-              icon={<ListChecks />}
-              description="Sprays vs. a grower/PCA-declared baseline. No baseline, no number."
-            >
-              <ReductionCard farmId={farmId} refreshKey={sprays.length} />
-            </SectionCard>
-
-            <SectionCard title="Pilot evidence" icon={<ClipboardCheck />}>
-              <PilotEvidenceCard
-                farmId={farmId}
-                country={farm.country}
-                hasDocumentedSkip={derived.hasDocumentedSkip}
-                refreshKey={`${sprays.length}-${observations.length}-${recommendations.length}-${latest?.agronomist_status || ""}`}
-              />
-            </SectionCard>
-
-            <SectionCard title="Cost analytics" icon={<Download />}>
-              <AnalyticsCard
-                farmId={farmId}
-                country={farm.country}
-                hasDocumentedSkip={derived.hasDocumentedSkip}
-                refreshKey={sprays.length}
-              />
-            </SectionCard>
-
-            <SectionCard
-              title="Weekly risk review"
-              icon={<ClipboardCheck />}
-              description="Farm-wide review of current records; only PCA-approved or edited guidance reaches the weekly report below."
-            >
-              <RecommendationPanel farmId={farmId} latest={latest} onChanged={load} />
-            </SectionCard>
-
-            <SectionCard
-              title="Weekly report"
-              icon={<ClipboardCheck />}
-              description="Copy-pasteable summary for the grower (WhatsApp / text)."
-            >
-              <WeeklyReport farmId={farmId} />
-            </SectionCard>
-
-            <SectionCard title="Exports" icon={<Download />}>
-              <div className="flex flex-wrap gap-2">
-                <a
-                  href={`${API_BASE_URL}/farms/${farmId}/export/spray-events.csv`}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Spray events CSV
-                </a>
-                <a
-                  href={`${API_BASE_URL}/farms/${farmId}/export/recommendations.csv`}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Recommendations CSV
-                </a>
-                <a
-                  href={`${API_BASE_URL}/farms/${farmId}/audit-packet`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Audit packet (JSON)
-                </a>
-              </div>
-            </SectionCard>
-          </div>
+          <EvidencePanel
+            farmId={farmId}
+            farm={farm}
+            isDemoFarm={isDemoFarm}
+            hasDocumentedSkip={derived.hasDocumentedSkip}
+            latest={latest}
+            planned={planned}
+            sprays={sprays}
+            observations={observations}
+            recommendations={recommendations}
+            onChanged={load}
+          />
         </TabsContent>
       </Tabs>
     </div>
