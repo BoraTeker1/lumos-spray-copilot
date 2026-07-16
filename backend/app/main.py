@@ -95,6 +95,15 @@ def _farm_overview_entry(db: Session, farm) -> dict:
             f"harvest/re-entry timing"
         )
         next_action = "Resolve the blocked pre-spray decision with your PCA"
+    elif farm.expected_harvest_date and farm.expected_harvest_date < today:
+        # A stale harvest date invalidates every PHI calculation made against it —
+        # ask for an update before any new pre-spray check is trusted. Only a live
+        # blocked decision outranks this.
+        urgency, why = "harvest_overdue", (
+            f"Expected harvest date ({farm.expected_harvest_date.isoformat()}) has "
+            f"passed — PHI checks against it are no longer valid"
+        )
+        next_action = "Update the expected harvest date before relying on new pre-spray checks"
     elif counts["needs_review_count"]:
         urgency, why = "needs_review", (
             f"{counts['needs_review_count']} pre-spray decision(s) awaiting PCA review"
@@ -152,7 +161,10 @@ def farms_overview(db: Session = Depends(get_db)):
     scouting flags) > ok.
     """
     out = [_farm_overview_entry(db, farm) for farm in crud.list_farms(db)]
-    rank = {"conflict": 0, "needs_review": 1, "awaiting_outcome": 2, "flags": 3, "ok": 4}
+    rank = {
+        "conflict": 0, "harvest_overdue": 1, "needs_review": 2,
+        "awaiting_outcome": 3, "flags": 4, "ok": 5,
+    }
     out.sort(key=lambda f: (rank.get(f["urgency"], 9), f["id"]))
     return out
 

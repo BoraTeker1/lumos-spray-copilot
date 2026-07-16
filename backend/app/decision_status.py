@@ -101,6 +101,131 @@ def is_demo_record(record) -> bool:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Composed states. The verdict (decision_outcome) is the immutable historical  #
+# decision; these answer the two questions the UI kept conflating with it:     #
+# "is anyone still on the hook for this?" (workflow) and "is the documentation #
+# story finished?" (evidence). One derivation, consumed by every surface.      #
+# --------------------------------------------------------------------------- #
+
+WORKFLOW_NEEDS_ACTION = "needs_action"
+WORKFLOW_AWAITING_PCA = "awaiting_pca"
+WORKFLOW_RESOLVED = "resolved"
+
+
+def workflow_state(planned) -> str:
+    """Where this decision sits in the human workflow.
+
+    needs_action — open, and the next move is the grower/operator's (inspect,
+    record the outcome, act on guidance). awaiting_pca — open and a required
+    review is still outstanding. resolved — a real-world outcome is recorded.
+    Resolved is about the DECISION only: follow-up evidence may still be due
+    (that lives in evidence_state, never here).
+    """
+    if is_open(planned):
+        return WORKFLOW_AWAITING_PCA if needs_review(planned) else WORKFLOW_NEEDS_ACTION
+    return WORKFLOW_RESOLVED
+
+
+EVIDENCE_MISSING_DOCUMENTATION = "missing_documentation"
+EVIDENCE_COMPLETE = "complete"
+EVIDENCE_FOLLOW_UP_REQUIRED = "follow_up_required"
+EVIDENCE_FOLLOW_UP_IN_PROGRESS = "follow_up_in_progress"
+EVIDENCE_VERIFIED = "verified"
+
+# Every evidence state, for exhaustive checks in tests/consumers.
+EVIDENCE_STATES = (
+    EVIDENCE_MISSING_DOCUMENTATION,
+    EVIDENCE_COMPLETE,
+    EVIDENCE_FOLLOW_UP_REQUIRED,
+    EVIDENCE_FOLLOW_UP_IN_PROGRESS,
+    EVIDENCE_VERIFIED,
+)
+
+
+def _outcome_confirmed_by_events(planned, events) -> bool:
+    """Do the recorded follow-up events support the recorded outcome?
+
+    Mirrors pilot_evidence.derive_follow_up_summary's confirmed_* semantics
+    (kept here because this module must stay import-free): "confirmed" means
+    supported by recorded follow-up evidence — correlation, never causation.
+    """
+    outcome = getattr(planned, "outcome", "planned")
+    applications = [e for e in events if e.event_type == "actual_application"]
+    rescues = [e for e in events if e.event_type == "rescue_application"]
+    ultimately_applied = bool(applications) or bool(rescues)
+    if outcome == "avoided":
+        return bool(events) and not ultimately_applied
+    if outcome == "changed_product":
+        return bool(applications) or getattr(planned, "spray_event_id", None) is not None
+    if outcome == "delayed":
+        # A delayed spray is confirmed once the (later or rescue) application
+        # is on record — including the honest failure case where a rescue was needed.
+        return ultimately_applied
+    if outcome == "inspected_first":
+        return any(e.event_type == "scouting_observation" for e in events)
+    if outcome == "sprayed_as_planned":
+        # Follow-up is only required here for approved-despite-warning; any
+        # recorded evidence documents what actually happened.
+        return bool(events)
+    return False
+
+
+def evidence_state(planned, follow_up_events) -> str:
+    """The documentation story of one decision, independent of its verdict.
+
+    missing_documentation — no real-world outcome recorded yet.
+    complete — outcome recorded, no follow-up story required.
+    follow_up_required — outcome recorded, follow-up required, nothing recorded.
+    follow_up_in_progress — follow-up events exist but don't yet confirm the outcome.
+    verified — recorded follow-up events support the recorded outcome
+    (evidence-backed, not proof of causation).
+    """
+    events = list(follow_up_events or [])
+    if is_open(planned):
+        return EVIDENCE_MISSING_DOCUMENTATION
+    if not follow_up_required(planned):
+        return EVIDENCE_COMPLETE
+    if not events:
+        return EVIDENCE_FOLLOW_UP_REQUIRED
+    if _outcome_confirmed_by_events(planned, events):
+        return EVIDENCE_VERIFIED
+    return EVIDENCE_FOLLOW_UP_IN_PROGRESS
+
+
+# Machine keys for the CURRENT next step. `required_next_action` stays untouched
+# as the engine's check-time instruction (historical record); this is what the
+# user should do NOW given review/outcome/follow-up progress.
+NEXT_AWAIT_PCA_REVIEW = "await_pca_review"
+NEXT_RESOLVE_CONFLICT = "resolve_conflict"
+NEXT_INSPECT = "inspect"
+NEXT_RECORD_OUTCOME = "record_outcome"
+NEXT_RECORD_FOLLOW_UP = "record_follow_up"
+NEXT_NONE = "none"
+
+
+def current_next_action(planned, follow_up_events) -> str:
+    """The one concrete step that moves this decision forward right now.
+
+    An outstanding required review comes first even for a blocked decision —
+    the PCA review IS how a conflict gets resolved (matches workflow_state).
+    """
+    if is_open(planned):
+        if needs_review(planned):
+            return NEXT_AWAIT_PCA_REVIEW
+        if open_conflict(planned):
+            return NEXT_RESOLVE_CONFLICT
+        if getattr(planned, "decision_outcome", None) == "inspect_first":
+            return NEXT_INSPECT
+        return NEXT_RECORD_OUTCOME
+    if evidence_state(planned, follow_up_events) in (
+        EVIDENCE_FOLLOW_UP_REQUIRED,
+        EVIDENCE_FOLLOW_UP_IN_PROGRESS,
+    ):
+        return NEXT_RECORD_FOLLOW_UP
+    return NEXT_NONE
+
+
 def status_counts(planned_sprays) -> dict:
     """The per-farm decision counts every surface (dashboard, farm page) must share."""
     planned = list(planned_sprays or [])

@@ -15,8 +15,8 @@ const VARIANTS = {
 };
 
 const SIZES = {
-  default: "h-9 px-4 py-2",
-  sm: "h-8 rounded-lg px-3 text-xs",
+  default: "h-10 px-4 py-2",
+  sm: "h-8 rounded-md px-3 text-xs",
   icon: "h-8 w-8",
 };
 
@@ -28,7 +28,7 @@ export const Button = forwardRef(function Button(
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-leaf/40 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
         VARIANTS[variant],
         SIZES[size],
         className

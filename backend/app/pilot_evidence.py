@@ -291,35 +291,22 @@ NOT_CALCULATED = {
 }
 
 
-def build_decision_evidence(
-    planned_sprays, advisor_label: str = "agronomist", follow_ups_by_id: dict | None = None
-) -> dict:
-    """Aggregate the pre-spray decision workflow into pilot metrics (honest by design).
+def _scope_metrics(records, follow_ups_by_id: dict, advisor_label: str) -> dict:
+    """The decision-workflow metric block for ONE provenance scope (real OR demo).
 
-    Demo/simulated planned sprays are excluded. Every derived number states what it is:
-    documented decisions, not caused outcomes; cost *not spent on* avoided applications,
-    not net savings; review minutes *estimated from a stated assumption*, not measured.
+    Same shape either way so the two scopes are comparable but never combined:
+    the caller labels the demo block `is_simulated` and keeps it separate.
     """
-    all_planned = list(planned_sprays or [])
-    real = _real_planned(planned_sprays)
+    records = list(records or [])
     outcomes = {o: 0 for o in _PLANNED_OUTCOMES}
-    for p in real:
+    for p in records:
         o = getattr(p, "outcome", "planned")
         if o in outcomes:
             outcomes[o] += 1
-    pending = len(real) - sum(outcomes.values())
-
-    # Reconciliation for demo farms: seeded decisions are visible in the queue but
-    # excluded from every real metric — count them separately so the two views agree.
-    demo = [p for p in all_planned if p not in real]
-    demo_outcomes = {o: 0 for o in _PLANNED_OUTCOMES}
-    for p in demo:
-        o = getattr(p, "outcome", "planned")
-        if o in demo_outcomes:
-            demo_outcomes[o] += 1
+    pending = len(records) - sum(outcomes.values())
 
     reviewed = [
-        p for p in real
+        p for p in records
         if decision_status.review_state(p) in decision_status.RESOLVED_REVIEW_STATUSES
     ]
     accepted = sum(
@@ -333,14 +320,61 @@ def build_decision_evidence(
 
     # Conflicts the check surfaced, resolved or not (unlike the dashboard's open-only
     # count — decision_status names both semantics).
-    conflicts_caught = sum(1 for p in real if decision_status.conflict_caught(p))
+    conflicts_caught = sum(1 for p in records if decision_status.conflict_caught(p))
 
     # Chemical cost NOT spent on avoided applications (entered estimates only).
     avoided_cost = sum(
         float(getattr(p, "estimated_cost", None) or 0.0)
-        for p in real
+        for p in records
         if getattr(p, "outcome", None) == "avoided"
     )
+
+    confirmed, estimated, follow_up_stats = _confirmed_and_estimated(
+        records, follow_ups_by_id or {}
+    )
+
+    return {
+        "decisions_checked": len(records),
+        "decisions_reviewed": len(reviewed),
+        "pca_acceptance_rate_pct": acceptance_rate_pct,
+        "outcomes": {**outcomes, "awaiting_outcome": pending},
+        "sprays_changed_delayed_or_avoided": (
+            outcomes["changed_product"] + outcomes["delayed"] + outcomes["avoided"]
+        ),
+        "compliance_conflicts_caught": conflicts_caught,
+        "estimated_chemical_cost_avoided": round(avoided_cost, 2) if avoided_cost else 0.0,
+        "confirmed": confirmed,
+        "estimated": estimated,
+        "follow_up": follow_up_stats,
+    }
+
+
+def build_decision_evidence(
+    planned_sprays, advisor_label: str = "agronomist", follow_ups_by_id: dict | None = None
+) -> dict:
+    """Aggregate the pre-spray decision workflow into pilot metrics (honest by design).
+
+    Demo/simulated planned sprays are excluded from every top-level metric. The same
+    metric shape computed over demo records only is returned under `demo_metrics`
+    (flagged `is_simulated`) so a demo farm can show a coherent simulated story instead
+    of contradictory zeros — the two scopes are never combined. Every derived number
+    states what it is: documented decisions, not caused outcomes; cost *not spent on*
+    avoided applications, not net savings; review minutes *estimated from a stated
+    assumption*, not measured.
+    """
+    all_planned = list(planned_sprays or [])
+    real = _real_planned(planned_sprays)
+    real_metrics = _scope_metrics(real, follow_ups_by_id or {}, advisor_label)
+    outcomes = real_metrics["outcomes"]
+
+    # Reconciliation for demo farms: seeded decisions are visible in the queue but
+    # excluded from every real metric — compute the same block separately so the two
+    # views agree without ever mixing.
+    demo = [p for p in all_planned if p not in real]
+    demo_metrics = _scope_metrics(demo, follow_ups_by_id or {}, advisor_label)
+    demo_outcomes = {
+        o: demo_metrics["outcomes"][o] for o in _PLANNED_OUTCOMES
+    }
 
     review_minutes_estimate = len(real) * ASSUMED_MANUAL_CHECK_MINUTES
 
@@ -360,26 +394,22 @@ def build_decision_evidence(
     if not real:
         limitations.insert(0, "No real (non-demo) pre-spray decisions recorded yet.")
 
-    confirmed, estimated, follow_up_stats = _confirmed_and_estimated(
-        real, follow_ups_by_id or {}
-    )
-
     return {
-        "decisions_checked": len(real),
-        "confirmed": confirmed,
-        "estimated": estimated,
+        # Top-level keys are the REAL scope (unchanged contract).
+        **real_metrics,
         "not_calculated": dict(NOT_CALCULATED),
-        "follow_up": follow_up_stats,
         "demo_decisions_checked": len(demo),
         "demo_outcomes": demo_outcomes,
-        "decisions_reviewed": len(reviewed),
-        "pca_acceptance_rate_pct": acceptance_rate_pct,
-        "outcomes": {**outcomes, "awaiting_outcome": pending},
-        "sprays_changed_delayed_or_avoided": (
-            outcomes["changed_product"] + outcomes["delayed"] + outcomes["avoided"]
-        ),
-        "compliance_conflicts_caught": conflicts_caught,
-        "estimated_chemical_cost_avoided": round(avoided_cost, 2) if avoided_cost else 0.0,
+        # Full simulated-scope block for demo farms — same shape as the real
+        # metrics, explicitly flagged, never summed with them.
+        "demo_metrics": {
+            **demo_metrics,
+            "is_simulated": True,
+            "note": (
+                "Simulated demo records — illustrative of the workflow, never "
+                "customer evidence."
+            ),
+        },
         "estimated_review_minutes_saved": review_minutes_estimate,
         "review_minutes_assumption": (
             f"Assumes ~{ASSUMED_MANUAL_CHECK_MINUTES} minutes per manual "

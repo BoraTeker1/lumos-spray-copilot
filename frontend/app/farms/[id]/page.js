@@ -35,7 +35,7 @@ import ActivityTimeline from "@/components/ActivityTimeline";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import ComplianceCard from "@/components/ComplianceCard";
 import EvidencePanel from "@/components/EvidencePanel";
-import KpiTile from "@/components/KpiTile";
+import MetricCard from "@/components/MetricCard";
 import NextActionBanner from "@/components/NextActionBanner";
 import PhotoScoutCard from "@/components/PhotoScoutCard";
 import PilotImportCard from "@/components/PilotImportCard";
@@ -214,14 +214,14 @@ function FarmDetail({ farmId }) {
 
       {/* Server-computed next action for this farm */}
       <NextActionBanner
-        nextAction={overview.next_action}
-        why={overview.why}
+        issue={overview.why}
+        consequence={overview.next_action}
         urgency={overview.urgency}
       />
 
       {/* KPI row — every number is the server's overview entry (dashboard parity). */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile
+        <MetricCard
           icon={CalendarClock}
           label="Upcoming harvest"
           value={formatDate(farm.expected_harvest_date)}
@@ -234,20 +234,20 @@ function FarmDetail({ farmId }) {
           }
           tone="neutral"
         />
-        <KpiTile
+        <MetricCard
           icon={ClipboardCheck}
           label="Needs PCA review"
           value={overview.needs_review_count}
           tone={overview.needs_review_count > 0 ? "warn" : "neutral"}
         />
-        <KpiTile
+        <MetricCard
           icon={ListChecks}
           label="Awaiting outcome"
           value={overview.awaiting_outcome_count}
           hint="checked sprays, no recorded result"
           tone={overview.awaiting_outcome_count > 0 ? "warn" : "neutral"}
         />
-        <KpiTile
+        <MetricCard
           icon={TriangleAlert}
           label="Risk flags"
           value={overview.flag_count}

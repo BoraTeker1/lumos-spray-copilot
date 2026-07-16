@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { OUTCOME_META } from "@/components/DecisionResult";
 import Breadcrumbs from "@/components/Breadcrumbs";
+import StatusBadge from "@/components/StatusBadge";
+import { nextActionLabel } from "@/lib/status";
 import { DecisionReview, OutcomeRecorder } from "@/components/PreSpraySheet";
 
 // One-page printable/shareable decision record for a single pre-spray check:
@@ -264,6 +266,10 @@ export default function DecisionRecordPage({ params }) {
               Next action: {planned.required_next_action}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {/* The verdict above is the immutable historical decision; these say
+                  what (if anything) is still owed right now. */}
+              <StatusBadge kind="workflow" value={planned.workflow_state} />
+              <StatusBadge kind="evidence" value={planned.evidence_state} />
               <Badge variant={provisional ? "amber" : "green"}>
                 {decisionAuthorityLabel(planned.decision_authority)}
               </Badge>
@@ -600,6 +606,14 @@ export default function DecisionRecordPage({ params }) {
                 label="Outcome"
                 value={RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
               />
+              <Row
+                label="Current next step"
+                value={
+                  planned.current_next_action === "none"
+                    ? "None — fully documented"
+                    : nextActionLabel(planned.current_next_action)
+                }
+              />
             </div>
             {!decided && (
               <div className="mt-2 border-t border-gray-100 pt-2">
@@ -607,10 +621,10 @@ export default function DecisionRecordPage({ params }) {
                 <OutcomeRecorder planned={planned} onChanged={loadAll} />
               </div>
             )}
-            {decided && planned.follow_up_required && planned.follow_up_event_count === 0 && (
+            {planned.current_next_action === "record_follow_up" && (
               <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-                Follow-up required — append the real-world evidence in the follow-up
-                timeline on the left.
+                Follow-up evidence is due — append the real-world evidence in the
+                follow-up timeline on the left.
               </p>
             )}
             <p className="mt-3 text-[11px] leading-snug text-gray-500">

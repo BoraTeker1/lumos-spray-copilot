@@ -65,6 +65,8 @@ class SprayEvent(Base):
     cost: Mapped[float | None] = mapped_column(Float)
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
     re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
+    # Field/block within the farm (same vocabulary as PlannedSpray/ScoutObservation).
+    field_block: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
     # Concierge-pilot provenance: where this record came from and how trustworthy it is.
     # data_source: demo / grower_interview / spreadsheet / whatsapp / email / manual_entry / unknown
@@ -232,6 +234,18 @@ class PlannedSpray(Base):
     @property
     def follow_up_event_count(self) -> int:
         return len(self.follow_up_events or [])
+
+    @property
+    def workflow_state(self) -> str:
+        return decision_status.workflow_state(self)
+
+    @property
+    def evidence_state(self) -> str:
+        return decision_status.evidence_state(self, self.follow_up_events)
+
+    @property
+    def current_next_action(self) -> str:
+        return decision_status.current_next_action(self, self.follow_up_events)
 
 
 class DecisionInputValue(Base):

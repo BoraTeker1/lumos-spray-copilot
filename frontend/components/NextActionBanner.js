@@ -1,27 +1,37 @@
 import { TriangleAlert, CircleCheck } from "lucide-react";
 import { tone, URGENCY_TONES } from "@/lib/tones";
 
-// Mockup-style NEXT ACTION banner. Text comes verbatim from the server-computed
-// overview entry (`next_action` + `why`); tone follows the real urgency —
-// red for a timing conflict, amber for open work, neutral when all clear.
-export default function NextActionBanner({ nextAction, why, urgency, cta }) {
-  if (!nextAction) return null;
+// Compact prioritized next-action banner. Issue + operational consequence come
+// verbatim/derived from the server-computed overview entry; `primary` and
+// `secondary` are action slots (Button / link) supplied by the page.
+// Tone follows real urgency — red for conflict/overdue harvest, amber for open
+// work, neutral when all clear.
+export default function NextActionBanner({
+  issue,
+  consequence,
+  urgency,
+  primary,
+  secondary,
+}) {
+  if (!issue) return null;
   const toneName = URGENCY_TONES[urgency] || "neutral";
   const t = tone(toneName);
   const Icon = toneName === "neutral" ? CircleCheck : TriangleAlert;
   return (
-    <div className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 ${t.box}`}>
-      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${t.dot}`}>
-        <Icon className="h-5 w-5" />
+    <div className={`flex flex-wrap items-center gap-3 rounded-[10px] border px-4 py-3 ${t.box}`}>
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${t.dot}`}>
+        <Icon className="h-4 w-4" aria-hidden />
       </span>
       <div className="min-w-0 flex-1">
-        <div className={`text-[11px] font-semibold uppercase tracking-wide opacity-70 ${t.text}`}>
-          Next action
-        </div>
-        <div className={`text-sm font-semibold sm:text-base ${t.text}`}>{nextAction}</div>
-        {why && <div className="text-xs text-gray-600">{why}</div>}
+        <div className={`text-sm font-semibold ${t.text}`}>{issue}</div>
+        {consequence && <div className="text-xs text-gray-600">{consequence}</div>}
       </div>
-      {cta && <div className="shrink-0">{cta}</div>}
+      {(primary || secondary) && (
+        <div className="flex shrink-0 items-center gap-2">
+          {secondary}
+          {primary}
+        </div>
+      )}
     </div>
   );
 }

@@ -588,6 +588,7 @@ def record_planned_spray_outcome(
                 data.outcome_active_ingredient if changed else planned.active_ingredient
             ),
             target_pest_or_disease=planned.target_pest_or_disease,
+            field_block=planned.field_block,
             application_date=data.application_date or planned.intended_date,
             cost=None if changed else planned.estimated_cost,
             # PHI/REI were entered for the planned product; they do not carry over to a

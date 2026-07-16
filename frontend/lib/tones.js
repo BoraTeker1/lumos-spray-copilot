@@ -97,6 +97,7 @@ export const SOURCE_TYPE_TONES = {
 // Farm urgency (server-computed by /farms-overview).
 export const URGENCY_TONES = {
   conflict: "risk",
+  harvest_overdue: "risk",
   needs_review: "warn",
   awaiting_outcome: "warn",
   flags: "warn",

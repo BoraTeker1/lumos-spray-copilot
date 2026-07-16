@@ -198,3 +198,31 @@ def test_demo_dates_never_precede_their_own_story(seeded):
     for p in seeded.get(f"/farms/{farm['id']}/planned-sprays").json():
         assert p["outcome_date"] >= p["intended_date"], p["product_name"]
         assert p["reviewed_at"][:10] >= p["created_at"][:10], p["product_name"]
+
+
+def test_demo_scenarios_share_scenario_consistent_field_blocks(seeded):
+    """Each demo scenario's planned spray, scouting evidence, and applied sprays live
+    in one named field block — the Farms/Scouting/Applications field columns must
+    tell one coherent story per scenario."""
+    farm = _us_farm(seeded)
+    planned = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()
+    sprays = seeded.get(f"/farms/{farm['id']}/spray-events").json()
+    observations = seeded.get(f"/farms/{farm['id']}/scout-observations").json()
+
+    blocks = {p["product_name"]: p["field_block"] for p in planned}
+    assert blocks["Captan 80 WDG"] == "Field 7"
+    assert blocks["PyGanic EC 5.0"] == "North Block"
+    assert blocks["Agri-Mek SC"] == "South Block"
+
+    # Every Golden Coast record carries a field block (no orphan rows in the demo).
+    assert all(s["field_block"] for s in sprays)
+    assert all(o["field_block"] for o in observations)
+
+    # Scenario coherence: the replacement Switch spray happened where the captan was
+    # blocked; mite scouting happened where the miticide was delayed.
+    switch = next(s for s in sprays if s["product_name"] == "Switch 62.5 WG")
+    assert switch["field_block"] == "Field 7"
+    rescue = next(s for s in sprays if s["product_name"] == "Agri-Mek SC")
+    assert rescue["field_block"] == "South Block"
+    mite_obs = [o for o in observations if "mite" in (o["visible_issue"] or "")]
+    assert mite_obs and all(o["field_block"] == "South Block" for o in mite_obs)

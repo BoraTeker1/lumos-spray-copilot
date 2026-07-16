@@ -14,6 +14,7 @@ import {
   Leaf,
   MessageSquare,
   PanelLeft,
+  ShieldAlert,
   ShieldCheck,
   Sprout,
 } from "lucide-react";
@@ -29,6 +30,7 @@ const MAIN_NAV = [
   { href: "/decisions", label: "Decisions", icon: ShieldCheck },
   { href: "/scouting", label: "Scouting", icon: Eye },
   { href: "/applications", label: "Applications", icon: Droplets },
+  { href: "/compliance", label: "Compliance", icon: ShieldAlert },
   { href: "/evidence", label: "Evidence & reports", icon: FileCheck },
 ];
 const BOTTOM_NAV = [
@@ -53,7 +55,9 @@ function NavLink({ item, pathname, collapsed, onNavigate }) {
       onClick={onNavigate}
       title={collapsed ? item.label : undefined}
       className={cn(
-        "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
+        // Active route: subtle green pill. Keyboard focus: blue focus-visible ring
+        // ONLY (mouse clicks never leave a persistent outline).
+        "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1",
         active
           ? "bg-leaf-50 text-leaf-700 ring-1 ring-inset ring-green-200"
           : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
@@ -168,7 +172,7 @@ function ShellFrame({ children }) {
       <aside
         className={cn(
           "sticky top-0 hidden h-screen flex-col border-r border-gray-200 bg-white transition-[width] duration-150 md:flex",
-          collapsed ? "w-14" : "w-60"
+          collapsed ? "w-[72px]" : "w-[248px]"
         )}
       >
         <div className={cn("border-b border-gray-200 px-2 py-3", collapsed && "px-1.5")}>
@@ -179,10 +183,10 @@ function ShellFrame({ children }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Top bar: nav triggers left, farm switcher + date right */}
-        <header className="sticky top-0 z-40 flex h-12 items-center gap-2 border-b border-gray-200 bg-white px-3">
+        <header className="sticky top-0 z-40 flex h-16 items-center gap-2 border-b border-gray-200 bg-white px-3 md:px-6">
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetTrigger
-              className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:hidden"
+              className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 md:hidden"
               aria-label="Open navigation"
             >
               <PanelLeft className="h-4 w-4" />
@@ -199,7 +203,7 @@ function ShellFrame({ children }) {
           </Sheet>
           <button
             onClick={() => setCollapsed((v) => !v)}
-            className="hidden rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:inline-flex"
+            className="hidden rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 md:inline-flex"
             aria-label="Toggle sidebar"
           >
             <PanelLeft className="h-4 w-4" />
@@ -213,7 +217,7 @@ function ShellFrame({ children }) {
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-5 md:px-6">
+        <main className="flex-1 px-4 py-6 md:px-8">
           <div className="mx-auto w-full max-w-6xl">{children}</div>
         </main>
 

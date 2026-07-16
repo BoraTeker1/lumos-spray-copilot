@@ -62,6 +62,7 @@ export const REVIEW_STATE_LABELS = {
 // come from the shared tone table; borders keep per-urgency intensity.
 const URGENCY_BORDERS = {
   conflict: "border-red-300",
+  harvest_overdue: "border-red-300",
   needs_review: "border-amber-300",
   awaiting_outcome: "border-amber-200",
   flags: "border-gray-200",
@@ -70,6 +71,7 @@ const URGENCY_BORDERS = {
 
 const URGENCY_LABELS = {
   conflict: "Timing conflict",
+  harvest_overdue: "Harvest date passed",
   needs_review: "Needs PCA review",
   awaiting_outcome: "Awaiting outcome",
   flags: "Risk flags",

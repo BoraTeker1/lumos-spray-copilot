@@ -72,6 +72,7 @@ class SprayEventBase(BaseModel):
     cost: float | None = None
     pre_harvest_interval_days: int | None = None
     re_entry_interval_hours: int | None = None
+    field_block: str | None = None
     notes: str | None = None
     data_source: str | None = None
     data_confidence: str | None = None
@@ -355,6 +356,16 @@ class PlannedSpray(BaseModel):
     # follow-up event timeline before anything about them can be called "confirmed".
     follow_up_required: bool = False
     follow_up_event_count: int = 0
+    # Composed states (canonical app/decision_status.py). The verdict
+    # (decision_outcome) is the immutable historical decision; workflow_state says
+    # whether anyone still owes an action, evidence_state whether the documentation
+    # story is finished, current_next_action the one concrete step to take NOW
+    # (required_next_action stays the engine's check-time instruction).
+    workflow_state: str = "needs_action"  # needs_action / awaiting_pca / resolved
+    # missing_documentation / complete / follow_up_required / follow_up_in_progress / verified
+    evidence_state: str = "missing_documentation"
+    # await_pca_review / resolve_conflict / inspect / record_outcome / record_follow_up / none
+    current_next_action: str = "record_outcome"
 
 
 # ------------------------------------------------- Decision input provenance

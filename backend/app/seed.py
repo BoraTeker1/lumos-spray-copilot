@@ -251,6 +251,7 @@ def run() -> None:
                 cost=120.0,
                 pre_harvest_interval_days=4,
                 re_entry_interval_hours=24,
+                field_block="Field 7",
                 notes="Preventive cover spray ahead of cool, humid weather.",
             ),
             models.SprayEvent(
@@ -264,6 +265,7 @@ def run() -> None:
                 cost=120.0,
                 pre_harvest_interval_days=4,
                 re_entry_interval_hours=24,
+                field_block="Field 7",
                 notes="Repeat application.",
             ),
             models.SprayEvent(
@@ -277,6 +279,7 @@ def run() -> None:
                 cost=120.0,
                 pre_harvest_interval_days=4,
                 re_entry_interval_hours=24,
+                field_block="Field 7",
                 notes="Third captan application — same chemistry, no rotation.",
             ),
             # A different product, for cost variety and resistance contrast.
@@ -291,6 +294,7 @@ def run() -> None:
                 cost=180.0,
                 pre_harvest_interval_days=3,
                 re_entry_interval_hours=12,
+                field_block="North Block",
                 notes="Lygus pressure on field edges.",
             ),
         ]
@@ -303,6 +307,7 @@ def run() -> None:
             crop_stage="fruiting",
             visible_issue="gray mold (Botrytis) on ripening fruit, spreading",
             severity_1_to_5=4,
+            field_block="Field 7",
             notes="Several infected berries per bed in the low, shaded rows.",
         )
         db.add(farm3_obs)
@@ -325,6 +330,7 @@ def run() -> None:
             pre_harvest_interval_days=4,
             re_entry_interval_hours=24,
             estimated_cost=120.0,
+            field_block="Field 7",
             values_source="pca_entered",
             values_entered_by="Demo PCA (simulated)",
             data_source="demo",
@@ -388,6 +394,7 @@ def run() -> None:
             cost=210.0,
             pre_harvest_interval_days=0,
             re_entry_interval_hours=12,
+            field_block="Field 7",
             notes="Applied instead of a 4th captan after the pre-spray check was blocked "
             "and the demo PCA edited the guidance.",
         )
@@ -453,6 +460,7 @@ def run() -> None:
             pre_harvest_interval_days=0,   # PHI 0 is a real entered value, not missing
             re_entry_interval_hours=12,
             estimated_cost=95.0,
+            field_block="North Block",
             values_source="grower_entered",
             values_entered_by="Demo grower (simulated)",
             data_source="demo",
@@ -536,6 +544,7 @@ def run() -> None:
             crop_stage="fruiting",
             visible_issue="lygus bug",
             severity_1_to_5=2,
+            field_block="North Block",
             notes="Follow-up inspection after the pre-spray check returned INSPECT "
             "FIRST: a few lygus on field edges, below the entered action threshold.",
         ))
@@ -570,6 +579,7 @@ def run() -> None:
             crop_stage="fruiting",
             visible_issue="twospotted spider mite",
             severity_1_to_5=2,
+            field_block="South Block",
             notes="Scattered mites on lower leaves; below the entered action threshold.",
         )
         db.add(mite_obs_before)
@@ -582,6 +592,7 @@ def run() -> None:
             pre_harvest_interval_days=3,
             re_entry_interval_hours=12,
             estimated_cost=190.0,
+            field_block="South Block",
             values_source="grower_entered",
             values_entered_by="Demo grower (simulated)",
             data_source="demo",
@@ -694,6 +705,7 @@ def run() -> None:
             crop_stage="fruiting",
             visible_issue="twospotted spider mite",
             severity_1_to_5=4,
+            field_block="South Block",
             notes="Mite flare-up after the delayed miticide — rescue treatment needed.",
         ))
         db.add(models.SprayEvent(
@@ -707,6 +719,7 @@ def run() -> None:
             cost=260.0,
             pre_harvest_interval_days=3,
             re_entry_interval_hours=12,
+            field_block="South Block",
             notes="Rescue application after the delayed miticide failed to hold.",
         ))
 
