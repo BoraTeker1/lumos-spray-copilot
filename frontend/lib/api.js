@@ -202,6 +202,75 @@ export const api = {
   createPilotFarm: (data) =>
     request("/pilot/farms", { method: "POST", body: JSON.stringify(data) }),
 
+  // Inputs & finance (Phase 1 procurement: RFQ -> concierge quotes -> optional
+  // INDICATIVE financing -> order -> explicit application link; no real money)
+  listInputPlans: (farmId) => request(`/farms/${farmId}/input-plans`),
+  createInputPlan: (farmId, data) =>
+    request(`/farms/${farmId}/input-plans`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getInputPlan: (planId) => request(`/input-plans/${planId}`),
+  addInputPlanItem: (planId, data) =>
+    request(`/input-plans/${planId}/items`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteInputPlanItem: (itemId) =>
+    request(`/input-plan-items/${itemId}`, { method: "DELETE" }),
+  submitInputPlan: (planId, data) =>
+    request(`/input-plans/${planId}/submit`, {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    }),
+  cancelInputPlan: (planId, data) =>
+    request(`/input-plans/${planId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listQuotes: (planId) => request(`/input-plans/${planId}/quotes`),
+  selectQuote: (planId, data) =>
+    request(`/input-plans/${planId}/select-quote`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  decideFinancingOffer: (offerId, data) =>
+    request(`/financing-offers/${offerId}/decision`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  createOrder: (planId, data) =>
+    request(`/input-plans/${planId}/order`, {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    }),
+  listOrders: (farmId) => request(`/farms/${farmId}/orders`),
+  getOrder: (orderId) => request(`/orders/${orderId}`),
+  listOrderEvents: (orderId) => request(`/orders/${orderId}/events`),
+  reportInputApplied: (orderId, data) =>
+    request(`/orders/${orderId}/input-applied`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  // Concierge entry points (internal operator tooling, /internal page only)
+  createSupplierQuote: (planId, data) =>
+    request(`/internal/input-plans/${planId}/quotes`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  withdrawSupplierQuote: (quoteId) =>
+    request(`/internal/supplier-quotes/${quoteId}/withdraw`, { method: "POST" }),
+  createFinancingOffer: (quoteId, data) =>
+    request(`/internal/supplier-quotes/${quoteId}/financing-offers`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  addOrderEvent: (orderId, data) =>
+    request(`/internal/orders/${orderId}/events`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   // CSV export URLs (used as direct download links)
   exportUrl: (path) => `${BASE_URL}${path}`,
 };

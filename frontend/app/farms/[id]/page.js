@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   CalendarClock,
@@ -12,6 +13,7 @@ import {
   ListChecks,
   MapPin,
   Plus,
+  ShoppingCart,
   Sprout,
   TriangleAlert,
   Users,
@@ -35,6 +37,7 @@ import ActivityTimeline from "@/components/ActivityTimeline";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import ComplianceCard from "@/components/ComplianceCard";
 import EvidencePanel from "@/components/EvidencePanel";
+import InputPlanForm from "@/components/InputPlanForm";
 import MetricCard from "@/components/MetricCard";
 import NextActionBanner from "@/components/NextActionBanner";
 import PhotoScoutCard from "@/components/PhotoScoutCard";
@@ -74,6 +77,8 @@ function FarmDetail({ farmId }) {
   const [recommendations, setRecommendations] = useState([]);
   const [planned, setPlanned] = useState([]);
   const [compliance, setCompliance] = useState(null);
+  const [inputPlans, setInputPlans] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [error, setError] = useState(null);
   const [sprayDialogOpen, setSprayDialogOpen] = useState(false);
   const [scoutDialogOpen, setScoutDialogOpen] = useState(false);
@@ -88,7 +93,7 @@ function FarmDetail({ farmId }) {
 
   const load = useCallback(async () => {
     try {
-      const [f, ov, s, o, r, p, c] = await Promise.all([
+      const [f, ov, s, o, r, p, c, plans, orders] = await Promise.all([
         api.getFarm(farmId),
         api.getFarmOverview(farmId),
         api.listSprayEvents(farmId),
@@ -96,6 +101,8 @@ function FarmDetail({ farmId }) {
         api.listRecommendations(farmId),
         api.listPlannedSprays(farmId),
         api.getCompliance(farmId),
+        api.listInputPlans(farmId),
+        api.listOrders(farmId),
       ]);
       setFarm(f);
       setOverview(ov);
@@ -104,6 +111,8 @@ function FarmDetail({ farmId }) {
       setRecommendations(r);
       setPlanned(p);
       setCompliance(c);
+      setInputPlans(plans);
+      setPurchaseOrders(orders);
     } catch (err) {
       setError(err.message);
     }
@@ -325,6 +334,52 @@ function FarmDetail({ farmId }) {
                 description="From user-entered PHI/REI values — not label-verified."
               >
                 <ComplianceCard data={compliance} />
+              </SectionCard>
+
+              <SectionCard
+                title="Inputs & orders"
+                icon={<ShoppingCart />}
+                description="Input plans, supplier quotes, and orders for this farm."
+                action={<InputPlanForm farmId={farmId} onCreated={load} />}
+              >
+                {inputPlans.length === 0 && purchaseOrders.length === 0 ? (
+                  <p className="text-sm text-gray-500">
+                    No input plans yet — build one from an approved decision or
+                    manually.
+                  </p>
+                ) : (
+                  <dl className="space-y-1.5 text-xs">
+                    {[
+                      [
+                        "Active plans",
+                        inputPlans.filter(
+                          (p) => !["ordered", "cancelled"].includes(p.status)
+                        ).length,
+                      ],
+                      [
+                        "Awaiting quotes",
+                        inputPlans.filter((p) => p.status === "submitted_for_quotes")
+                          .length,
+                      ],
+                      [
+                        "Quotes to compare",
+                        inputPlans.filter((p) => p.status === "quoted").length,
+                      ],
+                      ["Orders", purchaseOrders.length],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex items-center justify-between">
+                        <dt className="text-gray-500">{label}</dt>
+                        <dd className="font-medium text-gray-900">{value}</dd>
+                      </div>
+                    ))}
+                    <Link
+                      href="/inputs"
+                      className="mt-1 inline-block text-xs font-medium text-leaf-700 hover:underline"
+                    >
+                      Open Inputs & finance
+                    </Link>
+                  </dl>
+                )}
               </SectionCard>
 
               <SectionCard title="Field details" icon={<Sprout />}>

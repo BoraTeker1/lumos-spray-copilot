@@ -5,16 +5,22 @@
 
 import {
   Ban,
+  Banknote,
   CircleCheck,
   CircleDashed,
   CircleHelp,
   Clock,
   Droplets,
+  FileText,
   FileWarning,
+  Landmark,
   OctagonX,
+  Package,
+  PackageCheck,
   RefreshCw,
   Search,
   ShieldCheck,
+  Truck,
   TriangleAlert,
   Users,
 } from "lucide-react";
@@ -60,6 +66,52 @@ export const STATUS = {
     edited: { label: "PCA edited", tone: "info", icon: RefreshCw },
     rejected: { label: "PCA rejected", tone: "risk", icon: OctagonX },
   },
+  // Input plan status (Inputs & finance; app/procurement_status.py).
+  planStatus: {
+    draft: { label: "Draft", tone: "neutral", icon: CircleDashed },
+    submitted_for_quotes: { label: "Quotes requested", tone: "info", icon: FileText },
+    quoted: { label: "Quotes received", tone: "info", icon: FileText },
+    quote_selected: { label: "Quote selected", tone: "good", icon: CircleCheck },
+    ordered: { label: "Ordered", tone: "good", icon: Package },
+    cancelled: { label: "Cancelled", tone: "neutral", icon: Ban },
+  },
+  // Supplier quote derived state (quote_state).
+  quoteState: {
+    submitted: { label: "Quote received", tone: "info", icon: FileText },
+    selected: { label: "Selected", tone: "good", icon: CircleCheck },
+    not_selected: { label: "Not selected", tone: "neutral", icon: CircleDashed },
+    withdrawn: { label: "Withdrawn", tone: "neutral", icon: Ban },
+    expired: { label: "Expired", tone: "warn", icon: Clock },
+  },
+  // Plan-level financing state (financing_state). A request is never an offer,
+  // and an accepted offer is never a loan approval — the labels say so.
+  financing: {
+    cash: { label: "Cash", tone: "neutral", icon: Banknote },
+    financing_requested: { label: "Financing requested", tone: "info", icon: CircleHelp },
+    offer_received: { label: "Indicative offer received", tone: "info", icon: Landmark },
+    offer_accepted: { label: "Accepted (indicative)", tone: "info", icon: Landmark },
+    offer_declined_or_expired: {
+      label: "Offer declined / expired", tone: "neutral", icon: Ban,
+    },
+  },
+  // Financing offer state (offer_state). Accepted keeps the info tone — an
+  // approval tone would imply approval, and none happened.
+  offerState: {
+    indicative: { label: "Indicative", tone: "info", icon: Landmark },
+    accepted: { label: "Accepted (indicative)", tone: "info", icon: CircleCheck },
+    declined: { label: "Declined", tone: "neutral", icon: Ban },
+    withdrawn: { label: "Withdrawn", tone: "neutral", icon: Ban },
+    expired: { label: "Expired", tone: "warn", icon: Clock },
+  },
+  // Purchase order status.
+  orderStatus: {
+    placed: { label: "Placed", tone: "info", icon: Package },
+    confirmed: { label: "Supplier confirmed", tone: "info", icon: CircleCheck },
+    shipped: { label: "Shipped", tone: "info", icon: Truck },
+    delivered: { label: "Delivered", tone: "good", icon: PackageCheck },
+    partially_delivered: { label: "Partially delivered", tone: "warn", icon: Package },
+    cancelled: { label: "Cancelled", tone: "neutral", icon: Ban },
+  },
 };
 
 export function statusMeta(kind, value) {
@@ -67,6 +119,24 @@ export function statusMeta(kind, value) {
   return (
     table[value] || { label: String(value ?? "—"), tone: "neutral", icon: CircleHelp }
   );
+}
+
+// Order timeline event types -> display labels (append-only OrderEvent rows).
+export const ORDER_EVENT_LABELS = {
+  created: "Order created",
+  quote_selected: "Quote selected",
+  financing_selected: "Financing selected (indicative)",
+  supplier_confirmed: "Supplier confirmed",
+  shipped: "Shipped",
+  delivered: "Delivered",
+  partially_delivered: "Partially delivered",
+  cancelled: "Cancelled",
+  input_applied: "Input applied",
+  exception_reported: "Exception reported",
+};
+
+export function orderEventLabel(key) {
+  return ORDER_EVENT_LABELS[key] || String(key ?? "—");
 }
 
 // current_next_action machine key -> the specific button/action label.

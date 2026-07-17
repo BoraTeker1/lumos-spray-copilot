@@ -1322,6 +1322,7 @@ def _farm_evidence_export(db: Session, farm_id: int) -> dict:
         crud.list_farm_input_values(db, farm_id),
         advisor_label=_advisor_label(farm),
         today=clock.current_date(),
+        input_plans=crud.list_input_plans(db, farm_id),
     )
 
 
@@ -1396,3 +1397,281 @@ def export_pilot_feedback(db: Session = Depends(get_db)):
         for f in feedback
     ]
     return _csv_response("pilot_feedback.csv", header, rows)
+
+
+# ---------------------------------------------------------- Inputs & finance
+# Phase 1 procurement: RFQ -> concierge-entered quotes -> optional INDICATIVE
+# financing -> order -> explicit application link. No auth exists in v1 (same as
+# every route above): farm scoping is by URL path and attribution is free-text
+# actor strings; the concierge entry points are namespaced /internal and belong
+# to the unlinked operator page. No real money moves anywhere in this module.
+
+
+def _require_input_plan(db: Session, plan_id: int):
+    plan = crud.get_input_plan(db, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Input plan not found")
+    return plan
+
+
+def _require_supplier_quote(db: Session, quote_id: int):
+    quote = crud.get_supplier_quote(db, quote_id)
+    if quote is None:
+        raise HTTPException(status_code=404, detail="Supplier quote not found")
+    return quote
+
+
+def _require_financing_offer(db: Session, offer_id: int):
+    offer = crud.get_financing_offer(db, offer_id)
+    if offer is None:
+        raise HTTPException(status_code=404, detail="Financing offer not found")
+    return offer
+
+
+def _require_purchase_order(db: Session, order_id: int):
+    order = crud.get_purchase_order(db, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+def _procurement_call(fn, *args, **kwargs):
+    """Map the typed procurement exceptions onto the API's 409/422 idiom."""
+    try:
+        return fn(*args, **kwargs)
+    except (crud.ProcurementStateError, crud.ProcurementEligibilityError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except crud.ProcurementValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get(
+    "/farms/{farm_id}/input-plans",
+    response_model=list[schemas.InputPlan],
+    tags=["inputs"],
+)
+def get_input_plans(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_input_plans(db, farm_id)
+
+
+@app.post(
+    "/farms/{farm_id}/input-plans",
+    response_model=schemas.InputPlan,
+    status_code=201,
+    tags=["inputs"],
+)
+def post_input_plan(
+    farm_id: int, payload: schemas.InputPlanCreate, db: Session = Depends(get_db)
+):
+    farm = _require_farm(db, farm_id)
+    return _procurement_call(crud.create_input_plan, db, farm, payload)
+
+
+@app.get(
+    "/input-plans/{plan_id}",
+    response_model=schemas.InputPlanDetail,
+    tags=["inputs"],
+)
+def get_input_plan(plan_id: int, db: Session = Depends(get_db)):
+    return _require_input_plan(db, plan_id)
+
+
+@app.post(
+    "/input-plans/{plan_id}/items",
+    response_model=schemas.InputPlanItem,
+    status_code=201,
+    tags=["inputs"],
+)
+def post_input_plan_item(
+    plan_id: int, payload: schemas.InputPlanItemCreate, db: Session = Depends(get_db)
+):
+    plan = _require_input_plan(db, plan_id)
+    return _procurement_call(crud.add_input_plan_item, db, plan, payload)
+
+
+@app.delete("/input-plan-items/{item_id}", status_code=204, tags=["inputs"])
+def delete_input_plan_item(item_id: int, db: Session = Depends(get_db)):
+    item = crud.get_input_plan_item(db, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Input plan item not found")
+    _procurement_call(crud.delete_input_plan_item, db, item)
+
+
+@app.post(
+    "/input-plans/{plan_id}/submit",
+    response_model=schemas.InputPlan,
+    tags=["inputs"],
+)
+def submit_input_plan(
+    plan_id: int, payload: schemas.InputPlanSubmit, db: Session = Depends(get_db)
+):
+    plan = _require_input_plan(db, plan_id)
+    return _procurement_call(crud.submit_input_plan, db, plan, payload)
+
+
+@app.post(
+    "/input-plans/{plan_id}/cancel",
+    response_model=schemas.InputPlan,
+    tags=["inputs"],
+)
+def cancel_input_plan(
+    plan_id: int, payload: schemas.InputPlanCancel, db: Session = Depends(get_db)
+):
+    plan = _require_input_plan(db, plan_id)
+    return _procurement_call(crud.cancel_input_plan, db, plan, payload)
+
+
+@app.get(
+    "/input-plans/{plan_id}/quotes",
+    response_model=list[schemas.SupplierQuote],
+    tags=["inputs"],
+)
+def get_supplier_quotes(plan_id: int, db: Session = Depends(get_db)):
+    """Quotes in ENTRY ORDER. There is deliberately no ranking: comparison uses
+    transparent totals only — Lumos takes no commission and never ranks suppliers."""
+    _require_input_plan(db, plan_id)
+    return crud.list_supplier_quotes(db, plan_id)
+
+
+@app.post(
+    "/input-plans/{plan_id}/select-quote",
+    response_model=schemas.InputPlan,
+    tags=["inputs"],
+)
+def post_select_quote(
+    plan_id: int, payload: schemas.SelectQuoteRequest, db: Session = Depends(get_db)
+):
+    plan = _require_input_plan(db, plan_id)
+    return _procurement_call(crud.select_quote, db, plan, payload)
+
+
+@app.post(
+    "/financing-offers/{offer_id}/decision",
+    response_model=schemas.FinancingOffer,
+    tags=["inputs"],
+)
+def post_financing_offer_decision(
+    offer_id: int, payload: schemas.FinancingOfferDecision, db: Session = Depends(get_db)
+):
+    """The grower's one-shot accept/decline of an INDICATIVE offer. Accepting
+    records agreement to indicative terms only — it is never a loan approval."""
+    offer = _require_financing_offer(db, offer_id)
+    return _procurement_call(crud.decide_financing_offer, db, offer, payload)
+
+
+@app.post(
+    "/input-plans/{plan_id}/order",
+    response_model=schemas.PurchaseOrder,
+    status_code=201,
+    tags=["inputs"],
+)
+def post_purchase_order(
+    plan_id: int, payload: schemas.PurchaseOrderCreate, db: Session = Depends(get_db)
+):
+    plan = _require_input_plan(db, plan_id)
+    return _procurement_call(crud.create_purchase_order, db, plan, payload)
+
+
+@app.get(
+    "/farms/{farm_id}/orders",
+    response_model=list[schemas.PurchaseOrder],
+    tags=["inputs"],
+)
+def get_purchase_orders(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_purchase_orders(db, farm_id)
+
+
+@app.get(
+    "/orders/{order_id}",
+    response_model=schemas.PurchaseOrderDetail,
+    tags=["inputs"],
+)
+def get_purchase_order(order_id: int, db: Session = Depends(get_db)):
+    return _require_purchase_order(db, order_id)
+
+
+@app.get(
+    "/orders/{order_id}/events",
+    response_model=list[schemas.OrderEvent],
+    tags=["inputs"],
+)
+def get_order_events(order_id: int, db: Session = Depends(get_db)):
+    """Append-only order timeline (oldest first). There are deliberately NO
+    update/delete endpoints for order events."""
+    _require_purchase_order(db, order_id)
+    return crud.list_order_events(db, order_id)
+
+
+@app.post(
+    "/orders/{order_id}/input-applied",
+    response_model=schemas.OrderEvent,
+    status_code=201,
+    tags=["inputs"],
+)
+def post_input_applied(
+    order_id: int, payload: schemas.InputAppliedRequest, db: Session = Depends(get_db)
+):
+    """Explicitly link a delivered order to the actual application record.
+    Delivery alone NEVER marks an input as applied."""
+    order = _require_purchase_order(db, order_id)
+    return _procurement_call(crud.record_input_applied, db, order, payload)
+
+
+# Concierge entry points (INTERNAL: operator tooling for the unlinked /internal
+# page, never customer-facing; Phase 1 has no supplier portal by design).
+@app.post(
+    "/internal/input-plans/{plan_id}/quotes",
+    response_model=schemas.SupplierQuote,
+    status_code=201,
+    tags=["internal"],
+)
+def internal_post_supplier_quote(
+    plan_id: int, payload: schemas.SupplierQuoteCreate, db: Session = Depends(get_db)
+):
+    plan = _require_input_plan(db, plan_id)
+    return _procurement_call(crud.create_supplier_quote, db, plan, payload)
+
+
+@app.post(
+    "/internal/supplier-quotes/{quote_id}/withdraw",
+    response_model=schemas.SupplierQuote,
+    tags=["internal"],
+)
+def internal_withdraw_supplier_quote(quote_id: int, db: Session = Depends(get_db)):
+    """Quotes are never edited — withdraw and re-enter is the only correction
+    path, so what the grower saw stays on record."""
+    quote = _require_supplier_quote(db, quote_id)
+    return _procurement_call(crud.withdraw_supplier_quote, db, quote)
+
+
+@app.post(
+    "/internal/supplier-quotes/{quote_id}/financing-offers",
+    response_model=schemas.FinancingOffer,
+    status_code=201,
+    tags=["internal"],
+)
+def internal_post_financing_offer(
+    quote_id: int, payload: schemas.FinancingOfferCreate, db: Session = Depends(get_db)
+):
+    """Enter a manually collected INDICATIVE financing offer. Requires that the
+    grower actually requested financing; never a credit decision."""
+    quote = _require_supplier_quote(db, quote_id)
+    return _procurement_call(crud.create_financing_offer, db, quote, payload)
+
+
+@app.post(
+    "/internal/orders/{order_id}/events",
+    response_model=schemas.OrderEvent,
+    status_code=201,
+    tags=["internal"],
+)
+def internal_post_order_event(
+    order_id: int, payload: schemas.OrderEventCreate, db: Session = Depends(get_db)
+):
+    """Append one order lifecycle event (transition-guarded, append-only).
+    input_applied is NOT postable here — it requires the explicit
+    /orders/{id}/input-applied link."""
+    order = _require_purchase_order(db, order_id)
+    return _procurement_call(crud.add_order_event, db, order, payload)

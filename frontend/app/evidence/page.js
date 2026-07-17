@@ -148,6 +148,7 @@ export default function EvidencePage() {
   const [evidence, setEvidence] = useState(null);
   const [error, setError] = useState(null);
   const [scope, setScope] = useState(null); // "demo" | "real" (default derived on load)
+  const [inputPlans, setInputPlans] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [fieldFilter, setFieldFilter] = useState("");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
@@ -155,14 +156,16 @@ export default function EvidencePage() {
   const load = useCallback(async () => {
     if (!farmId) return;
     try {
-      const [f, p, ev] = await Promise.all([
+      const [f, p, ev, plans] = await Promise.all([
         api.getFarm(farmId),
         api.listPlannedSprays(farmId),
         api.getDecisionEvidence(farmId),
+        api.listInputPlans(farmId),
       ]);
       setFarm(f);
       setPlanned(p);
       setEvidence(ev);
+      setInputPlans(plans);
       setError(null);
       // Default scope: demo when only simulated records exist, else real.
       setScope((prev) =>
@@ -420,6 +423,99 @@ export default function EvidencePage() {
                   : "Clear a filter to see more records."
               }
             />
+          }
+        />
+      </SectionCard>
+
+      {/* Input orders in the SAME provenance scope — demo and real never mix.
+          Amounts are recorded, never compared: no savings figure exists. */}
+      <SectionCard
+        title={scope === "demo" ? "Input orders (simulated)" : "Input orders"}
+        icon={<Download />}
+        description="Procurement chains: plan, quotes received, financing state, order, and the linked application. Quotes are concierge-entered; financing is indicative only; no savings figure is computed."
+      >
+        <DataTable
+          columns={[
+            {
+              key: "plan",
+              header: "Plan",
+              render: (p) => (
+                <div className="min-w-0">
+                  <Link
+                    href={`/inputs/plans/${p.id}`}
+                    className="font-medium text-leaf-700 hover:underline"
+                  >
+                    Plan #{p.id}
+                  </Link>
+                  <div className="text-xs text-gray-500">
+                    {p.items.map((i) => i.product_name).join(", ")}
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: "status",
+              header: "Status",
+              render: (p) => <StatusBadge kind="planStatus" value={p.status} />,
+            },
+            {
+              key: "financing",
+              header: "Financing",
+              render: (p) => <StatusBadge kind="financing" value={p.financing_state} />,
+            },
+            {
+              key: "quotes",
+              header: "Quotes",
+              align: "right",
+              priority: "secondary",
+              render: (p) => <span className="text-sm text-gray-700">{p.quote_count}</span>,
+            },
+            {
+              key: "decision",
+              header: "Source decision",
+              priority: "secondary",
+              render: (p) => {
+                const linked = p.items.find((i) => i.planned_spray_id);
+                return linked ? (
+                  <Link
+                    href={`/decisions/${linked.planned_spray_id}`}
+                    className="text-sm font-medium text-leaf-700 hover:underline"
+                  >
+                    #{linked.planned_spray_id}
+                  </Link>
+                ) : (
+                  <span className="text-xs text-gray-500">Manual</span>
+                );
+              },
+            },
+            {
+              key: "order",
+              header: "Order",
+              align: "right",
+              render: (p) =>
+                p.order_id ? (
+                  <Link
+                    href={`/inputs/orders/${p.order_id}`}
+                    className="text-sm font-medium text-leaf-700 hover:underline"
+                  >
+                    Order #{p.order_id}
+                  </Link>
+                ) : (
+                  <span className="text-xs text-gray-500">—</span>
+                ),
+            },
+          ]}
+          rows={inputPlans.filter((p) =>
+            scope === "demo" ? isDemoRecord(p) : !isDemoRecord(p)
+          )}
+          rowKey={(p) => p.id}
+          minWidth={640}
+          empty={
+            <p className="text-sm text-gray-500">
+              {scope === "demo"
+                ? "No simulated input orders."
+                : "No real input orders yet — real procurement chains appear in the evidence export automatically."}
+            </p>
           }
         />
       </SectionCard>

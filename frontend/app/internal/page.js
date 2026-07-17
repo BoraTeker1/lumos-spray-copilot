@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
+import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
 import { api } from "@/lib/api";
 
 // INTERNAL tooling — deliberately not linked from the app navigation.
@@ -209,6 +210,26 @@ export default function InternalToolsPage() {
               />
             )}
           </>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">Supplier quotes & financing (concierge)</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Enter supplier quotes against open RFQs, indicative financing offers
+          (never approvals), and append-only order lifecycle events. Phase 1 has
+          no supplier portal — Lumos staff transcribe on suppliers&apos; behalf.
+        </p>
+        {farms.length === 0 ? (
+          <p className="text-sm text-gray-500">No farms yet — create one first.</p>
+        ) : (
+          farmId && (
+            <ConciergeQuoteCard
+              key={`quotes-${farmId}`}
+              farmId={farmId}
+              country={farms.find((f) => String(f.id) === farmId)?.country || "US"}
+            />
+          )
         )}
       </section>
     </div>

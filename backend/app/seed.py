@@ -723,6 +723,193 @@ def run() -> None:
             notes="Rescue application after the delayed miticide failed to hold.",
         ))
 
+        # ------------------------------------------------------------------ #
+        # Demo procurement scenario (Inputs & finance, workflow demo ONLY):   #
+        #   the PCA-edited scenario-1 decision (Switch 62.5 WG) becomes an    #
+        #   input-plan item -> RFQ -> two materially different simulated      #
+        #   quotes (one cash-only, one with an indicative financing offer)    #
+        #   -> quote selected -> order -> delivered -> input applied, linked  #
+        #   back to the already-seeded Switch application. Every row is       #
+        #   demo/simulated. NO savings/impact claim anywhere — the scenario   #
+        #   demonstrates the workflow, never a financial result.              #
+        # ------------------------------------------------------------------ #
+        demo_plan = models.InputPlan(
+            farm_id=farm3.id,
+            status="ordered",
+            requested_by="Demo grower (simulated)",
+            notes="Workflow demonstration — simulated prices.",
+            financing_requested=True,
+            financing_requested_by="Demo grower (simulated)",
+            financing_notes="Asked for split-payment terms ahead of harvest cash flow.",
+            submitted_at=demo_ts,
+            submitted_by="Demo grower (simulated)",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=demo_ts,
+        )
+        db.add(demo_plan)
+        db.flush()
+        demo_item = models.InputPlanItem(
+            input_plan_id=demo_plan.id,
+            planned_spray_id=planned1.id,  # eligible: PCA-edited review, applied outcome
+            field_block="Field 7",
+            crop="strawberry",
+            category="fungicide",
+            product_name="Switch 62.5 WG",
+            active_ingredient="cyprodinil + fludioxonil",
+            quantity=252.0,  # 14 oz/acre x 18 acres
+            unit="oz",
+            acres=18.0,
+            needed_by_date=today,
+            intended_use="gray mold (Botrytis) on ripening fruit",
+            estimated_cost=210.0,
+            created_by="Demo grower (simulated)",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=demo_ts,
+        )
+        db.add(demo_item)
+        db.flush()
+
+        # Quote A — cash only, in stock, same-day delivery, higher total.
+        quote_a = models.SupplierQuote(
+            input_plan_id=demo_plan.id,
+            supplier_name="Coastal Ag Supply (simulated)",
+            status="submitted",
+            delivery_cost=40.0,
+            fees=0.0,
+            payment_terms_cash="Due on delivery",
+            expected_delivery_date=today,
+            availability="in_stock",
+            verification="concierge_entered",
+            notes="Simulated demo quote — concierge-entered for workflow demonstration.",
+            entered_by="Lumos concierge (demo)",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=demo_ts + timedelta(minutes=10),
+        )
+        # Quote B — lower unit price but partial availability, slower delivery,
+        # Net 30 cash terms, and an indicative financing offer. SELECTED so the
+        # demo exercises quote_selected + financing_selected + the
+        # "accepted (indicative)" labeling end to end.
+        quote_b = models.SupplierQuote(
+            input_plan_id=demo_plan.id,
+            supplier_name="Valley Farm Inputs (simulated)",
+            status="selected",
+            delivery_cost=95.0,
+            fees=25.0,
+            payment_terms_cash="Net 30",
+            expected_delivery_date=today + timedelta(days=2),
+            availability="partial",
+            expires_on=today + timedelta(days=10),
+            verification="concierge_entered",
+            notes="Simulated demo quote — concierge-entered for workflow demonstration.",
+            entered_by="Lumos concierge (demo)",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=demo_ts + timedelta(minutes=20),
+        )
+        db.add_all([quote_a, quote_b])
+        db.flush()
+        db.add_all([
+            models.SupplierQuoteItem(
+                supplier_quote_id=quote_a.id,
+                input_plan_item_id=demo_item.id,
+                product_name="Switch 62.5 WG",
+                quantity=252.0,
+                unit="oz",
+                unit_price=15.40,
+            ),
+            models.SupplierQuoteItem(
+                supplier_quote_id=quote_b.id,
+                input_plan_item_id=demo_item.id,
+                product_name="Switch 62.5 WG",
+                quantity=252.0,
+                unit="oz",
+                unit_price=14.50,
+            ),
+        ])
+        demo_offer = models.FinancingOffer(
+            supplier_quote_id=quote_b.id,
+            provider_name="AgCredit Partners (simulated)",
+            requested_amount=3700.0,
+            down_payment=700.0,
+            financed_amount=3000.0,
+            total_repayment=3150.0,
+            fees_total=45.0,
+            schedule_summary="3 monthly payments of $1,050",
+            expires_on=today + timedelta(days=14),
+            required_documents="Simulated demo — none collected.",
+            conditions="Indicative terms only; simulated demo data.",
+            status="accepted",
+            decided_by="Demo grower (simulated)",
+            decided_at=demo_ts + timedelta(minutes=40),
+            decision_notes="Accepted indicative terms (simulated demo — not a loan).",
+            entered_by="Lumos concierge (demo)",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=demo_ts + timedelta(minutes=30),
+        )
+        db.add(demo_offer)
+        db.flush()
+        demo_plan.selected_quote_id = quote_b.id
+        demo_plan.selected_by = "Demo grower (simulated)"
+
+        demo_order = models.PurchaseOrder(
+            farm_id=farm3.id,
+            input_plan_id=demo_plan.id,
+            selected_quote_id=quote_b.id,
+            accepted_financing_offer_id=demo_offer.id,
+            status="delivered",
+            spray_event_id=switch_event.id,
+            applied_planned_spray_id=planned1.id,
+            placed_by="Demo grower (simulated)",
+            notes="Workflow demonstration — simulated prices.",
+            data_source="demo",
+            data_confidence="simulated",
+            created_at=demo_ts + timedelta(minutes=50),
+        )
+        db.add(demo_order)
+        db.flush()
+        # Append-only order timeline, sequenced within the same demo day
+        # (mirrors what live crud writes; created/quote_selected/financing_selected
+        # are the order-creation events, the rest are lifecycle events).
+        demo_order_events = [
+            ("created", {"input_plan_id": demo_plan.id}, "Demo grower (simulated)", None),
+            ("quote_selected", {
+                "supplier_quote_id": quote_b.id,
+                "supplier_name": quote_b.supplier_name,
+                "total_cost": 3774.0,  # 252 oz x $14.50 + $95 delivery + $25 fees
+            }, "Demo grower (simulated)", None),
+            ("financing_selected", {
+                "financing_offer_id": demo_offer.id,
+                "provider_name": demo_offer.provider_name,
+                "financed_amount": demo_offer.financed_amount,
+            }, "Demo grower (simulated)", None),
+            ("supplier_confirmed", None, "Lumos concierge (demo)",
+             "Supplier confirmed the order (simulated)."),
+            ("shipped", None, "Lumos concierge (demo)", None),
+            ("delivered", None, "Lumos concierge (demo)",
+             "Delivered to the barn at Field 7 (simulated)."),
+            ("input_applied", {
+                "planned_spray_id": planned1.id,
+                "spray_event_id": switch_event.id,
+            }, "Demo grower (simulated)",
+             "Applied per the PCA-edited guidance; see the linked decision record."),
+        ]
+        for minute, (event_type, payload, actor, note) in enumerate(demo_order_events):
+            db.add(models.OrderEvent(
+                purchase_order_id=demo_order.id,
+                event_type=event_type,
+                occurred_on=today,
+                actor=actor,
+                notes=note,
+                payload=payload,
+                data_source="demo",
+                data_confidence="simulated",
+                created_at=demo_ts + timedelta(minutes=50 + minute),
+            ))
+
         # Declared spray baseline so the U.S. demo shows *measured* reduction, not just
         # descriptive metrics. Kept demo/simulated so the engine correctly flags the number as
         # illustrative (never present seed data as a real reduction result — see ENGINEERING_GUIDELINES.md §9).

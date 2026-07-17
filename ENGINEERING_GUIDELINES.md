@@ -57,8 +57,12 @@ Do **NOT** build any of the following unless the user explicitly instructs it in
 
 - authentication / multi-tenant SaaS infra
 - payments / billing
-- marketplace / supplier integrations
-- financing / revenue-sharing / credit
+- ~~marketplace / supplier integrations~~ / ~~financing~~ — **guardrail partially lifted
+  (2026-07-16)**: an "Inputs & finance" Phase 1 module is now built (RFQ + concierge-entered
+  quotes + INDICATIVE financing offers + orders, see §5). Still NOT allowed: a public supplier
+  marketplace/portal/catalog, real payments, real lending, automated underwriting, credit
+  scoring, money movement of any kind, revenue-sharing, commission-based quote ranking.
+- revenue-sharing / credit / money movement
 - drones / IoT / sensors / hardware / weather-station hookups
 - robotics / autonomous spray equipment
 - ~~computer vision / image-based disease diagnosis~~ — **guardrail lifted (2026-06-28)**: a
@@ -79,6 +83,29 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 ## 5. Product Features Already Built
 
 Backend + frontend both implement:
+
+- **Inputs & finance V1 (Phase 1 procurement, 2026-07-16)** — RFQ model, concierge-operated,
+  NO real money. Chain: PCA-cleared decision → `InputPlan` (plan == RFQ; status
+  draft→submitted_for_quotes→quoted→quote_selected→ordered/cancelled; items snapshot product
+  data, mutable only in draft) → concierge-entered `SupplierQuote`+items (never edited —
+  withdraw+re-enter; entry order, NEVER ranked; derived totals server-side) → optional
+  `FinancingOffer` (indicative only, attached to a quote, one-shot accept/decline, derived
+  expiry, disclaimer on every payload; "financing requested" is a plan flag, never an offer)
+  → `PurchaseOrder` (one per plan; lines = selected quote's items) + append-only `OrderEvent`
+  timeline (transition-map-guarded, 409 on invalid/duplicate; delivery NEVER marks applied —
+  explicit `input-applied` link to a SprayEvent/applied decision required). Eligibility gate:
+  `decision_status.procurement_eligible` (== the applied-outcome gate, minus `avoided`);
+  enforced at item-create AND plan-submit. Demo/real records can never mix in one chain (409).
+  Evidence export gains an `input_orders` block (demo-excluded, NO savings key by design).
+  Modules: `app/procurement_status.py` (pure vocab/transitions/derived states),
+  crud/main sections, `_seed_procurement_trail`-style demo scenario on Golden Coast (Switch
+  62.5 WG from scenario 1 → 2 simulated quotes → accepted indicative offer → delivered order
+  → input_applied). Frontend: "Inputs & finance" nav → `/inputs` (plans|orders tabs),
+  `/inputs/plans/[id]` (items, quote comparison, financing), `/inputs/orders/[id]` (lines,
+  timeline, link-application dialog); "Request supplier quotes" on eligible decision records;
+  concierge quote/offer/event entry on `/internal`. STATUS kinds planStatus/quoteState/
+  financing/offerState/orderStatus in `lib/status.js`. No auth (attribution strings, same as
+  everything else); tenant isolation documented as a known limitation.
 
 - **Pre-spray decision workflow (THE core product since 2026-07-10)** — a grower/PCA enters a
   *planned* spray; `app/decision_engine.py` checks it against harvest timing, entered PHI/REI,
@@ -372,7 +399,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **236 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **307 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded

@@ -21,6 +21,7 @@ import { DecisionReview, OutcomeRecorder } from "@/components/PreSpraySheet";
 // DecisionResult card it deliberately collapses nothing.
 
 import AiBriefCard from "@/components/AiBriefCard";
+import InputPlanForm from "@/components/InputPlanForm";
 import {
   AUTHORITY_SOURCE_LABELS,
   RECORDED_OUTCOME_LABELS,
@@ -634,6 +635,34 @@ export default function DecisionRecordPage({ params }) {
           </div>
 
           <AiBriefCard plannedId={planned.id} />
+
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-gray-900">Inputs & finance</h2>
+            {planned.procurement_eligible ? (
+              <>
+                <p className="mt-1 text-xs text-gray-500">
+                  This decision is cleared for procurement — build an input plan
+                  and request supplier quotes for the product it authorizes.
+                </p>
+                <div className="mt-2">
+                  <InputPlanForm
+                    farmId={planned.farm_id}
+                    plannedSpray={planned}
+                    triggerLabel="Request supplier quotes"
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="mt-1 text-xs text-gray-500">
+                Not eligible for procurement:{" "}
+                {planned.outcome === "avoided"
+                  ? "the recorded outcome is avoided — nothing should be purchased for it."
+                  : planned.review_state === "rejected"
+                    ? "the PCA rejected this decision."
+                    : "a PCA review (approve or edit) is still required before inputs can be purchased."}
+              </p>
+            )}
+          </div>
 
           <Link
             href={`/farms/${planned.farm_id}?tab=planned`}

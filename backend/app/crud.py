@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import clock, csv_import, decision_status, models, schemas, target_aliases
+from app import clock, csv_import, decision_status, models, procurement_status, schemas, target_aliases
 from app.decision_engine import evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
 
@@ -1331,6 +1331,8 @@ def has_non_demo_data(db: Session) -> bool:
     provenance_models = (
         models.SprayEvent, models.ScoutObservation, models.PlannedSpray,
         models.SprayBaseline, models.PcaPolicy, models.PilotImportBatch,
+        models.InputPlan, models.InputPlanItem, models.SupplierQuote,
+        models.FinancingOffer, models.PurchaseOrder, models.OrderEvent,
     )
     for model in provenance_models:
         for row in db.scalars(select(model)):
@@ -1365,3 +1367,516 @@ def create_pilot_feedback(
     db.commit()
     db.refresh(fb)
     return fb
+
+# ---------------------------------------------------------- Inputs & finance
+# Phase 1 procurement (RFQ model, concierge-operated). No auth exists in v1 —
+# attribution is by free-text actor strings, exactly like reviews; the concierge
+# entry points are namespaced /internal in main.py. All lifecycle gates live in
+# app/procurement_status.py; these helpers enforce them and never move money.
+
+
+class ProcurementStateError(Exception):
+    """Raised on an invalid procurement lifecycle transition (mapped to 409)."""
+
+
+class ProcurementEligibilityError(Exception):
+    """Raised when an ineligible decision is used to back a purchasable input
+    (mapped to 409). Eligibility is decision_status.procurement_eligible."""
+
+
+class ProcurementValidationError(Exception):
+    """Raised when a reference is inconsistent (a quote line for a foreign item,
+    a cross-farm application link, ...) — mapped to 422."""
+
+
+def get_input_plan(db: Session, plan_id: int) -> models.InputPlan | None:
+    return db.get(models.InputPlan, plan_id)
+
+
+def list_input_plans(db: Session, farm_id: int) -> list[models.InputPlan]:
+    return list(
+        db.scalars(
+            select(models.InputPlan)
+            .where(models.InputPlan.farm_id == farm_id)
+            .order_by(models.InputPlan.created_at.desc(), models.InputPlan.id.desc())
+        )
+    )
+
+
+def get_input_plan_item(db: Session, item_id: int) -> models.InputPlanItem | None:
+    return db.get(models.InputPlanItem, item_id)
+
+
+def _validate_plan_item(
+    db: Session,
+    farm: models.Farm,
+    plan_is_demo: bool,
+    item: schemas.InputPlanItemCreate,
+) -> None:
+    """Eligibility + scope + demo/real-separation checks for one item."""
+    if decision_status.is_demo_record(item) != plan_is_demo:
+        raise ProcurementStateError(
+            "simulated and real records can never mix within one input plan"
+        )
+    if item.planned_spray_id is None:
+        return
+    planned = get_planned_spray(db, item.planned_spray_id)
+    if planned is None or planned.farm_id != farm.id:
+        raise ProcurementValidationError(
+            f"planned spray {item.planned_spray_id} not found on this farm"
+        )
+    if not decision_status.procurement_eligible(planned):
+        raise ProcurementEligibilityError(
+            f"decision {planned.id} is not eligible for procurement "
+            f"(review_state={decision_status.review_state(planned)}, "
+            f"outcome={planned.outcome}); a PCA-approved or PCA-edited review is "
+            "required and an avoided decision can never back a purchase"
+        )
+    if decision_status.is_demo_record(planned) != plan_is_demo:
+        raise ProcurementStateError(
+            "a simulated demo decision can only back a simulated demo input plan "
+            "(and a real decision a real plan)"
+        )
+
+
+def create_input_plan(
+    db: Session, farm: models.Farm, data: schemas.InputPlanCreate
+) -> models.InputPlan:
+    plan = models.InputPlan(
+        farm_id=farm.id, **data.model_dump(exclude={"items"})
+    )
+    for item in data.items:
+        _validate_plan_item(db, farm, decision_status.is_demo_record(plan), item)
+    db.add(plan)
+    db.flush()
+    for item in data.items:
+        db.add(models.InputPlanItem(input_plan_id=plan.id, **item.model_dump()))
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def add_input_plan_item(
+    db: Session, plan: models.InputPlan, data: schemas.InputPlanItemCreate
+) -> models.InputPlanItem:
+    if not procurement_status.plan_is_mutable(plan):
+        raise ProcurementStateError(
+            f"items can only be added while the plan is a draft (status is "
+            f"'{plan.status}')"
+        )
+    _validate_plan_item(db, plan.farm, decision_status.is_demo_record(plan), data)
+    item = models.InputPlanItem(input_plan_id=plan.id, **data.model_dump())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def delete_input_plan_item(db: Session, item: models.InputPlanItem) -> None:
+    if not procurement_status.plan_is_mutable(item.input_plan):
+        raise ProcurementStateError(
+            "items can only be removed while the plan is a draft"
+        )
+    db.delete(item)
+    db.commit()
+
+
+def submit_input_plan(
+    db: Session, plan: models.InputPlan, data: schemas.InputPlanSubmit
+) -> models.InputPlan:
+    if not procurement_status.plan_transition_allowed(
+        plan.status, procurement_status.PLAN_SUBMITTED
+    ):
+        raise ProcurementStateError(
+            f"only a draft plan can be submitted for quotes (status is '{plan.status}')"
+        )
+    if not plan.items:
+        raise ProcurementStateError("a plan needs at least one item to request quotes")
+    # Re-check every linked decision: its review/outcome may have changed since
+    # the item was added (e.g. a PCA rejected the decision after the fact).
+    ineligible = []
+    for item in plan.items:
+        if item.planned_spray is not None and not decision_status.procurement_eligible(
+            item.planned_spray
+        ):
+            ineligible.append(item.planned_spray_id)
+    if ineligible:
+        raise ProcurementEligibilityError(
+            "linked decisions are no longer eligible for procurement: "
+            + ", ".join(str(i) for i in sorted(set(ineligible)))
+        )
+    plan.status = procurement_status.PLAN_SUBMITTED
+    plan.submitted_at = clock.current_datetime()
+    plan.submitted_by = data.submitted_by
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def cancel_input_plan(
+    db: Session, plan: models.InputPlan, data: schemas.InputPlanCancel
+) -> models.InputPlan:
+    if not procurement_status.plan_transition_allowed(
+        plan.status, procurement_status.PLAN_CANCELLED
+    ):
+        raise ProcurementStateError(
+            f"a plan with status '{plan.status}' cannot be cancelled"
+            + (" — cancel the order instead" if plan.status == "ordered" else "")
+        )
+    plan.status = procurement_status.PLAN_CANCELLED
+    plan.cancelled_at = clock.current_datetime()
+    plan.cancelled_reason = data.reason
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def get_supplier_quote(db: Session, quote_id: int) -> models.SupplierQuote | None:
+    return db.get(models.SupplierQuote, quote_id)
+
+
+def list_supplier_quotes(db: Session, plan_id: int) -> list[models.SupplierQuote]:
+    """Quotes in ENTRY ORDER — there is deliberately no ranking anywhere.
+
+    Comparison happens on transparent totals in the UI; Lumos takes no commission
+    and never orders quotes by anything but when they arrived.
+    """
+    return list(
+        db.scalars(
+            select(models.SupplierQuote)
+            .where(models.SupplierQuote.input_plan_id == plan_id)
+            .order_by(models.SupplierQuote.id)
+        )
+    )
+
+
+def create_supplier_quote(
+    db: Session, plan: models.InputPlan, data: schemas.SupplierQuoteCreate
+) -> models.SupplierQuote:
+    if plan.status not in procurement_status.PLAN_QUOTABLE_STATUSES:
+        raise ProcurementStateError(
+            f"quotes can only be entered on a submitted plan (status is '{plan.status}')"
+        )
+    if decision_status.is_demo_record(data) != decision_status.is_demo_record(plan):
+        raise ProcurementStateError(
+            "simulated and real records can never mix within one input plan"
+        )
+    plan_item_ids = {item.id for item in plan.items}
+    for line in data.items:
+        if line.input_plan_item_id not in plan_item_ids:
+            raise ProcurementValidationError(
+                f"quote line references item {line.input_plan_item_id}, which is "
+                "not on this plan"
+            )
+    quote = models.SupplierQuote(
+        input_plan_id=plan.id, **data.model_dump(exclude={"items"})
+    )
+    db.add(quote)
+    db.flush()
+    for line in data.items:
+        db.add(models.SupplierQuoteItem(supplier_quote_id=quote.id, **line.model_dump()))
+    if plan.status == procurement_status.PLAN_SUBMITTED:
+        plan.status = procurement_status.PLAN_QUOTED
+    db.commit()
+    db.refresh(quote)
+    return quote
+
+
+def withdraw_supplier_quote(
+    db: Session, quote: models.SupplierQuote
+) -> models.SupplierQuote:
+    """The ONLY correction path — quotes are never edited, so what the grower saw
+    is preserved without a parallel audit system."""
+    if quote.status != procurement_status.QUOTE_SUBMITTED:
+        raise ProcurementStateError(
+            f"only a submitted quote can be withdrawn (status is '{quote.status}')"
+        )
+    if quote.input_plan.status == procurement_status.PLAN_ORDERED:
+        raise ProcurementStateError("quotes cannot be withdrawn after the order exists")
+    quote.status = procurement_status.QUOTE_WITHDRAWN
+    db.commit()
+    db.refresh(quote)
+    return quote
+
+
+def select_quote(
+    db: Session, plan: models.InputPlan, data: schemas.SelectQuoteRequest
+) -> models.InputPlan:
+    if not procurement_status.plan_transition_allowed(
+        plan.status, procurement_status.PLAN_QUOTE_SELECTED
+    ):
+        raise ProcurementStateError(
+            f"a quote can only be selected on a quoted plan (status is "
+            f"'{plan.status}')"
+        )
+    quote = get_supplier_quote(db, data.supplier_quote_id)
+    if quote is None or quote.input_plan_id != plan.id:
+        raise ProcurementValidationError(
+            f"quote {data.supplier_quote_id} is not on this plan"
+        )
+    if not procurement_status.quote_selectable(quote, clock.current_date()):
+        raise ProcurementStateError(
+            "this quote can no longer be selected (it is "
+            f"{procurement_status.quote_state(quote, plan, clock.current_date())})"
+        )
+    quote.status = procurement_status.QUOTE_SELECTED
+    plan.selected_quote_id = quote.id
+    plan.selected_by = data.selected_by
+    plan.status = procurement_status.PLAN_QUOTE_SELECTED
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def get_financing_offer(db: Session, offer_id: int) -> models.FinancingOffer | None:
+    return db.get(models.FinancingOffer, offer_id)
+
+
+def create_financing_offer(
+    db: Session, quote: models.SupplierQuote, data: schemas.FinancingOfferCreate
+) -> models.FinancingOffer:
+    plan = quote.input_plan
+    if not plan.financing_requested:
+        raise ProcurementStateError(
+            "the grower has not requested financing on this plan — indicative "
+            "offers can only be entered against a request"
+        )
+    if plan.status in (
+        procurement_status.PLAN_ORDERED, procurement_status.PLAN_CANCELLED
+    ):
+        raise ProcurementStateError(
+            f"offers cannot be entered once the plan is {plan.status}"
+        )
+    if quote.status == procurement_status.QUOTE_WITHDRAWN:
+        raise ProcurementStateError("offers cannot be entered on a withdrawn quote")
+    if decision_status.is_demo_record(data) != decision_status.is_demo_record(plan):
+        raise ProcurementStateError(
+            "simulated and real records can never mix within one input plan"
+        )
+    offer = models.FinancingOffer(supplier_quote_id=quote.id, **data.model_dump())
+    db.add(offer)
+    db.commit()
+    db.refresh(offer)
+    return offer
+
+
+def decide_financing_offer(
+    db: Session, offer: models.FinancingOffer, data: schemas.FinancingOfferDecision
+) -> models.FinancingOffer:
+    """The grower's one-shot accept/decline of INDICATIVE terms — never a loan."""
+    today = clock.current_date()
+    if not procurement_status.offer_decidable(offer, today):
+        raise ProcurementStateError(
+            "this offer can no longer be decided (it is "
+            f"{procurement_status.offer_state(offer, today)})"
+        )
+    plan = offer.supplier_quote.input_plan
+    if plan.status in (
+        procurement_status.PLAN_ORDERED, procurement_status.PLAN_CANCELLED
+    ):
+        raise ProcurementStateError(
+            f"offers cannot be decided once the plan is {plan.status}"
+        )
+    if data.action == "accepted":
+        for sibling_quote in plan.quotes:
+            for sibling in sibling_quote.financing_offers:
+                if sibling.status == procurement_status.OFFER_ACCEPTED:
+                    raise ProcurementStateError(
+                        "another financing offer on this plan is already accepted"
+                    )
+    offer.status = data.action
+    offer.decided_by = data.actor
+    offer.decided_at = clock.current_datetime()
+    offer.decision_notes = data.notes
+    db.commit()
+    db.refresh(offer)
+    return offer
+
+
+def _add_order_event(
+    db: Session,
+    order: models.PurchaseOrder,
+    event_type: str,
+    *,
+    occurred_on: date,
+    actor: str | None = None,
+    notes: str | None = None,
+    payload: dict | None = None,
+) -> models.OrderEvent:
+    """The single writer for order events (add, not commit) — append-only."""
+    event = models.OrderEvent(
+        purchase_order_id=order.id,
+        event_type=event_type,
+        occurred_on=occurred_on,
+        actor=actor,
+        notes=notes,
+        payload=payload,
+        data_source=order.data_source,
+        data_confidence=order.data_confidence,
+    )
+    db.add(event)
+    return event
+
+
+def create_purchase_order(
+    db: Session, plan: models.InputPlan, data: schemas.PurchaseOrderCreate
+) -> models.PurchaseOrder:
+    if not procurement_status.plan_transition_allowed(
+        plan.status, procurement_status.PLAN_ORDERED
+    ):
+        raise ProcurementStateError(
+            f"an order requires a selected quote (plan status is '{plan.status}')"
+        )
+    quote = get_supplier_quote(db, plan.selected_quote_id)
+    accepted_offer = next(
+        (
+            o for o in quote.financing_offers
+            if o.status == procurement_status.OFFER_ACCEPTED
+        ),
+        None,
+    )
+    order = models.PurchaseOrder(
+        farm_id=plan.farm_id,
+        input_plan_id=plan.id,
+        selected_quote_id=quote.id,
+        accepted_financing_offer_id=accepted_offer.id if accepted_offer else None,
+        placed_by=data.placed_by,
+        notes=data.notes,
+        data_source=plan.data_source,
+        data_confidence=plan.data_confidence,
+    )
+    db.add(order)
+    db.flush()
+    today = clock.current_date()
+    _add_order_event(
+        db, order, procurement_status.EVENT_CREATED,
+        occurred_on=today, actor=data.placed_by,
+        payload={"input_plan_id": plan.id},
+    )
+    _add_order_event(
+        db, order, procurement_status.EVENT_QUOTE_SELECTED,
+        occurred_on=today, actor=plan.selected_by,
+        payload={
+            "supplier_quote_id": quote.id,
+            "supplier_name": quote.supplier_name,
+            "total_cost": quote.total_cost,
+        },
+    )
+    if accepted_offer is not None:
+        _add_order_event(
+            db, order, procurement_status.EVENT_FINANCING_SELECTED,
+            occurred_on=today, actor=accepted_offer.decided_by,
+            payload={
+                "financing_offer_id": accepted_offer.id,
+                "provider_name": accepted_offer.provider_name,
+                "financed_amount": accepted_offer.financed_amount,
+            },
+        )
+    plan.status = procurement_status.PLAN_ORDERED
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def get_purchase_order(db: Session, order_id: int) -> models.PurchaseOrder | None:
+    return db.get(models.PurchaseOrder, order_id)
+
+
+def list_purchase_orders(db: Session, farm_id: int) -> list[models.PurchaseOrder]:
+    return list(
+        db.scalars(
+            select(models.PurchaseOrder)
+            .where(models.PurchaseOrder.farm_id == farm_id)
+            .order_by(
+                models.PurchaseOrder.created_at.desc(), models.PurchaseOrder.id.desc()
+            )
+        )
+    )
+
+
+def list_order_events(db: Session, order_id: int) -> list[models.OrderEvent]:
+    return list(
+        db.scalars(
+            select(models.OrderEvent)
+            .where(models.OrderEvent.purchase_order_id == order_id)
+            .order_by(models.OrderEvent.created_at, models.OrderEvent.id)
+        )
+    )
+
+
+def add_order_event(
+    db: Session, order: models.PurchaseOrder, data: schemas.OrderEventCreate
+) -> models.OrderEvent:
+    """Concierge-posted lifecycle event; the transition map is the idempotency
+    guard (a duplicate 'delivered' is an invalid transition, not a no-op)."""
+    if not procurement_status.order_event_allowed(order, data.event_type):
+        raise ProcurementStateError(
+            f"event '{data.event_type}' is not valid while the order is "
+            f"'{order.status}'"
+        )
+    if data.occurred_on < order.created_at.date():
+        raise ProcurementStateError("an order event cannot predate the order")
+    event = _add_order_event(
+        db, order, data.event_type,
+        occurred_on=data.occurred_on, actor=data.actor, notes=data.notes,
+    )
+    new_status = procurement_status.ORDER_EVENT_NEW_STATUS.get(data.event_type)
+    if new_status is not None:
+        order.status = new_status
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def record_input_applied(
+    db: Session, order: models.PurchaseOrder, data: schemas.InputAppliedRequest
+) -> models.OrderEvent:
+    """The explicit delivery→application link. Delivery alone NEVER marks an
+    input as applied — this endpoint requires the actual application record."""
+    if not procurement_status.order_event_allowed(
+        order, procurement_status.EVENT_INPUT_APPLIED
+    ):
+        raise ProcurementStateError(
+            "an input can only be recorded as applied once the order is "
+            f"delivered (status is '{order.status}')"
+        )
+    if order.spray_event_id is not None or order.applied_planned_spray_id is not None:
+        raise ProcurementStateError(
+            "an application is already linked to this order"
+        )
+    payload: dict = {}
+    if data.spray_event_id is not None:
+        spray = db.get(models.SprayEvent, data.spray_event_id)
+        if spray is None or spray.farm_id != order.farm_id:
+            raise ProcurementValidationError(
+                f"spray event {data.spray_event_id} not found on this farm"
+            )
+        order.spray_event_id = spray.id
+        payload["spray_event_id"] = spray.id
+    else:
+        planned = get_planned_spray(db, data.planned_spray_id)
+        if planned is None or planned.farm_id != order.farm_id:
+            raise ProcurementValidationError(
+                f"planned spray {data.planned_spray_id} not found on this farm"
+            )
+        if planned.outcome not in APPLIED_OUTCOMES:
+            raise ProcurementValidationError(
+                f"decision {planned.id} has no applied outcome recorded "
+                f"(outcome is '{planned.outcome}')"
+            )
+        order.applied_planned_spray_id = planned.id
+        payload["planned_spray_id"] = planned.id
+        if planned.spray_event_id is not None:
+            order.spray_event_id = planned.spray_event_id
+            payload["spray_event_id"] = planned.spray_event_id
+    occurred_on = data.occurred_on or clock.current_date()
+    if occurred_on < order.created_at.date():
+        raise ProcurementStateError("an order event cannot predate the order")
+    event = _add_order_event(
+        db, order, procurement_status.EVENT_INPUT_APPLIED,
+        occurred_on=occurred_on, actor=data.actor, notes=data.notes,
+        payload=payload,
+    )
+    db.commit()
+    db.refresh(event)
+    return event

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app import decision_status
+from app import decision_status, procurement_status
 from app.recommendation_engine import RECENT_WINDOW_DAYS, generate_recommendation
 
 # Recommendation statuses that represent a recorded advisor decision (an audit trail entry).
@@ -924,6 +924,141 @@ def _missing_evidence_notes(planned, summary: dict) -> list[str]:
     return out
 
 
+# Fixed limitations attached to the procurement (input_orders) evidence block.
+# There is deliberately NO savings key anywhere: amounts are recorded, not compared.
+PROCUREMENT_EXPORT_LIMITATIONS = [
+    "Supplier quotes are concierge-entered for comparison, not supplier-system data.",
+    "Financing terms are indicative only; no credit decision occurred and no money "
+    "moved through Lumos.",
+    "No cost-savings figure is computed — amounts are recorded, not compared.",
+]
+
+
+def _export_quote(quote, plan, today) -> dict:
+    return {
+        "supplier_quote_id": quote.id,
+        "supplier_name": quote.supplier_name,
+        "state": procurement_status.quote_state(quote, plan, today),
+        "verification": quote.verification,
+        "availability": quote.availability,
+        "expected_delivery_date": _iso_dt(quote.expected_delivery_date),
+        "expires_on": _iso_dt(quote.expires_on),
+        "payment_terms_cash": quote.payment_terms_cash,
+        "items_subtotal": quote.items_subtotal,
+        "delivery_cost": quote.delivery_cost,
+        "fees": quote.fees,
+        "total_cost": quote.total_cost,
+        "lines": [
+            {
+                "input_plan_item_id": line.input_plan_item_id,
+                "product_name": line.product_name,
+                "is_substitution": line.is_substitution,
+                "substitution_reason": line.substitution_reason,
+                "quantity": line.quantity,
+                "unit": line.unit,
+                "unit_price": line.unit_price,
+                "line_total": line.line_total,
+            }
+            for line in quote.items
+        ],
+        "financing_offers": [
+            {
+                "financing_offer_id": o.id,
+                "provider_name": o.provider_name,
+                "state": procurement_status.offer_state(o, today),
+                "requested_amount": o.requested_amount,
+                "down_payment": o.down_payment,
+                "financed_amount": o.financed_amount,
+                "total_repayment": o.total_repayment,
+                "fees_total": o.fees_total,
+                "schedule_summary": o.schedule_summary,
+                "expires_on": _iso_dt(o.expires_on),
+                "decided_by": o.decided_by,
+                "disclaimer": procurement_status.FINANCING_OFFER_DISCLAIMER,
+            }
+            for o in quote.financing_offers
+        ],
+    }
+
+
+def build_procurement_export(input_plans, today: date | None = None) -> dict:
+    """The input_orders evidence block: every REAL (non-demo) procurement chain.
+
+    Records the plan (with decision links and provenance), the quotes as entered,
+    the financing history (indicative only, disclaimer verbatim), the order and
+    its append-only event timeline. No savings/impact figure exists here by
+    design — the export records amounts, it never compares them.
+    """
+    today = today or date.today()
+    real_plans = [
+        p for p in (input_plans or []) if not decision_status.is_demo_record(p)
+    ]
+    plans_out = []
+    for plan in real_plans:
+        offers = [o for q in plan.quotes for o in q.financing_offers]
+        order = plan.order
+        plans_out.append({
+            "input_plan_id": plan.id,
+            "status": plan.status,
+            "requested_by": plan.requested_by,
+            "financing_requested": plan.financing_requested,
+            "financing_state": procurement_status.financing_state(plan, offers, today),
+            "data_source": plan.data_source,
+            "data_confidence": plan.data_confidence,
+            "items": [
+                {
+                    "input_plan_item_id": item.id,
+                    "planned_spray_id": item.planned_spray_id,
+                    "field_block": item.field_block,
+                    "crop": item.crop,
+                    "category": item.category,
+                    "product_name": item.product_name,
+                    "active_ingredient": item.active_ingredient,
+                    "quantity": item.quantity,
+                    "unit": item.unit,
+                    "acres": item.acres,
+                    "needed_by_date": _iso_dt(item.needed_by_date),
+                    "intended_use": item.intended_use,
+                    "estimated_cost": item.estimated_cost,
+                    "data_source": item.data_source,
+                }
+                for item in plan.items
+            ],
+            "quotes_received": sum(
+                1 for q in plan.quotes
+                if q.status != procurement_status.QUOTE_WITHDRAWN
+            ),
+            "quotes": [_export_quote(q, plan, today) for q in plan.quotes],
+            "selected_quote_id": plan.selected_quote_id,
+            "order": None if order is None else {
+                "order_id": order.id,
+                "status": order.status,
+                "placed_by": order.placed_by,
+                "selected_quote_id": order.selected_quote_id,
+                "accepted_financing_offer_id": order.accepted_financing_offer_id,
+                "spray_event_id": order.spray_event_id,
+                "applied_planned_spray_id": order.applied_planned_spray_id,
+                "events": [
+                    {
+                        "event_type": e.event_type,
+                        "occurred_on": _iso_dt(e.occurred_on),
+                        "actor": e.actor,
+                        "notes": e.notes,
+                        "payload": e.payload,
+                    }
+                    for e in sorted(
+                        order.events, key=lambda e: (e.created_at, e.id)
+                    )
+                ],
+            },
+        })
+    return {
+        "plans_exported": len(plans_out),
+        "plans": plans_out,
+        "limitations": list(PROCUREMENT_EXPORT_LIMITATIONS),
+    }
+
+
 def build_evidence_export(
     farm,
     planned_sprays,
@@ -932,6 +1067,7 @@ def build_evidence_export(
     input_values_by_id: dict,
     advisor_label: str = "agronomist",
     today: date | None = None,
+    input_plans=None,
 ) -> dict:
     """Anonymized evidence export for one farm's REAL (non-demo) decisions.
 
@@ -999,6 +1135,7 @@ def build_evidence_export(
         "estimated": estimated,
         "not_calculated": dict(NOT_CALCULATED),
         "decisions": rows,
+        "input_orders": build_procurement_export(input_plans, today),
         "limitations": list(EVIDENCE_EXPORT_LIMITATIONS),
         "disclaimer": CASE_STUDY_DISCLAIMER,
     }

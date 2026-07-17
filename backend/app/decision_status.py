@@ -93,6 +93,24 @@ def follow_up_required(planned) -> bool:
     return False
 
 
+# Recorded outcomes that close the door on purchasing inputs for the decision.
+PROCUREMENT_BLOCKED_OUTCOMES = ("avoided",)
+
+
+def procurement_eligible(planned) -> bool:
+    """May this decision back a purchasable input-plan item?
+
+    Exactly the gate that allows recording an APPLIED outcome (review approved/
+    edited, or review not required) — a rejected or still-pending review keeps
+    inputs unpurchasable just as it keeps the sprayer parked — and never after a
+    recorded avoidance. A blocked decision becomes eligible only through the
+    existing PCA approve/edit path: the PCA review IS the resolution.
+    """
+    return applied_outcome_allowed(planned) and (
+        getattr(planned, "outcome", "planned") not in PROCUREMENT_BLOCKED_OUTCOMES
+    )
+
+
 def is_demo_record(record) -> bool:
     """Demo/simulated provenance — excluded from every real pilot metric."""
     return (

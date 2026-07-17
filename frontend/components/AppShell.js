@@ -16,6 +16,7 @@ import {
   PanelLeft,
   ShieldAlert,
   ShieldCheck,
+  ShoppingCart,
   Sprout,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -30,6 +31,7 @@ const MAIN_NAV = [
   { href: "/decisions", label: "Decisions", icon: ShieldCheck },
   { href: "/scouting", label: "Scouting", icon: Eye },
   { href: "/applications", label: "Applications", icon: Droplets },
+  { href: "/inputs", label: "Inputs & finance", icon: ShoppingCart },
   { href: "/compliance", label: "Compliance", icon: ShieldAlert },
   { href: "/evidence", label: "Evidence & reports", icon: FileCheck },
 ];

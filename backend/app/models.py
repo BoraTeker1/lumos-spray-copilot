@@ -4,7 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app import clock, decision_status
+from app import clock, decision_status, procurement_status
 from app.database import Base
 
 # All created_at defaults go through the app clock so a pinned LUMOS_DEMO_TODAY keeps
@@ -45,6 +45,12 @@ class Farm(Base):
         back_populates="farm", cascade="all, delete-orphan"
     )
     pca_policies: Mapped[list["PcaPolicy"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
+    input_plans: Mapped[list["InputPlan"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
+    purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
 
@@ -234,6 +240,10 @@ class PlannedSpray(Base):
     @property
     def follow_up_event_count(self) -> int:
         return len(self.follow_up_events or [])
+
+    @property
+    def procurement_eligible(self) -> bool:
+        return decision_status.procurement_eligible(self)
 
     @property
     def workflow_state(self) -> str:
@@ -496,6 +506,325 @@ class PilotEvent(Base):
     # How the data got in: manual_form / csv_paste / concierge / seed ...
     entry_source: Mapped[str | None] = mapped_column(String(40))
     meta: Mapped[dict | None] = mapped_column(JSON)
+
+
+class InputPlan(Base):
+    """What a farm intends to purchase — the plan IS the RFQ (Inputs & finance v1).
+
+    Status carries the whole RFQ lifecycle (see app/procurement_status.py); header
+    and items are mutable only while `draft`. "Financing requested" is a flag here,
+    never an offer row — a request is structurally incapable of looking like an
+    approval. No money moves anywhere in this module.
+    """
+    __tablename__ = "input_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    # draft / submitted_for_quotes / quoted / quote_selected / ordered / cancelled
+    status: Mapped[str] = mapped_column(String(30), default=procurement_status.PLAN_DRAFT)
+    requested_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    financing_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    financing_requested_by: Mapped[str | None] = mapped_column(String(120))
+    financing_notes: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    submitted_by: Mapped[str | None] = mapped_column(String(120))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cancelled_reason: Mapped[str | None] = mapped_column(Text)
+    # Soft reference to supplier_quotes.id (no FK constraint — the quote table
+    # already FKs back to this one and SQLite can't ALTER in the reverse edge).
+    selected_quote_id: Mapped[int | None] = mapped_column(Integer)
+    selected_by: Mapped[str | None] = mapped_column(String(120))
+    # Concierge-pilot provenance (see SprayEvent for the allowed values).
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship(back_populates="input_plans")
+    items: Mapped[list["InputPlanItem"]] = relationship(
+        back_populates="input_plan", cascade="all, delete-orphan"
+    )
+    quotes: Mapped[list["SupplierQuote"]] = relationship(
+        back_populates="input_plan", cascade="all, delete-orphan"
+    )
+    order: Mapped["PurchaseOrder | None"] = relationship(
+        back_populates="input_plan", uselist=False
+    )
+
+    @property
+    def financing_state(self) -> str:
+        offers = [o for q in (self.quotes or []) for o in (q.financing_offers or [])]
+        return procurement_status.financing_state(self, offers, clock.current_date())
+
+    @property
+    def quote_count(self) -> int:
+        return sum(
+            1 for q in (self.quotes or [])
+            if q.status != procurement_status.QUOTE_WITHDRAWN
+        )
+
+    @property
+    def order_id(self) -> int | None:
+        return self.order.id if self.order is not None else None
+
+
+class InputPlanItem(Base):
+    """One input the plan asks suppliers to quote.
+
+    Product fields are a SNAPSHOT at item creation (a later PCA edit to the source
+    decision never silently rewrites an RFQ already sent out); `planned_spray_id`
+    keeps the provenance link. Deletable only while the plan is draft; there is no
+    update endpoint at all.
+    """
+    __tablename__ = "input_plan_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    input_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plans.id"), nullable=False, index=True
+    )
+    # Source decision, when the item was created from a PCA-reviewed planned spray.
+    planned_spray_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planned_sprays.id"), index=True
+    )
+    field_block: Mapped[str | None] = mapped_column(String(120))
+    crop: Mapped[str | None] = mapped_column(String(100))
+    # fungicide / insecticide / herbicide / miticide / fertilizer / adjuvant / other
+    category: Mapped[str] = mapped_column(String(40), default="other")
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    active_ingredient: Mapped[str | None] = mapped_column(String(200))
+    moa_group: Mapped[str | None] = mapped_column(String(40))
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str] = mapped_column(String(40), nullable=False)
+    acres: Mapped[float | None] = mapped_column(Float)
+    needed_by_date: Mapped[date] = mapped_column(Date, nullable=False)
+    intended_use: Mapped[str | None] = mapped_column(String(200))
+    estimated_cost: Mapped[float | None] = mapped_column(Float)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    input_plan: Mapped["InputPlan"] = relationship(back_populates="items")
+    planned_spray: Mapped["PlannedSpray | None"] = relationship()
+
+    @property
+    def source_decision_review_state(self) -> str:
+        if self.planned_spray is None:
+            return "not_linked"
+        return decision_status.review_state(self.planned_spray)
+
+    @property
+    def source_decision_procurement_eligible(self) -> bool | None:
+        if self.planned_spray is None:
+            return None
+        return decision_status.procurement_eligible(self.planned_spray)
+
+
+class SupplierQuote(Base):
+    """One supplier's quote against an input plan (concierge-entered in Phase 1).
+
+    Never edited: a wrong quote is withdrawn and re-entered, so what the grower
+    saw is preserved without a parallel audit system. There is no ranking column
+    anywhere — quotes are returned in entry order and compared on transparent
+    totals only (Lumos takes no commission and never ranks suppliers).
+    """
+    __tablename__ = "supplier_quotes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    input_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plans.id"), nullable=False, index=True
+    )
+    supplier_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    supplier_contact: Mapped[str | None] = mapped_column(String(200))
+    # submitted / selected / withdrawn (stored; expiry/not_selected are derived)
+    status: Mapped[str] = mapped_column(String(20), default=procurement_status.QUOTE_SUBMITTED)
+    delivery_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    fees: Mapped[float] = mapped_column(Float, default=0.0)
+    payment_terms_cash: Mapped[str | None] = mapped_column(String(200))
+    expected_delivery_date: Mapped[date | None] = mapped_column(Date)
+    # in_stock / partial / backordered / unknown
+    availability: Mapped[str] = mapped_column(String(20), default="unknown")
+    expires_on: Mapped[date | None] = mapped_column(Date)
+    # concierge_entered / supplier_confirmed (simulated-ness lives in provenance)
+    verification: Mapped[str] = mapped_column(String(30), default="concierge_entered")
+    notes: Mapped[str | None] = mapped_column(Text)
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    input_plan: Mapped["InputPlan"] = relationship(back_populates="quotes")
+    items: Mapped[list["SupplierQuoteItem"]] = relationship(
+        back_populates="supplier_quote", cascade="all, delete-orphan"
+    )
+    financing_offers: Mapped[list["FinancingOffer"]] = relationship(
+        back_populates="supplier_quote", cascade="all, delete-orphan"
+    )
+
+    @property
+    def items_subtotal(self) -> float:
+        return round(sum(i.quantity * i.unit_price for i in (self.items or [])), 2)
+
+    @property
+    def total_cost(self) -> float:
+        return round(self.items_subtotal + (self.delivery_cost or 0) + (self.fees or 0), 2)
+
+    @property
+    def quote_state(self) -> str:
+        return procurement_status.quote_state(self, self.input_plan, clock.current_date())
+
+
+class SupplierQuoteItem(Base):
+    """One quoted line, keyed to the requested input-plan item it answers."""
+    __tablename__ = "supplier_quote_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_quote_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_quotes.id"), nullable=False, index=True
+    )
+    input_plan_item_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plan_items.id"), nullable=False, index=True
+    )
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    is_substitution: Mapped[bool] = mapped_column(Boolean, default=False)
+    substitution_reason: Mapped[str | None] = mapped_column(Text)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str] = mapped_column(String(40), nullable=False)
+    unit_price: Mapped[float] = mapped_column(Float, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    supplier_quote: Mapped["SupplierQuote"] = relationship(back_populates="items")
+
+    @property
+    def line_total(self) -> float:
+        return round(self.quantity * self.unit_price, 2)
+
+
+class FinancingOffer(Base):
+    """A manually entered INDICATIVE financing offer against one supplier quote.
+
+    Phase 1 never moves money: no underwriting, no origination, no repayment
+    collection. An offer is created `indicative`; the grower's accept/decline is
+    one-shot; `expired` is derived from expires_on and never stored, so a stale
+    offer can never be accepted. Every serialized offer carries the disclaimer.
+    """
+    __tablename__ = "financing_offers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_quote_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_quotes.id"), nullable=False, index=True
+    )
+    provider_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    requested_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    down_payment: Mapped[float] = mapped_column(Float, default=0.0)
+    financed_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    total_repayment: Mapped[float] = mapped_column(Float, nullable=False)
+    fees_total: Mapped[float] = mapped_column(Float, default=0.0)
+    schedule_summary: Mapped[str | None] = mapped_column(String(300))
+    expires_on: Mapped[date | None] = mapped_column(Date)
+    required_documents: Mapped[str | None] = mapped_column(Text)
+    conditions: Mapped[str | None] = mapped_column(Text)
+    # indicative / accepted / declined / withdrawn (expired is derived, never stored)
+    status: Mapped[str] = mapped_column(String(20), default=procurement_status.OFFER_INDICATIVE)
+    decided_by: Mapped[str | None] = mapped_column(String(120))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decision_notes: Mapped[str | None] = mapped_column(Text)
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    supplier_quote: Mapped["SupplierQuote"] = relationship(back_populates="financing_offers")
+
+    @property
+    def offer_state(self) -> str:
+        return procurement_status.offer_state(self, clock.current_date())
+
+
+class PurchaseOrder(Base):
+    """The order created from a plan's selected quote (one per plan in Phase 1).
+
+    Order lines are the selected quote's items — there is no separate item table.
+    `status` is a convenient current-state column mutated ONLY by event-appending
+    crud (same pattern as PlannedSpray's columns + DecisionAuditEvent): every
+    change appends an OrderEvent first. `spray_event_id`/`applied_planned_spray_id`
+    are set ONLY by the explicit input-applied endpoint — delivery alone never
+    marks an input as applied.
+    """
+    __tablename__ = "purchase_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    input_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plans.id"), nullable=False, unique=True, index=True
+    )
+    selected_quote_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_quotes.id"), nullable=False
+    )
+    accepted_financing_offer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("financing_offers.id")
+    )
+    # placed / confirmed / shipped / delivered / partially_delivered / cancelled
+    status: Mapped[str] = mapped_column(String(30), default=procurement_status.ORDER_PLACED)
+    spray_event_id: Mapped[int | None] = mapped_column(ForeignKey("spray_events.id"))
+    applied_planned_spray_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planned_sprays.id")
+    )
+    placed_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship(back_populates="purchase_orders")
+    input_plan: Mapped["InputPlan"] = relationship(back_populates="order")
+    selected_quote: Mapped["SupplierQuote"] = relationship(
+        foreign_keys=[selected_quote_id]
+    )
+    accepted_financing_offer: Mapped["FinancingOffer | None"] = relationship(
+        foreign_keys=[accepted_financing_offer_id]
+    )
+    events: Mapped[list["OrderEvent"]] = relationship(
+        back_populates="purchase_order", cascade="all, delete-orphan"
+    )
+
+    @property
+    def supplier_name(self) -> str | None:
+        return self.selected_quote.supplier_name if self.selected_quote else None
+
+    @property
+    def total_cost(self) -> float | None:
+        return self.selected_quote.total_cost if self.selected_quote else None
+
+
+class OrderEvent(Base):
+    """One append-only event on a purchase order. NEVER updated or deleted.
+
+    The order's lifecycle IS this timeline; the PurchaseOrder.status column is a
+    read convenience kept in sync by crud. `occurred_on` is the real-world date;
+    `created_at` is when it was entered (mirrors DecisionFollowUpEvent).
+    """
+    __tablename__ = "order_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_orders.id"), nullable=False, index=True
+    )
+    # created / quote_selected / financing_selected / supplier_confirmed / shipped /
+    # delivered / partially_delivered / cancelled / input_applied / exception_reported
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Linked ids / amounts detail (quote_id, offer_id, spray_event_id, ...).
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    purchase_order: Mapped["PurchaseOrder"] = relationship(back_populates="events")
 
 
 class PilotImportBatch(Base):

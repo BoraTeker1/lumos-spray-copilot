@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.procurement_status import FINANCING_OFFER_DISCLAIMER
+
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
 DataSource = Literal[
     "demo", "grower_interview", "spreadsheet", "whatsapp", "email", "manual_entry",
@@ -366,6 +368,9 @@ class PlannedSpray(BaseModel):
     evidence_state: str = "missing_documentation"
     # await_pca_review / resolve_conflict / inspect / record_outcome / record_follow_up / none
     current_next_action: str = "record_outcome"
+    # May this decision back a purchasable input-plan item? (Inputs & finance;
+    # canonical decision_status.procurement_eligible — the UI never re-derives it.)
+    procurement_eligible: bool = False
 
 
 # ------------------------------------------------- Decision input provenance
@@ -670,3 +675,328 @@ class PilotFeedback(PilotFeedbackCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
     created_at: datetime
+
+
+# ------------------------------------------------------------ Inputs & finance
+# Phase 1 procurement (RFQ model, concierge-operated, simulated/no-real-money).
+# Status vocabularies mirror app/procurement_status.py — the single source of truth.
+InputCategory = Literal[
+    "fungicide", "insecticide", "herbicide", "miticide", "fertilizer", "adjuvant",
+    "other",
+]
+QuoteAvailability = Literal["in_stock", "partial", "backordered", "unknown"]
+QuoteVerification = Literal["concierge_entered", "supplier_confirmed"]
+FinancingDecisionAction = Literal["accepted", "declined"]
+# Only these are postable via the generic concierge order-events endpoint;
+# created/quote_selected/financing_selected are written by order creation, and
+# input_applied has its own endpoint (delivery must never imply application).
+ConciergeOrderEventType = Literal[
+    "supplier_confirmed", "shipped", "delivered", "partially_delivered",
+    "cancelled", "exception_reported",
+]
+
+class InputPlanItemCreate(BaseModel):
+    """One input to be quoted. Product fields are a snapshot; `planned_spray_id`
+    links the source decision (crud enforces procurement eligibility)."""
+    planned_spray_id: int | None = None
+    field_block: str | None = None
+    crop: str | None = None
+    category: InputCategory = "other"
+    product_name: str
+    active_ingredient: str | None = None
+    moa_group: str | None = None
+    quantity: float = Field(gt=0)
+    unit: str
+    acres: float | None = Field(default=None, gt=0)
+    needed_by_date: date
+    intended_use: str | None = None
+    estimated_cost: float | None = Field(default=None, ge=0)
+    notes: str | None = None
+    created_by: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class InputPlanItem(InputPlanItemCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    input_plan_id: int
+    created_at: datetime
+    # Derived from the linked decision ("not_linked" for manual items) — the UI
+    # never re-derives review/eligibility semantics.
+    source_decision_review_state: str = "not_linked"
+    source_decision_procurement_eligible: bool | None = None
+
+
+class InputPlanCreate(BaseModel):
+    """A new draft input plan (the plan IS the RFQ), optionally with initial items."""
+    requested_by: str | None = None
+    notes: str | None = None
+    financing_requested: bool = False
+    financing_requested_by: str | None = None
+    financing_notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+    items: list[InputPlanItemCreate] = Field(default_factory=list)
+
+
+class FinancingOfferCreate(BaseModel):
+    """A manually entered INDICATIVE financing offer (concierge only, Phase 1).
+
+    Never an approval: offers are created `indicative`; internal-consistency
+    checks keep the arithmetic honest (financed = requested - down payment,
+    repayment >= financed).
+    """
+    provider_name: str
+    requested_amount: float = Field(ge=0)
+    down_payment: float = Field(default=0.0, ge=0)
+    financed_amount: float = Field(ge=0)
+    total_repayment: float = Field(ge=0)
+    fees_total: float = Field(default=0.0, ge=0)
+    schedule_summary: str | None = None
+    expires_on: date | None = None
+    required_documents: str | None = None
+    conditions: str | None = None
+    entered_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+    @model_validator(mode="after")
+    def _amounts_consistent(self):
+        if abs(self.financed_amount - (self.requested_amount - self.down_payment)) > 0.01:
+            raise ValueError(
+                "financed_amount must equal requested_amount minus down_payment"
+            )
+        if self.total_repayment < self.financed_amount:
+            raise ValueError("total_repayment cannot be less than financed_amount")
+        return self
+
+
+class FinancingOffer(FinancingOfferCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    supplier_quote_id: int
+    status: str
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    decision_notes: str | None = None
+    created_at: datetime
+    # Derived (expiry is never stored, so a stale offer can't claim to be live).
+    offer_state: str = "indicative"
+    disclaimer: str = FINANCING_OFFER_DISCLAIMER
+
+
+class FinancingOfferDecision(BaseModel):
+    """The grower's one-shot accept/decline of an indicative offer.
+
+    Accepting records agreement to INDICATIVE terms only — it is not a loan
+    approval and moves no money.
+    """
+    action: FinancingDecisionAction
+    actor: str | None = None
+    notes: str | None = None
+
+
+class SupplierQuoteItemCreate(BaseModel):
+    """One quoted line answering one requested input-plan item."""
+    input_plan_item_id: int
+    product_name: str
+    is_substitution: bool = False
+    substitution_reason: str | None = None
+    quantity: float = Field(gt=0)
+    unit: str
+    unit_price: float = Field(ge=0)
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _require_substitution_reason(self):
+        if self.is_substitution and not (self.substitution_reason or "").strip():
+            raise ValueError(
+                "substitution_reason is required when is_substitution is true"
+            )
+        return self
+
+
+class SupplierQuoteItem(SupplierQuoteItemCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    supplier_quote_id: int
+    line_total: float = 0.0
+
+
+class SupplierQuoteCreate(BaseModel):
+    """A concierge-entered supplier quote (Phase 1 has no supplier portal).
+
+    Quotes are never edited — withdraw and re-enter is the correction path.
+    """
+    supplier_name: str
+    supplier_contact: str | None = None
+    delivery_cost: float = Field(default=0.0, ge=0)
+    fees: float = Field(default=0.0, ge=0)
+    payment_terms_cash: str | None = None
+    expected_delivery_date: date | None = None
+    availability: QuoteAvailability = "unknown"
+    expires_on: date | None = None
+    verification: QuoteVerification = "concierge_entered"
+    notes: str | None = None
+    entered_by: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+    items: list[SupplierQuoteItemCreate] = Field(min_length=1)
+
+
+class SupplierQuote(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    input_plan_id: int
+    supplier_name: str
+    supplier_contact: str | None = None
+    status: str
+    delivery_cost: float
+    fees: float
+    payment_terms_cash: str | None = None
+    expected_delivery_date: date | None = None
+    availability: str
+    expires_on: date | None = None
+    verification: str
+    notes: str | None = None
+    entered_by: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+    items: list[SupplierQuoteItem] = Field(default_factory=list)
+    financing_offers: list[FinancingOffer] = Field(default_factory=list)
+    # Derived server-side so comparison math can never drift between surfaces.
+    items_subtotal: float = 0.0
+    total_cost: float = 0.0
+    quote_state: str = "submitted"
+
+
+class InputPlan(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    status: str
+    requested_by: str | None = None
+    notes: str | None = None
+    financing_requested: bool = False
+    financing_requested_by: str | None = None
+    financing_notes: str | None = None
+    submitted_at: datetime | None = None
+    submitted_by: str | None = None
+    cancelled_at: datetime | None = None
+    cancelled_reason: str | None = None
+    selected_quote_id: int | None = None
+    selected_by: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+    items: list[InputPlanItem] = Field(default_factory=list)
+    # Derived (canonical app/procurement_status.py, via ORM properties).
+    financing_state: str = "cash"
+    quote_count: int = 0
+    order_id: int | None = None
+
+
+class InputPlanDetail(InputPlan):
+    """Plan + everything needed to compare quotes and see the order (detail page)."""
+    quotes: list[SupplierQuote] = Field(default_factory=list)
+    order: "PurchaseOrder | None" = None
+
+
+class InputPlanSubmit(BaseModel):
+    submitted_by: str | None = None
+
+
+class InputPlanCancel(BaseModel):
+    reason: str
+    actor: str | None = None
+
+
+class SelectQuoteRequest(BaseModel):
+    supplier_quote_id: int
+    selected_by: str | None = None
+
+
+class PurchaseOrderCreate(BaseModel):
+    placed_by: str | None = None
+    notes: str | None = None
+
+
+class OrderEvent(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    purchase_order_id: int
+    event_type: str
+    occurred_on: date
+    actor: str | None = None
+    notes: str | None = None
+    payload: dict | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+class OrderEventCreate(BaseModel):
+    """A concierge-posted order lifecycle event (append-only; transition-guarded).
+
+    input_applied is deliberately NOT postable here — linking an application
+    requires the explicit input-applied endpoint so delivery can never be
+    conflated with application.
+    """
+    event_type: ConciergeOrderEventType
+    occurred_on: date
+    actor: str | None = None
+    notes: str | None = None
+
+
+class InputAppliedRequest(BaseModel):
+    """Explicit link from a delivered order to the actual application record.
+
+    Exactly one of spray_event_id / planned_spray_id must be provided; the
+    referenced planned spray must have an applied outcome.
+    """
+    spray_event_id: int | None = None
+    planned_spray_id: int | None = None
+    actor: str | None = None
+    occurred_on: date | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _require_exactly_one_reference(self):
+        if (self.spray_event_id is None) == (self.planned_spray_id is None):
+            raise ValueError(
+                "provide exactly one of spray_event_id or planned_spray_id"
+            )
+        return self
+
+
+class PurchaseOrder(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    input_plan_id: int
+    selected_quote_id: int
+    accepted_financing_offer_id: int | None = None
+    status: str
+    spray_event_id: int | None = None
+    applied_planned_spray_id: int | None = None
+    placed_by: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+    # Derived from the selected quote (order lines ARE the quote's lines).
+    supplier_name: str | None = None
+    total_cost: float | None = None
+
+
+class PurchaseOrderDetail(PurchaseOrder):
+    """Order + derived lines, financing, and the append-only event timeline."""
+    selected_quote: SupplierQuote | None = None
+    accepted_financing_offer: FinancingOffer | None = None
+    events: list[OrderEvent] = Field(default_factory=list)
+
+
+InputPlanDetail.model_rebuild()
