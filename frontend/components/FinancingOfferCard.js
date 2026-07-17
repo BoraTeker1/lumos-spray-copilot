@@ -7,13 +7,13 @@ import { formatCost, formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
 
-// One indicative financing offer with the grower's one-shot accept/decline.
-// The copy never lets "accepted" read as a loan approval — no approval
-// happened, and no money moves through Lumos.
+// One indicative financing offer with the grower's one-shot select/decline.
+// The copy says "selected", never "accepted" — selecting indicative terms is
+// not a loan approval, and no money moves through Lumos.
 export default function FinancingOfferCard({ offer, country, canDecide, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [confirming, setConfirming] = useState(null); // "accepted" | "declined" | null
+  const [confirming, setConfirming] = useState(null); // "selected" | "declined" | null
 
   async function decide(action) {
     setBusy(true);
@@ -78,8 +78,8 @@ export default function FinancingOfferCard({ offer, country, canDecide, onChange
 
       {decidable && !confirming && (
         <div className="mt-3 flex gap-2">
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming("accepted")}>
-            Accept indicative terms
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming("selected")}>
+            Select indicative terms
           </Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming("declined")}>
             Decline
@@ -88,12 +88,12 @@ export default function FinancingOfferCard({ offer, country, canDecide, onChange
       )}
       {decidable && confirming && (
         <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
-          {confirming === "accepted"
-            ? "This accepts INDICATIVE terms only — it is not a loan approval, and any actual financing is arranged directly with the provider."
+          {confirming === "selected"
+            ? "This selects INDICATIVE terms only — it is not a loan approval, implies no lender confirmation, and any actual financing is arranged directly with the provider."
             : "Decline this indicative offer? This cannot be undone."}
           <div className="mt-2 flex gap-2">
             <Button size="sm" disabled={busy} onClick={() => decide(confirming)}>
-              {busy ? "Saving…" : confirming === "accepted" ? "Confirm accept" : "Confirm decline"}
+              {busy ? "Saving…" : confirming === "selected" ? "Confirm selection" : "Confirm decline"}
             </Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(null)}>
               Back

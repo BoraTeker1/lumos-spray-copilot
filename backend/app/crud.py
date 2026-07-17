@@ -1481,6 +1481,35 @@ def delete_input_plan_item(db: Session, item: models.InputPlanItem) -> None:
     db.commit()
 
 
+def _add_plan_event(
+    db: Session,
+    plan: models.InputPlan,
+    event_type: str,
+    *,
+    actor: str | None = None,
+    notes: str | None = None,
+    payload: dict | None = None,
+) -> models.InputPlanEvent:
+    """The single writer for plan audit events (add, not commit) — append-only.
+
+    Called only alongside the transition-guarded mutations below, so the plan
+    transition map is already the validity guard; payload carries the prior and
+    resulting state.
+    """
+    event = models.InputPlanEvent(
+        input_plan_id=plan.id,
+        event_type=event_type,
+        occurred_on=clock.current_date(),
+        actor=actor,
+        notes=notes,
+        payload=payload,
+        data_source=plan.data_source,
+        data_confidence=plan.data_confidence,
+    )
+    db.add(event)
+    return event
+
+
 def submit_input_plan(
     db: Session, plan: models.InputPlan, data: schemas.InputPlanSubmit
 ) -> models.InputPlan:
@@ -1505,9 +1534,19 @@ def submit_input_plan(
             "linked decisions are no longer eligible for procurement: "
             + ", ".join(str(i) for i in sorted(set(ineligible)))
         )
+    prior_status = plan.status
     plan.status = procurement_status.PLAN_SUBMITTED
     plan.submitted_at = clock.current_datetime()
     plan.submitted_by = data.submitted_by
+    _add_plan_event(
+        db, plan, procurement_status.PLAN_EVENT_SUBMITTED,
+        actor=data.submitted_by,
+        payload={
+            "from_status": prior_status,
+            "to_status": plan.status,
+            "item_count": len(plan.items),
+        },
+    )
     db.commit()
     db.refresh(plan)
     return plan
@@ -1523,9 +1562,19 @@ def cancel_input_plan(
             f"a plan with status '{plan.status}' cannot be cancelled"
             + (" — cancel the order instead" if plan.status == "ordered" else "")
         )
+    prior_status = plan.status
     plan.status = procurement_status.PLAN_CANCELLED
     plan.cancelled_at = clock.current_datetime()
     plan.cancelled_reason = data.reason
+    _add_plan_event(
+        db, plan, procurement_status.PLAN_EVENT_CANCELLED,
+        actor=data.actor,
+        payload={
+            "from_status": prior_status,
+            "to_status": plan.status,
+            "reason": data.reason,
+        },
+    )
     db.commit()
     db.refresh(plan)
     return plan
@@ -1619,10 +1668,24 @@ def select_quote(
             "this quote can no longer be selected (it is "
             f"{procurement_status.quote_state(quote, plan, clock.current_date())})"
         )
+    prior_status = plan.status
     quote.status = procurement_status.QUOTE_SELECTED
     plan.selected_quote_id = quote.id
     plan.selected_by = data.selected_by
+    plan.selection_reason = data.reason
     plan.status = procurement_status.PLAN_QUOTE_SELECTED
+    _add_plan_event(
+        db, plan, procurement_status.PLAN_EVENT_QUOTE_SELECTED,
+        actor=data.selected_by,
+        payload={
+            "from_status": prior_status,
+            "to_status": plan.status,
+            "supplier_quote_id": quote.id,
+            "supplier_name": quote.supplier_name,
+            "total_cost": quote.total_cost,
+            "reason": data.reason,
+        },
+    )
     db.commit()
     db.refresh(plan)
     return plan
@@ -1663,7 +1726,8 @@ def create_financing_offer(
 def decide_financing_offer(
     db: Session, offer: models.FinancingOffer, data: schemas.FinancingOfferDecision
 ) -> models.FinancingOffer:
-    """The grower's one-shot accept/decline of INDICATIVE terms — never a loan."""
+    """The grower's one-shot select/decline of INDICATIVE terms — never a loan,
+    never an approval, never money movement."""
     today = clock.current_date()
     if not procurement_status.offer_decidable(offer, today):
         raise ProcurementStateError(
@@ -1677,17 +1741,35 @@ def decide_financing_offer(
         raise ProcurementStateError(
             f"offers cannot be decided once the plan is {plan.status}"
         )
-    if data.action == "accepted":
+    if data.action == procurement_status.OFFER_SELECTED:
         for sibling_quote in plan.quotes:
             for sibling in sibling_quote.financing_offers:
-                if sibling.status == procurement_status.OFFER_ACCEPTED:
+                if sibling.status == procurement_status.OFFER_SELECTED:
                     raise ProcurementStateError(
-                        "another financing offer on this plan is already accepted"
+                        "another financing offer on this plan is already selected"
                     )
     offer.status = data.action
     offer.decided_by = data.actor
     offer.decided_at = clock.current_datetime()
     offer.decision_notes = data.notes
+    _add_plan_event(
+        db, plan,
+        (
+            procurement_status.PLAN_EVENT_FINANCING_OFFER_SELECTED
+            if data.action == procurement_status.OFFER_SELECTED
+            else procurement_status.PLAN_EVENT_FINANCING_OFFER_DECLINED
+        ),
+        actor=data.actor,
+        notes=data.notes,
+        payload={
+            "financing_offer_id": offer.id,
+            "provider_name": offer.provider_name,
+            "financed_amount": offer.financed_amount,
+            "supplier_quote_id": offer.supplier_quote_id,
+            "from_offer_status": procurement_status.OFFER_INDICATIVE,
+            "to_offer_status": offer.status,
+        },
+    )
     db.commit()
     db.refresh(offer)
     return offer
@@ -1728,10 +1810,10 @@ def create_purchase_order(
             f"an order requires a selected quote (plan status is '{plan.status}')"
         )
     quote = get_supplier_quote(db, plan.selected_quote_id)
-    accepted_offer = next(
+    selected_offer = next(
         (
             o for o in quote.financing_offers
-            if o.status == procurement_status.OFFER_ACCEPTED
+            if o.status == procurement_status.OFFER_SELECTED
         ),
         None,
     )
@@ -1739,7 +1821,7 @@ def create_purchase_order(
         farm_id=plan.farm_id,
         input_plan_id=plan.id,
         selected_quote_id=quote.id,
-        accepted_financing_offer_id=accepted_offer.id if accepted_offer else None,
+        accepted_financing_offer_id=selected_offer.id if selected_offer else None,
         placed_by=data.placed_by,
         notes=data.notes,
         data_source=plan.data_source,
@@ -1760,19 +1842,30 @@ def create_purchase_order(
             "supplier_quote_id": quote.id,
             "supplier_name": quote.supplier_name,
             "total_cost": quote.total_cost,
+            "reason": plan.selection_reason,
         },
     )
-    if accepted_offer is not None:
+    if selected_offer is not None:
         _add_order_event(
             db, order, procurement_status.EVENT_FINANCING_SELECTED,
-            occurred_on=today, actor=accepted_offer.decided_by,
+            occurred_on=today, actor=selected_offer.decided_by,
             payload={
-                "financing_offer_id": accepted_offer.id,
-                "provider_name": accepted_offer.provider_name,
-                "financed_amount": accepted_offer.financed_amount,
+                "financing_offer_id": selected_offer.id,
+                "provider_name": selected_offer.provider_name,
+                "financed_amount": selected_offer.financed_amount,
             },
         )
+    prior_status = plan.status
     plan.status = procurement_status.PLAN_ORDERED
+    _add_plan_event(
+        db, plan, procurement_status.PLAN_EVENT_ORDERED,
+        actor=data.placed_by,
+        payload={
+            "from_status": prior_status,
+            "to_status": plan.status,
+            "purchase_order_id": order.id,
+        },
+    )
     db.commit()
     db.refresh(order)
     return order

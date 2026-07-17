@@ -14,7 +14,7 @@ Creates two clearly contrasting farms:
 
 Idempotent: clears existing rows first so re-running gives a clean demo state.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from app import clock, crud, models, schemas
 from app.database import Base, SessionLocal, engine, init_db
@@ -24,13 +24,18 @@ from app.decision_engine import evaluate_planned_spray
 def _seed_decision_trail(
     db, planned: models.PlannedSpray, *, source_type: str, entered_by: str | None,
     ts: datetime, review_rationale: str | None = None,
+    review_ts: datetime | None = None, outcome_ts: datetime | None = None,
 ) -> None:
     """Field-level input values + immutable audit events for a seeded decision.
 
     Mirrors what crud.create_planned_spray / review / outcome write live, so demo
-    decision records show the same provenance/audit surfaces as real ones. All rows
-    anchor to the seeded timestamp.
+    decision records show the same provenance/audit surfaces as real ones. Rows
+    anchor to the seeded timestamps: ``ts`` for creation/input values, optional
+    ``review_ts``/``outcome_ts`` when the story spans more than one moment
+    (defaulting to ``ts`` keeps single-day scenarios unchanged).
     """
+    review_ts = review_ts or ts
+    outcome_ts = outcome_ts or ts
     for name, value, unit in crud._planned_input_rows(planned, None):
         db.add(models.DecisionInputValue(
             planned_spray_id=planned.id,
@@ -61,7 +66,7 @@ def _seed_decision_trail(
             before={**snapshot, "review_status": "not_reviewed", "outcome": "planned"},
             after={**snapshot, "outcome": "planned",
                    "review_action": planned.review_status},
-            created_at=ts,
+            created_at=review_ts,
         ))
     if planned.outcome != "planned":
         db.add(models.DecisionAuditEvent(
@@ -70,8 +75,13 @@ def _seed_decision_trail(
             system_recommendation=planned.decision_outcome,
             before={**snapshot, "outcome": "planned"},
             after=snapshot,
-            created_at=ts,
+            created_at=outcome_ts,
         ))
+
+
+def _at(day: date, hour: int, minute: int = 0) -> datetime:
+    """A deterministic seeded timestamp on the given demo day (no clock reads)."""
+    return datetime.combine(day, time(hour, minute))
 
 
 def demo_today() -> date:
@@ -318,12 +328,18 @@ def run() -> None:
         #   (PHI conflict + repeated chemistry), the demo PCA edits the       #
         #   guidance to a PHI-0 alternative, and the grower records           #
         #   "changed product" — Lumos changed a risky spray.                  #
+        #   Chronology: checked and PCA-reviewed the MORNING BEFORE the       #
+        #   intended date (procurement needs the review to precede the plan   #
+        #   and the delivery to precede the application); the replacement is  #
+        #   applied on the intended day itself.                               #
         #   All demo/simulated: excluded from real pilot evidence by design.  #
         # ------------------------------------------------------------------ #
+        # The day the check ran and the whole procurement chain was set up.
+        prev = today - timedelta(days=1)
         # Values entered by the demo PCA -> the block is PCA-AUTHORIZED under
         # authority gating (grower-entered values would make it provisional).
         planned_data = schemas.PlannedSprayCreate(
-            intended_date=today,  # checked and resolved the same day it was intended
+            intended_date=today,  # checked the day before, applied as intended
             product_name="Captan 80 WDG",
             active_ingredient="captan",
             target_pest_or_disease="gray mold (Botrytis) on ripening fruit, spreading",
@@ -336,10 +352,17 @@ def run() -> None:
             data_source="demo",
             data_confidence="simulated",
         )
-        # Run the real decision engine (anchored to the same demo date) so the demo
-        # snapshot is authentic and internally consistent.
+        # Run the real decision engine anchored to the CHECK day (prev): the recent
+        # captans (prev, prev-9, prev-19) and the fresh scouting are all inside the
+        # window, and the PHI conflict is date math on intended vs harvest — so the
+        # verdict is a real engine output, not a fabricated snapshot. The assert
+        # makes any future engine/history drift fail loudly at reseed time.
         decision = evaluate_planned_spray(
-            farm3, planned_data, farm3_sprays, [farm3_obs], today=today
+            farm3, planned_data, farm3_sprays, [farm3_obs], today=prev
+        )
+        assert decision.outcome == "block", (
+            f"seed expects the captan check to BLOCK, got '{decision.outcome}' — "
+            "the demo story or engine rules drifted"
         )
         harvest_label = farm3.expected_harvest_date.isoformat()
         # A named replacement product is ONLY allowed as explicit PCA-entered guidance
@@ -365,7 +388,7 @@ def run() -> None:
             review_status="edited",
             review_comment="Agree with the block — do not apply captan this close to harvest.",
             reviewed_by="Demo PCA (simulated)",
-            reviewed_at=datetime.combine(today, datetime.min.time()),
+            reviewed_at=_at(prev, 9),
             pca_next_action=switch_note,
             outcome="changed_product",
             outcome_reason=(
@@ -375,9 +398,9 @@ def run() -> None:
             outcome_date=today,
             outcome_product_name="Switch 62.5 WG",
             outcome_active_ingredient="cyprodinil + fludioxonil",
-            # Anchor the record timestamps to the same demo day so the story's
-            # check -> review -> outcome all read as one consistent day.
-            created_at=datetime.combine(today, datetime.min.time()),
+            # Checked the morning before the intended date; reviewed an hour later;
+            # outcome recorded on the intended day after the actual application.
+            created_at=_at(prev, 8),
         )
         db.add(planned1)
 
@@ -403,10 +426,13 @@ def run() -> None:
         planned1.spray_event_id = switch_event.id
 
         demo_ts = datetime.combine(today, datetime.min.time())
-        # Field-level provenance + immutable audit trail (PCA-entered -> pca_verified).
+        # Field-level provenance + immutable audit trail (PCA-entered -> pca_verified):
+        # created/values at the check, review an hour later, outcome the next day
+        # after the actual application.
         _seed_decision_trail(
             db, planned1, source_type="pca_verified",
-            entered_by="Demo PCA (simulated)", ts=demo_ts,
+            entered_by="Demo PCA (simulated)", ts=_at(prev, 8),
+            review_ts=_at(prev, 9), outcome_ts=_at(today, 9, 30),
         )
         # Follow-up timeline: the replacement application actually happened. No
         # pesticide-reduction claim is attached — a different product was applied.
@@ -426,7 +452,7 @@ def run() -> None:
             entered_by="Demo grower (simulated)",
             source_type="demo",
             confidence="simulated",
-            created_at=demo_ts,
+            created_at=_at(today, 9, 30),  # recorded right after the application
         ))
 
         # ------------------------------------------------------------------ #
@@ -728,11 +754,24 @@ def run() -> None:
         #   the PCA-edited scenario-1 decision (Switch 62.5 WG) becomes an    #
         #   input-plan item -> RFQ -> two materially different simulated      #
         #   quotes (one cash-only, one with an indicative financing offer)    #
-        #   -> quote selected -> order -> delivered -> input applied, linked  #
-        #   back to the already-seeded Switch application. Every row is       #
-        #   demo/simulated. NO savings/impact claim anywhere — the scenario   #
-        #   demonstrates the workflow, never a financial result.              #
+        #   -> quote selected (with the entered reason) -> order -> delivered #
+        #   the next morning -> input applied, linked back to the already-    #
+        #   seeded Switch application. Every row is demo/simulated. NO        #
+        #   savings/impact claim anywhere — the scenario demonstrates the     #
+        #   workflow, never a financial result.                               #
+        #   Chronology (one honest day-and-a-morning, after the PCA review):  #
+        #     prev 09:30 plan drafted   11:00 submitted for quotes            #
+        #     prev 13:00/14:00 quotes entered   14:30 indicative offer        #
+        #     prev 15:00 quote selected   16:00 offer selected                #
+        #     prev 16:30 order placed   17:00 confirmed   17:30 shipped       #
+        #     today 07:30 delivered   09:00 applied (the Switch SprayEvent)   #
+        #     today 09:30 input_applied link recorded                         #
         # ------------------------------------------------------------------ #
+        demo_selection_reason = (
+            "Lower quoted total ($3,774.00 vs $3,920.80, both including delivery "
+            "and fees) and indicative financing available; partial availability "
+            "acceptable — delivery promised by the morning the input is needed."
+        )
         demo_plan = models.InputPlan(
             farm_id=farm3.id,
             status="ordered",
@@ -741,11 +780,12 @@ def run() -> None:
             financing_requested=True,
             financing_requested_by="Demo grower (simulated)",
             financing_notes="Asked for split-payment terms ahead of harvest cash flow.",
-            submitted_at=demo_ts,
+            submitted_at=_at(prev, 11),
             submitted_by="Demo grower (simulated)",
+            selection_reason=demo_selection_reason,
             data_source="demo",
             data_confidence="simulated",
-            created_at=demo_ts,
+            created_at=_at(prev, 9, 30),  # drafted right after the PCA review
         )
         db.add(demo_plan)
         db.flush()
@@ -766,7 +806,7 @@ def run() -> None:
             created_by="Demo grower (simulated)",
             data_source="demo",
             data_confidence="simulated",
-            created_at=demo_ts,
+            created_at=_at(prev, 9, 30),
         )
         db.add(demo_item)
         db.flush()
@@ -779,19 +819,22 @@ def run() -> None:
             delivery_cost=40.0,
             fees=0.0,
             payment_terms_cash="Due on delivery",
-            expected_delivery_date=today,
+            expected_delivery_date=prev,  # could have delivered the same afternoon
             availability="in_stock",
+            expires_on=today + timedelta(days=7),
             verification="concierge_entered",
             notes="Simulated demo quote — concierge-entered for workflow demonstration.",
             entered_by="Lumos concierge (demo)",
             data_source="demo",
             data_confidence="simulated",
-            created_at=demo_ts + timedelta(minutes=10),
+            created_at=_at(prev, 13),
         )
-        # Quote B — lower unit price but partial availability, slower delivery,
-        # Net 30 cash terms, and an indicative financing offer. SELECTED so the
-        # demo exercises quote_selected + financing_selected + the
-        # "accepted (indicative)" labeling end to end.
+        # Quote B — lower unit price but partial availability, next-morning
+        # delivery, Net 30 cash terms, and an indicative financing offer.
+        # SELECTED (with the reason stored on the plan) so the demo exercises
+        # quote_selected + financing_selected end to end. Its promised delivery
+        # (today) is on-or-before the needed-by date and matches the actual
+        # delivered event — the chain never contradicts itself.
         quote_b = models.SupplierQuote(
             input_plan_id=demo_plan.id,
             supplier_name="Valley Farm Inputs (simulated)",
@@ -799,7 +842,7 @@ def run() -> None:
             delivery_cost=95.0,
             fees=25.0,
             payment_terms_cash="Net 30",
-            expected_delivery_date=today + timedelta(days=2),
+            expected_delivery_date=today,
             availability="partial",
             expires_on=today + timedelta(days=10),
             verification="concierge_entered",
@@ -807,7 +850,7 @@ def run() -> None:
             entered_by="Lumos concierge (demo)",
             data_source="demo",
             data_confidence="simulated",
-            created_at=demo_ts + timedelta(minutes=20),
+            created_at=_at(prev, 14),
         )
         db.add_all([quote_a, quote_b])
         db.flush()
@@ -841,19 +884,50 @@ def run() -> None:
             expires_on=today + timedelta(days=14),
             required_documents="Simulated demo — none collected.",
             conditions="Indicative terms only; simulated demo data.",
-            status="accepted",
+            status="selected",
             decided_by="Demo grower (simulated)",
-            decided_at=demo_ts + timedelta(minutes=40),
-            decision_notes="Accepted indicative terms (simulated demo — not a loan).",
+            decided_at=_at(prev, 16),
+            decision_notes="Selected indicative terms (simulated demo — not a loan, "
+            "not an approval).",
             entered_by="Lumos concierge (demo)",
             data_source="demo",
             data_confidence="simulated",
-            created_at=demo_ts + timedelta(minutes=30),
+            created_at=_at(prev, 14, 30),  # terms visible BEFORE the quote was selected
         )
         db.add(demo_offer)
         db.flush()
         demo_plan.selected_quote_id = quote_b.id
         demo_plan.selected_by = "Demo grower (simulated)"
+
+        # The plan's own append-only audit timeline (mirrors what live crud writes
+        # at submit / select-quote / offer decision / order).
+        demo_plan_events = [
+            ("submitted", _at(prev, 11), prev, "Demo grower (simulated)", None, {
+                "from_status": "draft", "to_status": "submitted_for_quotes",
+                "item_count": 1,
+            }),
+            ("quote_selected", _at(prev, 15), prev, "Demo grower (simulated)", None, {
+                "from_status": "quoted", "to_status": "quote_selected",
+                "supplier_quote_id": quote_b.id,
+                "supplier_name": quote_b.supplier_name,
+                "total_cost": 3774.0,
+                "reason": demo_selection_reason,
+            }),
+            ("financing_offer_selected", _at(prev, 16), prev,
+             "Demo grower (simulated)",
+             "Selected indicative terms (simulated demo — not a loan, not an "
+             "approval).", {
+                "financing_offer_id": demo_offer.id,
+                "provider_name": demo_offer.provider_name,
+                "financed_amount": demo_offer.financed_amount,
+                "supplier_quote_id": quote_b.id,
+                "from_offer_status": "indicative", "to_offer_status": "selected",
+            }),
+            ("ordered", _at(prev, 16, 30), prev, "Demo grower (simulated)", None, {
+                "from_status": "quote_selected", "to_status": "ordered",
+                "purchase_order_id": None,  # filled below once the order exists
+            }),
+        ]
 
         demo_order = models.PurchaseOrder(
             farm_id=farm3.id,
@@ -867,47 +941,68 @@ def run() -> None:
             notes="Workflow demonstration — simulated prices.",
             data_source="demo",
             data_confidence="simulated",
-            created_at=demo_ts + timedelta(minutes=50),
+            created_at=_at(prev, 16, 30),
         )
         db.add(demo_order)
         db.flush()
-        # Append-only order timeline, sequenced within the same demo day
-        # (mirrors what live crud writes; created/quote_selected/financing_selected
-        # are the order-creation events, the rest are lifecycle events).
-        demo_order_events = [
-            ("created", {"input_plan_id": demo_plan.id}, "Demo grower (simulated)", None),
-            ("quote_selected", {
-                "supplier_quote_id": quote_b.id,
-                "supplier_name": quote_b.supplier_name,
-                "total_cost": 3774.0,  # 252 oz x $14.50 + $95 delivery + $25 fees
-            }, "Demo grower (simulated)", None),
-            ("financing_selected", {
-                "financing_offer_id": demo_offer.id,
-                "provider_name": demo_offer.provider_name,
-                "financed_amount": demo_offer.financed_amount,
-            }, "Demo grower (simulated)", None),
-            ("supplier_confirmed", None, "Lumos concierge (demo)",
-             "Supplier confirmed the order (simulated)."),
-            ("shipped", None, "Lumos concierge (demo)", None),
-            ("delivered", None, "Lumos concierge (demo)",
-             "Delivered to the barn at Field 7 (simulated)."),
-            ("input_applied", {
-                "planned_spray_id": planned1.id,
-                "spray_event_id": switch_event.id,
-            }, "Demo grower (simulated)",
-             "Applied per the PCA-edited guidance; see the linked decision record."),
-        ]
-        for minute, (event_type, payload, actor, note) in enumerate(demo_order_events):
-            db.add(models.OrderEvent(
-                purchase_order_id=demo_order.id,
+        for event_type, created, occurred, actor, note, payload in demo_plan_events:
+            if event_type == "ordered":
+                payload = {**payload, "purchase_order_id": demo_order.id}
+            db.add(models.InputPlanEvent(
+                input_plan_id=demo_plan.id,
                 event_type=event_type,
-                occurred_on=today,
+                occurred_on=occurred,
                 actor=actor,
                 notes=note,
                 payload=payload,
                 data_source="demo",
                 data_confidence="simulated",
-                created_at=demo_ts + timedelta(minutes=50 + minute),
+                created_at=created,
+            ))
+        # Append-only order timeline (mirrors what live crud writes: created/
+        # quote_selected/financing_selected are the order-creation provenance
+        # events, the rest are lifecycle events). Ordered the afternoon before,
+        # delivered the next morning BEFORE the application — the chain's dates
+        # never contradict each other.
+        demo_order_events = [
+            ("created", _at(prev, 16, 30), prev,
+             "Demo grower (simulated)", None, {"input_plan_id": demo_plan.id}),
+            ("quote_selected", _at(prev, 16, 31), prev,
+             "Demo grower (simulated)", None, {
+                "supplier_quote_id": quote_b.id,
+                "supplier_name": quote_b.supplier_name,
+                "total_cost": 3774.0,  # 252 oz x $14.50 + $95 delivery + $25 fees
+                "reason": demo_selection_reason,
+            }),
+            ("financing_selected", _at(prev, 16, 32), prev,
+             "Demo grower (simulated)", None, {
+                "financing_offer_id": demo_offer.id,
+                "provider_name": demo_offer.provider_name,
+                "financed_amount": demo_offer.financed_amount,
+            }),
+            ("supplier_confirmed", _at(prev, 17), prev, "Lumos concierge (demo)",
+             "Supplier confirmed the order (simulated).", None),
+            ("shipped", _at(prev, 17, 30), prev, "Lumos concierge (demo)", None, None),
+            ("delivered", _at(today, 7, 30), today, "Lumos concierge (demo)",
+             "Delivered to the barn at Field 7 (simulated).", None),
+            ("input_applied", _at(today, 9, 30), today, "Demo grower (simulated)",
+             "Applied per the PCA-edited guidance; see the linked decision record.",
+             {
+                "planned_spray_id": planned1.id,
+                "spray_event_id": switch_event.id,
+            }),
+        ]
+        for event_type, created, occurred, actor, note, payload in demo_order_events:
+            db.add(models.OrderEvent(
+                purchase_order_id=demo_order.id,
+                event_type=event_type,
+                occurred_on=occurred,
+                actor=actor,
+                notes=note,
+                payload=payload,
+                data_source="demo",
+                data_confidence="simulated",
+                created_at=created,
             ))
 
         # Declared spray baseline so the U.S. demo shows *measured* reduction, not just

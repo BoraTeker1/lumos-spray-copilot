@@ -21,6 +21,9 @@ export default function OrderTimeline({ events = [] }) {
                 {orderEventLabel(e.event_type)}
               </span>
               {e.actor && <span className="ml-2 text-xs text-gray-500">by {e.actor}</span>}
+              {e.payload?.reason && (
+                <div className="text-xs text-gray-600">Reason: {e.payload.reason}</div>
+              )}
               {e.notes && <div className="text-xs text-gray-500">{e.notes}</div>}
             </div>
             <span className="shrink-0 text-xs text-gray-500">{formatDate(e.occurred_on)}</span>

@@ -89,23 +89,46 @@ Backend + frontend both implement:
   draft→submitted_for_quotes→quoted→quote_selected→ordered/cancelled; items snapshot product
   data, mutable only in draft) → concierge-entered `SupplierQuote`+items (never edited —
   withdraw+re-enter; entry order, NEVER ranked; derived totals server-side) → optional
-  `FinancingOffer` (indicative only, attached to a quote, one-shot accept/decline, derived
+  `FinancingOffer` (indicative only, attached to a quote, one-shot **select/decline** — the
+  stored/derived vocabulary is `selected`/`offer_selected`, NEVER "accepted" (hardening pass
+  2026-07-17): selecting indicative terms is not an approval/funding/binding; derived
   expiry, disclaimer on every payload; "financing requested" is a plan flag, never an offer)
   → `PurchaseOrder` (one per plan; lines = selected quote's items) + append-only `OrderEvent`
   timeline (transition-map-guarded, 409 on invalid/duplicate; delivery NEVER marks applied —
   explicit `input-applied` link to a SprayEvent/applied decision required). Eligibility gate:
   `decision_status.procurement_eligible` (== the applied-outcome gate, minus `avoided`);
   enforced at item-create AND plan-submit. Demo/real records can never mix in one chain (409).
-  Evidence export gains an `input_orders` block (demo-excluded, NO savings key by design).
+  Evidence export gains an `input_orders` block (demo-excluded, NO savings key by design;
+  includes `selection_reason` + `plan_events`).
+  **Transaction-integrity hardening (2026-07-17):** quote selection requires a mandatory
+  `reason` (stored on the plan, audited, exported — never inferred); every user decision on a
+  plan (submit/select/offer decision/order/cancel) appends to the **append-only
+  `InputPlanEvent`** audit table (mirror of OrderEvent, payload carries from/to state —
+  DecisionAuditEvent couldn't host these: its planned_spray_id is non-null and a plan may
+  have no/many decision links); derived `overdue` (`procurement_status.procurement_overdue`:
+  needed_by passed ∧ not delivered ∧ not cancelled — never stored); chain navigable both ways
+  via derived `PlannedSpray.procurement_links` and `SprayEvent.source_order_id`. There is NO
+  quote re-selection/reopen and NO offer-withdraw endpoint (explicitly deferred); after an
+  order exists the selected quote is immutable. **Deferred debt:** the
+  `PurchaseOrder.accepted_financing_offer_id` column/API field keeps its legacy name (statuses
+  and all user-visible copy already say "selected"); rename later if ever worth the diff.
   Modules: `app/procurement_status.py` (pure vocab/transitions/derived states),
-  crud/main sections, `_seed_procurement_trail`-style demo scenario on Golden Coast (Switch
-  62.5 WG from scenario 1 → 2 simulated quotes → accepted indicative offer → delivered order
-  → input_applied). Frontend: "Inputs & finance" nav → `/inputs` (plans|orders tabs),
-  `/inputs/plans/[id]` (items, quote comparison, financing), `/inputs/orders/[id]` (lines,
-  timeline, link-application dialog); "Request supplier quotes" on eligible decision records;
+  crud/main sections, demo scenario on Golden Coast (Switch 62.5 WG from scenario 1 → 2
+  simulated quotes → selected indicative offer → delivered order → input_applied). The seeded
+  chain is chronologically real: checked/reviewed/planned/quoted/selected/ordered/
+  confirmed/shipped on anchor−1, delivered 07:30 and applied 09:00 on the anchor day; the
+  seed asserts the captan check still BLOCKS, and `test_procurement_demo.py` asserts the
+  full chain chronology (no date may contradict another). Frontend: "Inputs & finance" nav →
+  `/inputs` (plans|orders tabs; value-first headline, next-action + overdue chips),
+  `/inputs/plans/[id]` (items, quote comparison with "$X above the lowest quoted total"
+  entered-totals note + reason-capture on select, financing, append-only plan history),
+  `/inputs/orders/[id]` (lines, timeline, link-application dialog, "Financing — indicative
+  offer selected" card); decision records show existing plan/order links instead of a
+  duplicate "Request supplier quotes" CTA; applications show "Source order: Order #N";
   concierge quote/offer/event entry on `/internal`. STATUS kinds planStatus/quoteState/
-  financing/offerState/orderStatus in `lib/status.js`. No auth (attribution strings, same as
-  everything else); tenant isolation documented as a known limitation.
+  financing/offerState/orderStatus + PLAN_EVENT_LABELS/PLAN_NEXT_STEP in `lib/status.js`.
+  No auth (attribution strings, same as everything else); tenant isolation documented as a
+  known limitation.
 
 - **Pre-spray decision workflow (THE core product since 2026-07-10)** — a grower/PCA enters a
   *planned* spray; `app/decision_engine.py` checks it against harvest timing, entered PHI/REI,
@@ -399,7 +422,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **307 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **320 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded

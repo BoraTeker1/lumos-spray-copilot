@@ -127,6 +127,7 @@ def test_select_quote_lifecycle_and_guards(client):
     quote_b = _enter_quote(client, plan, supplier="B")
     resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
         "supplier_quote_id": quote_a["id"], "selected_by": "G",
+        "reason": "Lower total quoted cost",
     })
     assert resp.status_code == 200
     assert resp.json()["status"] == "quote_selected"
@@ -136,7 +137,7 @@ def test_select_quote_lifecycle_and_guards(client):
     # Re-selecting (same or sibling) is a conflict — one-shot by design.
     for qid in (quote_a["id"], quote_b["id"]):
         resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
-            "supplier_quote_id": qid,
+            "supplier_quote_id": qid, "reason": "Changed my mind",
         })
         assert resp.status_code == 409
 
@@ -147,7 +148,7 @@ def test_selecting_an_expired_quote_is_rejected(client):
     quote = _enter_quote(client, plan, expires_on="2026-07-10")  # before the pinned today
     assert quote["quote_state"] == "expired"
     resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
-        "supplier_quote_id": quote["id"],
+        "supplier_quote_id": quote["id"], "reason": "Only quote available",
     })
     assert resp.status_code == 409
 
@@ -158,7 +159,7 @@ def test_select_requires_a_quote_on_this_plan(client):
     plan_b = _submitted_plan(client, farm["id"])
     quote_b = _enter_quote(client, plan_b)
     resp = client.post(f"/input-plans/{plan_a['id']}/select-quote", json={
-        "supplier_quote_id": quote_b["id"],
+        "supplier_quote_id": quote_b["id"], "reason": "Wrong plan on purpose",
     })
     assert resp.status_code in (409, 422)  # plan_a not quoted AND foreign quote
 
@@ -178,13 +179,13 @@ def test_withdraw_is_the_only_correction_path(client):
         f"/internal/supplier-quotes/{quote['id']}/withdraw"
     ).status_code == 409
     resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
-        "supplier_quote_id": quote["id"],
+        "supplier_quote_id": quote["id"], "reason": "Trying a withdrawn quote",
     })
     assert resp.status_code == 409
     # A selected quote can't be withdrawn out from under the grower.
     replacement = _enter_quote(client, plan, supplier="Replacement")
     client.post(f"/input-plans/{plan['id']}/select-quote", json={
-        "supplier_quote_id": replacement["id"],
+        "supplier_quote_id": replacement["id"], "reason": "Only live quote left",
     })
     assert client.post(
         f"/internal/supplier-quotes/{replacement['id']}/withdraw"
@@ -202,3 +203,32 @@ def test_demo_quote_on_real_plan_is_rejected(client):
         ),
     )
     assert resp.status_code == 409
+
+
+def test_selection_reason_is_required_stored_and_audited(client):
+    farm = _farm(client)
+    plan = _submitted_plan(client, farm["id"])
+    quote = _enter_quote(client, plan)
+    # No reason -> validation error; nothing is selected.
+    resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
+        "supplier_quote_id": quote["id"],
+    })
+    assert resp.status_code == 422
+    assert client.get(f"/input-plans/{plan['id']}").json()["status"] == "quoted"
+    # With a reason: stored on the plan and captured in the audit timeline.
+    resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
+        "supplier_quote_id": quote["id"], "selected_by": "G",
+        "reason": "Earlier delivery and product availability",
+    })
+    assert resp.status_code == 200
+    detail = client.get(f"/input-plans/{plan['id']}").json()
+    assert detail["selection_reason"] == "Earlier delivery and product availability"
+    selected = [
+        e for e in detail["events"] if e["event_type"] == "quote_selected"
+    ]
+    assert len(selected) == 1
+    assert selected[0]["payload"]["reason"] == (
+        "Earlier delivery and product availability"
+    )
+    assert selected[0]["payload"]["from_status"] == "quoted"
+    assert selected[0]["payload"]["to_status"] == "quote_selected"

@@ -185,6 +185,7 @@ export default function FarmsPage() {
     {
       key: "next_spray",
       header: "Next planned spray",
+      priority: "secondary",
       render: (f) =>
         f.nextPlanned ? (
           <div className="min-w-0 text-sm">
@@ -359,7 +360,7 @@ export default function FarmsPage() {
                 columns={fieldColumns(farm)}
                 rows={fields}
                 rowKey={(f) => f.name}
-                minWidth={760}
+                minWidth={640}
                 empty={
                   <EmptyState
                     icon={Sprout}

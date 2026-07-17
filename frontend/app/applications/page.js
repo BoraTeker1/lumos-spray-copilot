@@ -102,8 +102,10 @@ export default function ApplicationsPage() {
       render: (s) => (
         <div className="min-w-0">
           <div className="font-medium text-gray-900">{s.product_name}</div>
-          {s.active_ingredient && (
-            <div className="text-xs text-gray-500">{s.active_ingredient}</div>
+          {(s.active_ingredient || s.dose) && (
+            <div className="text-xs text-gray-500">
+              {[s.active_ingredient, s.dose].filter(Boolean).join(" · ")}
+            </div>
           )}
         </div>
       ),
@@ -115,12 +117,6 @@ export default function ApplicationsPage() {
       render: (s) => (
         <span className="text-xs text-gray-600">{s.target_pest_or_disease || "—"}</span>
       ),
-    },
-    {
-      key: "dose",
-      header: "Dose",
-      priority: "secondary",
-      render: (s) => <span className="whitespace-nowrap text-gray-700">{s.dose || "—"}</span>,
     },
     {
       key: "phi",
@@ -143,6 +139,24 @@ export default function ApplicationsPage() {
           {(s.data_source || "—").replace(/_/g, " ")}
         </span>
       ),
+    },
+    {
+      key: "order",
+      header: "Source order",
+      priority: "secondary",
+      // Only applications procured through Inputs & finance carry an order link —
+      // most applications are not procured through Lumos, and that stays visible.
+      render: (s) =>
+        s.source_order_id ? (
+          <Link
+            href={`/inputs/orders/${s.source_order_id}`}
+            className="text-xs font-medium text-leaf-700 hover:underline"
+          >
+            Order #{s.source_order_id}
+          </Link>
+        ) : (
+          <span className="text-xs text-gray-500">—</span>
+        ),
     },
     {
       key: "doc",
@@ -264,7 +278,7 @@ export default function ApplicationsPage() {
             columns={columns}
             rows={rows}
             rowKey={(s) => s.id}
-            minWidth={860}
+            minWidth={760}
             empty={
               <EmptyState
                 icon={Droplets}

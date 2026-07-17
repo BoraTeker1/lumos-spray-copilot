@@ -84,21 +84,22 @@ export const STATUS = {
     expired: { label: "Expired", tone: "warn", icon: Clock },
   },
   // Plan-level financing state (financing_state). A request is never an offer,
-  // and an accepted offer is never a loan approval — the labels say so.
+  // and a SELECTED indicative offer is never a loan approval — the labels say
+  // "selected", never "accepted", because nothing was approved or funded.
   financing: {
     cash: { label: "Cash", tone: "neutral", icon: Banknote },
     financing_requested: { label: "Financing requested", tone: "info", icon: CircleHelp },
     offer_received: { label: "Indicative offer received", tone: "info", icon: Landmark },
-    offer_accepted: { label: "Accepted (indicative)", tone: "info", icon: Landmark },
+    offer_selected: { label: "Indicative offer selected", tone: "info", icon: Landmark },
     offer_declined_or_expired: {
       label: "Offer declined / expired", tone: "neutral", icon: Ban,
     },
   },
-  // Financing offer state (offer_state). Accepted keeps the info tone — an
+  // Financing offer state (offer_state). Selected keeps the info tone — an
   // approval tone would imply approval, and none happened.
   offerState: {
     indicative: { label: "Indicative", tone: "info", icon: Landmark },
-    accepted: { label: "Accepted (indicative)", tone: "info", icon: CircleCheck },
+    selected: { label: "Selected — indicative only", tone: "info", icon: CircleCheck },
     declined: { label: "Declined", tone: "neutral", icon: Ban },
     withdrawn: { label: "Withdrawn", tone: "neutral", icon: Ban },
     expired: { label: "Expired", tone: "warn", icon: Clock },
@@ -137,6 +138,37 @@ export const ORDER_EVENT_LABELS = {
 
 export function orderEventLabel(key) {
   return ORDER_EVENT_LABELS[key] || String(key ?? "—");
+}
+
+// Plan audit-timeline event types -> display labels (append-only InputPlanEvent
+// rows: the canonical history of the user's decisions on a plan).
+export const PLAN_EVENT_LABELS = {
+  submitted: "Submitted for quotes",
+  quote_selected: "Quote selected",
+  financing_offer_selected: "Indicative financing offer selected",
+  financing_offer_declined: "Indicative financing offer declined",
+  ordered: "Order placed",
+  cancelled: "Plan cancelled",
+};
+
+export function planEventLabel(key) {
+  return PLAN_EVENT_LABELS[key] || String(key ?? "—");
+}
+
+// Plan status -> the one next required action, shown on the landing-page rows
+// and the plan-detail sub-line (shared so the two surfaces can never disagree).
+export const PLAN_NEXT_STEP = {
+  draft: "Review the items, then submit the plan for quotes.",
+  submitted_for_quotes:
+    "Quotes requested — the concierge is collecting supplier quotes for this plan.",
+  quoted: "Compare the quotes and select one (your reason is recorded).",
+  quote_selected: "Quote selected — place the order to move forward.",
+  ordered: "Ordered — track delivery and application on the order page.",
+  cancelled: "This plan was cancelled.",
+};
+
+export function planNextStep(status) {
+  return PLAN_NEXT_STEP[status] || "";
 }
 
 // current_next_action machine key -> the specific button/action label.

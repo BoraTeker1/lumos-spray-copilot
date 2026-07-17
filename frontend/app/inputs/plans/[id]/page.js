@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   FlaskConical,
+  History,
   Landmark,
   ListChecks,
   Package,
   Send,
   Trash2,
+  TriangleAlert,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCost, formatDate } from "@/lib/format";
@@ -21,21 +23,11 @@ import FinancingOfferCard from "@/components/FinancingOfferCard";
 import QuoteComparisonTable from "@/components/QuoteComparisonTable";
 import SectionCard from "@/components/SectionCard";
 import StatusBadge from "@/components/StatusBadge";
+import { planEventLabel, planNextStep } from "@/lib/status";
 
 function isDemoRecord(r) {
   return r.data_source === "demo" || r.data_confidence === "simulated";
 }
-
-// What the user should do NOW, given the plan's status.
-const NEXT_STEP = {
-  draft: "Review the items, then submit the plan for quotes.",
-  submitted_for_quotes:
-    "Quotes requested — the concierge is collecting supplier quotes for this plan.",
-  quoted: "Compare the quotes below and select one.",
-  quote_selected: "Quote selected — place the order to move forward.",
-  ordered: "Ordered — track delivery and application on the order page.",
-  cancelled: "This plan was cancelled.",
-};
 
 export default function InputPlanDetailPage({ params }) {
   const router = useRouter();
@@ -188,13 +180,24 @@ export default function InputPlanDetailPage({ params }) {
             </h1>
             <StatusBadge kind="planStatus" value={plan.status} />
             <StatusBadge kind="financing" value={plan.financing_state} />
+            {plan.overdue && (
+              <Badge variant="red">
+                <TriangleAlert /> Overdue — needed by {formatDate(plan.needed_by)}
+              </Badge>
+            )}
             {isDemoRecord(plan) && (
               <Badge variant="outline">
                 <FlaskConical /> Simulated demo data
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-gray-500">{NEXT_STEP[plan.status]}</p>
+          <p className="mt-1 text-sm text-gray-500">{planNextStep(plan.status)}</p>
+          {plan.selection_reason && (
+            <p className="mt-1 text-xs text-gray-600">
+              <span className="font-medium">Selection reason:</span>{" "}
+              {plan.selection_reason}
+            </p>
+          )}
           {plan.cancelled_reason && (
             <p className="mt-1 text-xs text-gray-500">Reason: {plan.cancelled_reason}</p>
           )}
@@ -270,8 +273,11 @@ export default function InputPlanDetailPage({ params }) {
             country={country}
             canSelect={plan.status === "quoted"}
             busy={busy}
-            onSelect={(q) =>
-              act(api.selectQuote, plan.id, { supplier_quote_id: q.id })
+            onSelect={(q, reason) =>
+              act(api.selectQuote, plan.id, {
+                supplier_quote_id: q.id,
+                reason,
+              })
             }
           />
         </SectionCard>
@@ -281,7 +287,7 @@ export default function InputPlanDetailPage({ params }) {
         <SectionCard
           title="Financing (indicative)"
           icon={<Landmark />}
-          description="Manually collected indicative terms. A request is not an offer, and accepting an offer is not a loan approval — no money moves through Lumos."
+          description="Manually collected indicative terms. A request is not an offer, and selecting an offer is not a loan approval, funding, or a binding agreement — no money moves through Lumos."
         >
           {offers.length === 0 ? (
             <p className="text-sm text-gray-500">
@@ -303,6 +309,35 @@ export default function InputPlanDetailPage({ params }) {
           {plan.financing_notes && (
             <p className="mt-3 text-xs text-gray-500">Notes: {plan.financing_notes}</p>
           )}
+        </SectionCard>
+      )}
+
+      {plan.events.length > 0 && (
+        <SectionCard
+          title="Plan history"
+          icon={<History />}
+          description="Append-only audit timeline of the decisions made on this plan — submission, quote selection (with the entered reason), financing choices. Never edited."
+        >
+          <ol className="space-y-3">
+            {plan.events.map((e) => (
+              <li key={e.id} className="flex items-start gap-3 text-sm">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-leaf-600" />
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-900">
+                    {planEventLabel(e.event_type)}
+                    <span className="ml-2 text-xs font-normal text-gray-500">
+                      {formatDate(e.occurred_on)}
+                      {e.actor ? ` · ${e.actor}` : ""}
+                    </span>
+                  </div>
+                  {e.payload?.reason && (
+                    <p className="text-xs text-gray-600">Reason: {e.payload.reason}</p>
+                  )}
+                  {e.notes && <p className="text-xs text-gray-500">{e.notes}</p>}
+                </div>
+              </li>
+            ))}
+          </ol>
         </SectionCard>
       )}
     </div>

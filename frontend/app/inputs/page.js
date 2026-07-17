@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FlaskConical, Package, ShoppingCart } from "lucide-react";
+import { FlaskConical, Package, ShoppingCart, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { useFarmContext } from "@/lib/farm-context";
 import { formatCost, formatDate } from "@/lib/format";
@@ -17,6 +17,7 @@ import FilterBar from "@/components/FilterBar";
 import InputPlanForm from "@/components/InputPlanForm";
 import PageHeader from "@/components/PageHeader";
 import StatusBadge from "@/components/StatusBadge";
+import { planNextStep } from "@/lib/status";
 
 const TABS = ["plans", "orders"];
 
@@ -44,6 +45,7 @@ const PLAN_FILTERS = [
     match: (p) => p.status === "quote_selected",
   },
   { key: "ordered", label: "Ordered", match: (p) => p.status === "ordered" },
+  { key: "overdue", label: "Overdue", match: (p) => p.overdue },
 ];
 
 function planColumns() {
@@ -75,24 +77,51 @@ function planColumns() {
     },
     {
       key: "status",
-      header: "Status",
+      header: "Stage",
       render: (p) => <StatusBadge kind="planStatus" value={p.status} />,
+    },
+    {
+      key: "next",
+      header: "Next action",
+      render: (p) => (
+        <span className="text-xs text-gray-600">{planNextStep(p.status)}</span>
+      ),
+    },
+    {
+      key: "needed",
+      header: "Needed by",
+      render: (p) => (
+        <div className="text-sm text-gray-700">
+          {formatDate(p.needed_by)}
+          {p.overdue && (
+            <div>
+              <Badge variant="red">
+                <TriangleAlert /> Overdue
+              </Badge>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "supplier",
+      header: "Selected supplier",
+      priority: "secondary",
+      render: (p) => (
+        <span className="text-sm text-gray-700">
+          {p.order_id
+            ? `Order #${p.order_id}`
+            : p.selected_quote_id
+            ? `Quote #${p.selected_quote_id}`
+            : "—"}
+        </span>
+      ),
     },
     {
       key: "financing",
       header: "Financing",
       priority: "secondary",
       render: (p) => <StatusBadge kind="financing" value={p.financing_state} />,
-    },
-    {
-      key: "needed",
-      header: "Needed by",
-      priority: "secondary",
-      render: (p) => (
-        <span className="text-sm text-gray-700">
-          {formatDate(p.items[0]?.needed_by_date)}
-        </span>
-      ),
     },
     {
       key: "quotes",
@@ -155,7 +184,18 @@ function orderColumns(country) {
     {
       key: "status",
       header: "Status",
-      render: (o) => <StatusBadge kind="orderStatus" value={o.status} />,
+      render: (o) => (
+        <div className="space-y-1">
+          <StatusBadge kind="orderStatus" value={o.status} />
+          {o.overdue && (
+            <div>
+              <Badge variant="red">
+                <TriangleAlert /> Overdue
+              </Badge>
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       key: "applied",
@@ -246,12 +286,7 @@ function InputsPage() {
         breadcrumbs={[{ label: "Inputs & finance" }, { label: activeFarm.name }]}
         title="Inputs & finance"
         meta={
-          <span>
-            Draft plan → quotes requested → quotes received → quote selected →
-            financing (optional) → order confirmed → delivered → applied. Supplier
-            quotes and financing terms are concierge-entered; no money moves
-            through Lumos.
-          </span>
+          <span>Turn PCA-reviewed decisions into supplier-ready input orders.</span>
         }
         actions={<InputPlanForm farmId={farmId} onCreated={load} />}
       />
@@ -267,6 +302,12 @@ function InputsPage() {
           <TabsTrigger value="plans">Input plans</TabsTrigger>
           <TabsTrigger value="orders">Orders</TabsTrigger>
         </TabsList>
+        <p className="mt-2 text-xs text-gray-500">
+          Draft plan → quotes requested → quotes received → quote selected →
+          financing (optional) → order confirmed → delivered → applied. Supplier
+          quotes and financing terms are concierge-entered; no money moves through
+          Lumos.
+        </p>
 
         <TabsContent value="plans">
           <Card>

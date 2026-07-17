@@ -51,7 +51,7 @@ def test_seeded_procurement_chain_is_fully_demo_and_consistent(client, pinned_cl
     plan = client.get(f"/input-plans/{plans[0]['id']}").json()
     assert plan["data_source"] == "demo" and plan["data_confidence"] == "simulated"
     assert plan["status"] == "ordered"
-    assert plan["financing_state"] == "offer_accepted"
+    assert plan["financing_state"] == "offer_selected"
     for item in plan["items"]:
         assert item["data_confidence"] == "simulated"
         # The seeded item is backed by the PCA-edited scenario-1 decision.
@@ -61,7 +61,7 @@ def test_seeded_procurement_chain_is_fully_demo_and_consistent(client, pinned_cl
     # Two materially different quotes: one cash-only, one carrying the offer.
     offers = [o for q in plan["quotes"] for o in q["financing_offers"]]
     assert len(plan["quotes"]) == 2 and len(offers) == 1
-    assert offers[0]["status"] == "accepted"
+    assert offers[0]["status"] == "selected"
     orders = client.get("/farms/3/orders").json()
     assert len(orders) == 1 and orders[0]["data_confidence"] == "simulated"
     assert orders[0]["status"] == "delivered"
@@ -117,3 +117,106 @@ def test_demo_reset_refuses_once_real_procurement_exists(client, pinned_clock):
     })
     assert resp.status_code == 201
     assert client.post("/internal/demo/reset").status_code == 409
+
+
+def _dt(value):
+    from datetime import datetime
+    return datetime.fromisoformat(value)
+
+
+def _d(value):
+    from datetime import date
+    return date.fromisoformat(value)
+
+
+def test_seeded_chain_has_no_impossible_chronology(client, pinned_clock):
+    """Every arrow in the demo story points forward: check -> review -> plan ->
+    submit -> quotes -> selection -> offer -> order -> confirmed -> shipped ->
+    delivered -> application -> input_applied. Seed drift that breaks any of
+    these fails here loudly."""
+    seed.run()
+    plan = client.get("/input-plans/1").json()
+    decision = client.get(
+        f"/planned-sprays/{plan['items'][0]['planned_spray_id']}"
+    ).json()
+    order = client.get(f"/orders/{plan['order_id']}").json()
+    events = client.get(f"/orders/{order['id']}/events").json()
+    by_type = {e["event_type"]: e for e in events}
+    application = next(
+        s for s in client.get("/farms/3/spray-events").json()
+        if s["id"] == order["spray_event_id"]
+    )
+    selected_quote = next(
+        q for q in plan["quotes"] if q["id"] == plan["selected_quote_id"]
+    )
+
+    # Decision precedes procurement.
+    assert _dt(decision["created_at"]) <= _dt(decision["reviewed_at"])
+    assert _dt(decision["reviewed_at"]) <= _dt(plan["created_at"])
+    # Draft precedes submission; quotes come after submission.
+    assert _dt(plan["created_at"]) < _dt(plan["submitted_at"])
+    for quote in plan["quotes"]:
+        assert _dt(plan["submitted_at"]) <= _dt(quote["created_at"])
+        # Every quote carries an expiration and was live when entered.
+        assert quote["expires_on"] is not None
+    # Selection follows the quotes; the offer decision follows its entry.
+    plan_events = {e["event_type"]: e for e in plan["events"]}
+    assert [e["event_type"] for e in plan["events"]] == [
+        "submitted", "quote_selected", "financing_offer_selected", "ordered",
+    ]
+    assert plan["selection_reason"]
+    assert plan_events["quote_selected"]["payload"]["reason"] == (
+        plan["selection_reason"]
+    )
+    assert _dt(selected_quote["created_at"]) <= _dt(
+        plan_events["quote_selected"]["created_at"]
+    )
+    offer = next(
+        o for q in plan["quotes"] for o in q["financing_offers"]
+    )
+    assert _dt(offer["created_at"]) <= _dt(offer["decided_at"])
+    assert _dt(offer["decided_at"]) <= _dt(order["created_at"])
+    # Order events strictly ordered; delivery precedes the application.
+    created_ats = [_dt(e["created_at"]) for e in events]
+    assert created_ats == sorted(created_ats)
+    assert _d(by_type["delivered"]["occurred_on"]) <= _d(
+        application["application_date"]
+    )
+    assert _d(application["application_date"]) <= _d(
+        by_type["input_applied"]["occurred_on"]
+    )
+    # The selected quote's promise agrees with reality: delivery on-or-before
+    # the needed-by date, and the recorded delivery never precedes... the quote
+    # never claims a delivery LATER than what actually happened.
+    needed_by = _d(plan["items"][0]["needed_by_date"])
+    assert _d(selected_quote["expected_delivery_date"]) <= needed_by
+    assert _d(selected_quote["expected_delivery_date"]) <= _d(
+        by_type["delivered"]["occurred_on"]
+    )
+    # Nothing in the chain is overdue — the goods arrived.
+    assert plan["overdue"] is False
+    assert order["overdue"] is False
+
+
+def test_seeded_item_is_the_replacement_product_never_the_blocked_one(
+    client, pinned_clock
+):
+    seed.run()
+    plan = client.get("/input-plans/1").json()
+    decision = client.get(
+        f"/planned-sprays/{plan['items'][0]['planned_spray_id']}"
+    ).json()
+    assert decision["decision_outcome"] == "block"
+    assert decision["product_name"] == "Captan 80 WDG"  # what was blocked
+    for item in plan["items"]:
+        assert item["product_name"] == decision["outcome_product_name"]
+        assert item["product_name"] == "Switch 62.5 WG"
+        assert item["product_name"] != decision["product_name"]
+    # And the decision links back to this plan and its order.
+    links = decision["procurement_links"]
+    assert links and links[0]["input_plan_id"] == plan["id"]
+    assert links[0]["order_id"] == plan["order_id"]
+    # The applied spray event exposes the source order.
+    order = client.get(f"/orders/{plan['order_id']}").json()
+    sprays = {s["id"]: s for s in client.get("/farms/3/spray-events").json()}
+    assert sprays[order["spray_event_id"]]["source_order_id"] == order["id"]

@@ -13,6 +13,12 @@ Phase 1 scope notes baked into the vocabulary:
   structurally incapable of looking like an approval.
 * Quotes and offers are never edited; the correction path is withdraw + re-enter,
   so what the grower saw is preserved without a parallel audit system.
+* User decisions on a plan (submit, quote selection with its reason, financing
+  choices, cancel) are additionally audited on the plan's own append-only event
+  timeline (InputPlanEvent) — the mutable plan status is a read convenience.
+* Financing vocabulary is "selected", never "accepted": choosing indicative terms
+  is not an approval, not funding, and not binding. Phase 1 has no
+  partner-confirmed or funded state anywhere.
 * Expiry is always DERIVED from ``expires_on`` against an injected ``today`` —
   never stored — so a stale row can't claim to be live.
 
@@ -69,20 +75,44 @@ def plan_is_mutable(plan) -> bool:
 PLAN_QUOTABLE_STATUSES = (PLAN_SUBMITTED, PLAN_QUOTED)
 
 
+# ------------------------------------------------------------------- Plan events
+# Append-only audit events on an input plan (InputPlanEvent), written ONLY by
+# crud alongside the guarded status transitions — there is no generic POST
+# endpoint, so the plan transition map above is already the validity guard.
+# Order creation and application linking are audited on the ORDER's event
+# timeline (EVENT_CREATED / EVENT_INPUT_APPLIED below); the plan-side "ordered"
+# event closes the plan's own story.
+PLAN_EVENT_SUBMITTED = "submitted"
+PLAN_EVENT_QUOTE_SELECTED = "quote_selected"
+PLAN_EVENT_FINANCING_OFFER_SELECTED = "financing_offer_selected"
+PLAN_EVENT_FINANCING_OFFER_DECLINED = "financing_offer_declined"
+PLAN_EVENT_ORDERED = "ordered"
+PLAN_EVENT_CANCELLED = "cancelled"
+
+PLAN_EVENT_TYPES = (
+    PLAN_EVENT_SUBMITTED,
+    PLAN_EVENT_QUOTE_SELECTED,
+    PLAN_EVENT_FINANCING_OFFER_SELECTED,
+    PLAN_EVENT_FINANCING_OFFER_DECLINED,
+    PLAN_EVENT_ORDERED,
+    PLAN_EVENT_CANCELLED,
+)
+
+
 # ---------------------------------------------------------------- Financing state
 # Derived per plan from its flag + every offer on its quotes. A request with zero
 # offers is honestly "requested, awaiting terms" — never an offer, never an approval.
 FINANCING_CASH = "cash"
 FINANCING_REQUESTED = "financing_requested"
 FINANCING_OFFER_RECEIVED = "offer_received"
-FINANCING_OFFER_ACCEPTED = "offer_accepted"
+FINANCING_OFFER_SELECTED = "offer_selected"
 FINANCING_OFFER_DEAD = "offer_declined_or_expired"
 
 FINANCING_STATES = (
     FINANCING_CASH,
     FINANCING_REQUESTED,
     FINANCING_OFFER_RECEIVED,
-    FINANCING_OFFER_ACCEPTED,
+    FINANCING_OFFER_SELECTED,
     FINANCING_OFFER_DEAD,
 )
 
@@ -93,14 +123,16 @@ def financing_state(plan, offers, today) -> str:
     cash — financing was never requested.
     financing_requested — requested; no indicative terms entered yet.
     offer_received — at least one live (unexpired, undecided) indicative offer.
-    offer_accepted — the grower accepted indicative terms (still not a loan).
-    offer_declined_or_expired — offers existed but none is live or accepted.
+    offer_selected — the grower selected indicative terms. Deliberately NOT
+        "accepted": nothing is approved, funded, or binding — selecting terms is
+        a preference recorded ahead of any real lender conversation.
+    offer_declined_or_expired — offers existed but none is live or selected.
     """
     if not getattr(plan, "financing_requested", False):
         return FINANCING_CASH
     offers = list(offers or [])
-    if any(getattr(o, "status", None) == OFFER_ACCEPTED for o in offers):
-        return FINANCING_OFFER_ACCEPTED
+    if any(getattr(o, "status", None) == OFFER_SELECTED for o in offers):
+        return FINANCING_OFFER_SELECTED
     if any(offer_state(o, today) == OFFER_INDICATIVE for o in offers):
         return FINANCING_OFFER_RECEIVED
     if offers:
@@ -164,13 +196,16 @@ FINANCING_OFFER_DISCLAIMER = (
 
 # ---------------------------------------------------------------- Financing offer
 # Stored statuses. "indicative" is the only state an offer is created in; a
-# decision (accepted/declined) is one-shot; withdrawn is the concierge correction.
+# decision (selected/declined) is one-shot; withdrawn is the concierge correction.
+# "selected" — never "accepted" — because choosing indicative terms is not an
+# approval, not funding, not a binding agreement; there is no partner-confirmed
+# or funded state anywhere in Phase 1.
 OFFER_INDICATIVE = "indicative"
-OFFER_ACCEPTED = "accepted"
+OFFER_SELECTED = "selected"
 OFFER_DECLINED = "declined"
 OFFER_WITHDRAWN = "withdrawn"
 
-OFFER_STATUSES = (OFFER_INDICATIVE, OFFER_ACCEPTED, OFFER_DECLINED, OFFER_WITHDRAWN)
+OFFER_STATUSES = (OFFER_INDICATIVE, OFFER_SELECTED, OFFER_DECLINED, OFFER_WITHDRAWN)
 
 # Derived-only state.
 OFFER_EXPIRED = "expired"
@@ -179,7 +214,7 @@ OFFER_STATES = OFFER_STATUSES + (OFFER_EXPIRED,)
 
 
 def offer_state(offer, today) -> str:
-    """The offer's current meaning; expiry is derived so it can never be accepted late."""
+    """The offer's current meaning; expiry is derived so it can never be selected late."""
     status = getattr(offer, "status", None)
     if status != OFFER_INDICATIVE:
         return status
@@ -190,7 +225,7 @@ def offer_state(offer, today) -> str:
 
 
 def offer_decidable(offer, today) -> bool:
-    """May the grower accept/decline this offer right now?"""
+    """May the grower select/decline this offer right now?"""
     return offer_state(offer, today) == OFFER_INDICATIVE
 
 
@@ -288,3 +323,17 @@ def order_event_allowed(order, event_type) -> bool:
     """May ``event_type`` be appended given the order's current status?"""
     allowed_from = ORDER_EVENT_ALLOWED_FROM.get(event_type, ())
     return getattr(order, "status", None) in allowed_from
+
+
+# ----------------------------------------------------------------- Overdue state
+def procurement_overdue(needed_by, plan_status, order_status, today) -> bool:
+    """Derived, never stored: the needed-by date has passed and the goods are not
+    there. Never overdue once the order is delivered or cancelled, never for a
+    cancelled plan; a partial delivery stays overdue (the goods are not fully
+    there). No urgency is ever fabricated for a completed chain.
+    """
+    if needed_by is None or plan_status == PLAN_CANCELLED:
+        return False
+    if order_status in (ORDER_DELIVERED, ORDER_CANCELLED):
+        return False
+    return needed_by < today

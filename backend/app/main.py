@@ -1554,8 +1554,9 @@ def post_select_quote(
 def post_financing_offer_decision(
     offer_id: int, payload: schemas.FinancingOfferDecision, db: Session = Depends(get_db)
 ):
-    """The grower's one-shot accept/decline of an INDICATIVE offer. Accepting
-    records agreement to indicative terms only — it is never a loan approval."""
+    """The grower's one-shot select/decline of an INDICATIVE offer. Selecting
+    records a preference for indicative terms only — it is never a loan
+    approval, never lender confirmation, and moves no money."""
     offer = _require_financing_offer(db, offer_id)
     return _procurement_call(crud.decide_financing_offer, db, offer, payload)
 

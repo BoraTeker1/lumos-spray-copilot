@@ -1030,6 +1030,21 @@ def build_procurement_export(input_plans, today: date | None = None) -> dict:
             ),
             "quotes": [_export_quote(q, plan, today) for q in plan.quotes],
             "selected_quote_id": plan.selected_quote_id,
+            "selection_reason": plan.selection_reason,
+            # The plan's own append-only audit timeline (submission, quote
+            # selection with its reason, financing choices, cancellation).
+            "plan_events": [
+                {
+                    "event_type": e.event_type,
+                    "occurred_on": _iso_dt(e.occurred_on),
+                    "actor": e.actor,
+                    "notes": e.notes,
+                    "payload": e.payload,
+                }
+                for e in sorted(
+                    plan.events, key=lambda e: (e.created_at, e.id)
+                )
+            ],
             "order": None if order is None else {
                 "order_id": order.id,
                 "status": order.status,

@@ -638,30 +638,78 @@ export default function DecisionRecordPage({ params }) {
 
           <div className="rounded-xl border border-gray-200 bg-white p-4">
             <h2 className="text-sm font-semibold text-gray-900">Inputs & finance</h2>
-            {planned.procurement_eligible ? (
-              <>
+            {(() => {
+              const links = planned.procurement_links || [];
+              const active = links.filter((l) => l.plan_status !== "cancelled");
+              const cancelled = links.filter((l) => l.plan_status === "cancelled");
+              if (active.length > 0) {
+                // Procurement already exists — link to it instead of offering
+                // to create a duplicate plan.
+                return (
+                  <div className="mt-1 space-y-2">
+                    {active.map((l) => (
+                      <div key={l.input_plan_id} className="text-xs text-gray-600">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Link
+                            href={`/inputs/plans/${l.input_plan_id}`}
+                            className="font-medium text-leaf-700 hover:underline"
+                          >
+                            View input plan #{l.input_plan_id}
+                          </Link>
+                          <StatusBadge kind="planStatus" value={l.plan_status} />
+                        </div>
+                        {l.order_id && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <Link
+                              href={`/inputs/orders/${l.order_id}`}
+                              className="font-medium text-leaf-700 hover:underline"
+                            >
+                              View order #{l.order_id}
+                            </Link>
+                            <StatusBadge kind="orderStatus" value={l.order_status} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              }
+              if (planned.procurement_eligible) {
+                return (
+                  <>
+                    <p className="mt-1 text-xs text-gray-500">
+                      This decision is cleared for procurement — build an input plan
+                      and request supplier quotes for the product it authorizes.
+                    </p>
+                    {cancelled.length > 0 && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        {cancelled
+                          .map((l) => `Previous plan #${l.input_plan_id} was cancelled`)
+                          .join("; ")}
+                        .
+                      </p>
+                    )}
+                    <div className="mt-2">
+                      <InputPlanForm
+                        farmId={planned.farm_id}
+                        plannedSpray={planned}
+                        triggerLabel="Request supplier quotes"
+                      />
+                    </div>
+                  </>
+                );
+              }
+              return (
                 <p className="mt-1 text-xs text-gray-500">
-                  This decision is cleared for procurement — build an input plan
-                  and request supplier quotes for the product it authorizes.
+                  Not eligible for procurement:{" "}
+                  {planned.outcome === "avoided"
+                    ? "the recorded outcome is avoided — nothing should be purchased for it."
+                    : planned.review_state === "rejected"
+                      ? "the PCA rejected this decision."
+                      : "a PCA review (approve or edit) is still required before inputs can be purchased."}
                 </p>
-                <div className="mt-2">
-                  <InputPlanForm
-                    farmId={planned.farm_id}
-                    plannedSpray={planned}
-                    triggerLabel="Request supplier quotes"
-                  />
-                </div>
-              </>
-            ) : (
-              <p className="mt-1 text-xs text-gray-500">
-                Not eligible for procurement:{" "}
-                {planned.outcome === "avoided"
-                  ? "the recorded outcome is avoided — nothing should be purchased for it."
-                  : planned.review_state === "rejected"
-                    ? "the PCA rejected this decision."
-                    : "a PCA review (approve or edit) is still required before inputs can be purchased."}
-              </p>
-            )}
+              );
+            })()}
           </div>
 
           <Link

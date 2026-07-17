@@ -256,17 +256,22 @@ def test_seeded_scenarios_share_one_anchor_and_agree_with_engine_columns(
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
     planned = client.get(f"/farms/{us['id']}/planned-sprays").json()
     assert len(planned) == 3
-    # Scenarios 1 & 2 (captan block, PyGanic avoidance) anchor to the demo day; the
-    # failed-delay story (Agri-Mek) deliberately spans the preceding days.
-    same_day = [
-        p for p in planned if p["product_name"] in ("Captan 80 WDG", "PyGanic EC 5.0")
-    ]
-    assert len(same_day) == 2
-    for p in same_day:
-        assert p["intended_date"] == PINNED
-        assert p["outcome_date"] == PINNED
-        assert p["created_at"][:10] == PINNED
-        assert p["reviewed_at"][:10] == PINNED
+    # Scenarios 1 & 2 (captan block, PyGanic avoidance) resolve on the demo day;
+    # the captan check/review happen the MORNING BEFORE (its procurement chain —
+    # plan, quotes, order, delivery — must fit between review and application),
+    # while PyGanic stays a same-day story. The failed-delay story (Agri-Mek)
+    # deliberately spans the preceding days.
+    captan = next(p for p in planned if p["product_name"] == "Captan 80 WDG")
+    assert captan["intended_date"] == PINNED
+    assert captan["outcome_date"] == PINNED
+    assert captan["created_at"][:10] < PINNED  # checked the day before
+    assert captan["reviewed_at"][:10] == captan["created_at"][:10]
+    assert captan["created_at"] <= captan["reviewed_at"]
+    pyganic = next(p for p in planned if p["product_name"] == "PyGanic EC 5.0")
+    assert pyganic["intended_date"] == PINNED
+    assert pyganic["outcome_date"] == PINNED
+    assert pyganic["created_at"][:10] == PINNED
+    assert pyganic["reviewed_at"][:10] == PINNED
     mite = next(p for p in planned if p["product_name"] == "Agri-Mek SC")
     assert mite["created_at"][:10] <= mite["outcome_date"] <= PINNED
     for p in planned:

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { FlaskConical, History, Landmark, Package } from "lucide-react";
+import { FlaskConical, History, Landmark, Package, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCost, formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -110,6 +110,11 @@ export default function OrderDetailPage({ params }) {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-[22px] font-semibold text-gray-900">Order #{order.id}</h1>
             <StatusBadge kind="orderStatus" value={order.status} />
+            {order.overdue && (
+              <Badge variant="red">
+                <TriangleAlert /> Overdue — not delivered by the needed-by date
+              </Badge>
+            )}
             {isDemoRecord(order) && (
               <Badge variant="outline">
                 <FlaskConical /> Simulated demo data
@@ -181,9 +186,9 @@ export default function OrderDetailPage({ params }) {
         <div className="space-y-6">
           {offer && (
             <SectionCard
-              title="Financing (accepted — indicative)"
+              title="Financing — indicative offer selected"
               icon={<Landmark />}
-              description="Indicative terms the grower accepted before ordering. Not a loan approval; no money moves through Lumos."
+              description="Indicative terms the grower selected before ordering. Not a loan approval, not lender confirmation; no money moves through Lumos."
             >
               <dl className="space-y-1.5 text-sm">
                 <div className="flex justify-between">

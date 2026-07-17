@@ -15,7 +15,7 @@ def _farm(client):
     }).json()
 
 
-def _selected_plan(client, farm_id, financing=False, accept_offer=False, item=None):
+def _selected_plan(client, farm_id, financing=False, select_offer=False, item=None):
     """Farm -> plan -> submit -> quote -> (optional offer) -> select."""
     plan = client.post(f"/farms/{farm_id}/input-plans", json={
         "requested_by": "Test grower",
@@ -35,7 +35,7 @@ def _selected_plan(client, farm_id, financing=False, accept_offer=False, item=No
             "quantity": 252.0, "unit": "oz", "unit_price": 15.0,
         }],
     }).json()
-    if financing and accept_offer:
+    if financing and select_offer:
         offer = client.post(
             f"/internal/supplier-quotes/{quote['id']}/financing-offers",
             json={
@@ -45,10 +45,11 @@ def _selected_plan(client, farm_id, financing=False, accept_offer=False, item=No
             },
         ).json()
         client.post(f"/financing-offers/{offer['id']}/decision", json={
-            "action": "accepted", "actor": "Test grower",
+            "action": "selected", "actor": "Test grower",
         })
     resp = client.post(f"/input-plans/{plan['id']}/select-quote", json={
         "supplier_quote_id": quote["id"], "selected_by": "Test grower",
+        "reason": "Only quote received; price acceptable",
     })
     assert resp.status_code == 200, resp.text
     return resp.json(), quote
@@ -96,8 +97,9 @@ def test_order_creation_writes_the_provenance_events(client):
     events = client.get(f"/orders/{order['id']}/events").json()
     assert [e["event_type"] for e in events] == ["created", "quote_selected"]
     assert events[1]["payload"]["supplier_quote_id"] == quote["id"]
+    assert events[1]["payload"]["reason"] == "Only quote received; price acceptable"
     # Cash plan: no financing_selected event exists (a request or offer that was
-    # never accepted must leave no trace of "financing chosen").
+    # never selected must leave no trace of "financing chosen").
     assert "financing_selected" not in [e["event_type"] for e in events]
     # The plan is terminal and can't be cancelled out from under the order.
     detail = client.get(f"/input-plans/{plan['id']}").json()
@@ -108,9 +110,9 @@ def test_order_creation_writes_the_provenance_events(client):
     _order(client, plan["id"], expect=409)
 
 
-def test_accepted_offer_is_pinned_with_a_financing_selected_event(client):
+def test_selected_offer_is_pinned_with_a_financing_selected_event(client):
     farm = _farm(client)
-    plan, quote = _selected_plan(client, farm["id"], financing=True, accept_offer=True)
+    plan, quote = _selected_plan(client, farm["id"], financing=True, select_offer=True)
     order = _order(client, plan["id"])
     assert order["accepted_financing_offer_id"] is not None
     events = client.get(f"/orders/{order['id']}/events").json()

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { FileText } from "lucide-react";
 import { formatCost, formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,17 @@ const AVAILABILITY_LABELS = {
   unknown: "Unknown",
 };
 
+// Selecting a quote requires saying WHY. Presets cover the honest, comparable
+// facts; the reason is stored verbatim and audited — never inferred.
+const REASON_PRESETS = [
+  "Lower total quoted cost",
+  "Earlier estimated delivery",
+  "Product availability",
+  "Preferred payment terms",
+  "Financing availability",
+  "Supplier reliability",
+];
+
 // Transparent quote comparison: totals, delivery, availability, expiration,
 // financing. Sorted by total cost (ascending) — a user-value sort. There is no
 // supplier ranking anywhere: Lumos takes no commission and never ranks suppliers.
@@ -26,6 +38,26 @@ export default function QuoteComparisonTable({
   busy = false,
 }) {
   const rows = [...quotes].sort((a, b) => a.total_cost - b.total_cost);
+  // Comparison baseline: the lowest quoted total among live (not withdrawn)
+  // quotes. The per-row delta is a comparison of ENTERED quote totals only —
+  // never a savings claim.
+  const liveTotals = rows
+    .filter((q) => !["withdrawn", "expired"].includes(q.quote_state))
+    .map((q) => q.total_cost);
+  const lowestTotal = liveTotals.length ? Math.min(...liveTotals) : null;
+
+  const [selectingId, setSelectingId] = useState(null);
+  const [preset, setPreset] = useState(REASON_PRESETS[0]);
+  const [customReason, setCustomReason] = useState("");
+
+  function confirmSelect(q) {
+    const reason =
+      preset === "custom" ? customReason.trim() : preset;
+    if (!reason) return;
+    setSelectingId(null);
+    setCustomReason("");
+    if (onSelect) onSelect(q, reason);
+  }
 
   const columns = [
     {
@@ -73,6 +105,13 @@ export default function QuoteComparisonTable({
             {formatCost(q.items_subtotal, country)} + {formatCost(q.delivery_cost, country)}{" "}
             delivery + {formatCost(q.fees, country)} fees
           </div>
+          {lowestTotal != null && (
+            <div className="text-xs text-gray-600">
+              {q.total_cost === lowestTotal
+                ? "Lowest quoted total"
+                : `${formatCost(q.total_cost - lowestTotal, country)} above the lowest quoted total`}
+            </div>
+          )}
         </div>
       ),
     },
@@ -131,13 +170,15 @@ export default function QuoteComparisonTable({
             variant="secondary"
             size="sm"
             disabled={busy}
-            onClick={() => onSelect && onSelect(q)}
+            onClick={() => setSelectingId(q.id)}
           >
             Select quote
           </Button>
         ) : null,
     },
   ];
+
+  const selecting = rows.find((q) => q.id === selectingId);
 
   return (
     <div className="space-y-3">
@@ -154,9 +195,71 @@ export default function QuoteComparisonTable({
           />
         }
       />
+      {selecting && (
+        <div className="rounded-md border border-leaf-200 bg-leaf-50 p-3">
+          <p className="text-sm font-medium text-gray-900">
+            Select {selecting.supplier_name} —{" "}
+            {formatCost(selecting.total_cost, country)}. Why this quote?
+          </p>
+          <p className="mt-0.5 text-xs text-gray-600">
+            The reason is recorded in the plan&apos;s audit history and the
+            evidence export. It is never inferred.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {REASON_PRESETS.map((r) => (
+              <label key={r} className="flex items-center gap-1.5 text-xs text-gray-700">
+                <input
+                  type="radio"
+                  name="quote-select-reason"
+                  checked={preset === r}
+                  onChange={() => setPreset(r)}
+                />
+                {r}
+              </label>
+            ))}
+            <label className="flex items-center gap-1.5 text-xs text-gray-700">
+              <input
+                type="radio"
+                name="quote-select-reason"
+                checked={preset === "custom"}
+                onChange={() => setPreset("custom")}
+              />
+              Other
+            </label>
+          </div>
+          {preset === "custom" && (
+            <textarea
+              className="mt-2 w-full rounded-md border border-gray-300 p-2 text-sm"
+              rows={2}
+              placeholder="Your reason for selecting this quote (required)"
+              value={customReason}
+              onChange={(e) => setCustomReason(e.target.value)}
+            />
+          )}
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              disabled={busy || (preset === "custom" && !customReason.trim())}
+              onClick={() => confirmSelect(selecting)}
+            >
+              {busy ? "Saving…" : "Confirm selection"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setSelectingId(null)}
+            >
+              Back
+            </Button>
+          </div>
+        </div>
+      )}
       <p className="text-[11px] text-gray-500">
         Quotes are concierge-entered for comparison. Lumos takes no commission and
-        never ranks suppliers — sorted by transparent total cost only.
+        never ranks suppliers — sorted by transparent total cost only. &quot;Above
+        the lowest quoted total&quot; compares entered quote totals (including
+        delivery and fees); it is not a confirmed-savings claim.
       </p>
     </div>
   );

@@ -89,6 +89,10 @@ class SprayEvent(SprayEventBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     farm_id: int
+    # The purchase order whose delivered input this application consumed, when it
+    # was procured through Inputs & finance (derived; None for everything else —
+    # most applications are NOT procured through Lumos and carry no link).
+    source_order_id: int | None = None
 
 
 # --------------------------------------------------------------- ScoutObservation
@@ -371,6 +375,20 @@ class PlannedSpray(BaseModel):
     # May this decision back a purchasable input-plan item? (Inputs & finance;
     # canonical decision_status.procurement_eligible — the UI never re-derives it.)
     procurement_eligible: bool = False
+    # Procurement already raised from this decision (newest first) — the UI shows
+    # the existing plan/order instead of re-offering "Request supplier quotes".
+    procurement_links: list["ProcurementLink"] = Field(default_factory=list)
+
+
+class ProcurementLink(BaseModel):
+    """A compact pointer from a decision to a plan/order raised from it."""
+    input_plan_id: int
+    plan_status: str
+    order_id: int | None = None
+    order_status: str | None = None
+
+
+PlannedSpray.model_rebuild()
 
 
 # ------------------------------------------------- Decision input provenance
@@ -686,7 +704,9 @@ InputCategory = Literal[
 ]
 QuoteAvailability = Literal["in_stock", "partial", "backordered", "unknown"]
 QuoteVerification = Literal["concierge_entered", "supplier_confirmed"]
-FinancingDecisionAction = Literal["accepted", "declined"]
+# "selected", never "accepted": choosing indicative terms is not an approval,
+# not funding, and not a binding agreement.
+FinancingDecisionAction = Literal["selected", "declined"]
 # Only these are postable via the generic concierge order-events endpoint;
 # created/quote_selected/financing_selected are written by order creation, and
 # input_applied has its own endpoint (delivery must never imply application).
@@ -788,10 +808,10 @@ class FinancingOffer(FinancingOfferCreate):
 
 
 class FinancingOfferDecision(BaseModel):
-    """The grower's one-shot accept/decline of an indicative offer.
+    """The grower's one-shot select/decline of an indicative offer.
 
-    Accepting records agreement to INDICATIVE terms only — it is not a loan
-    approval and moves no money.
+    Selecting records a preference for INDICATIVE terms only — it is not a loan
+    approval, implies no lender confirmation, and moves no money.
     """
     action: FinancingDecisionAction
     actor: str | None = None
@@ -889,6 +909,7 @@ class InputPlan(BaseModel):
     cancelled_reason: str | None = None
     selected_quote_id: int | None = None
     selected_by: str | None = None
+    selection_reason: str | None = None
     data_source: str | None = None
     data_confidence: str | None = None
     created_at: datetime
@@ -897,12 +918,30 @@ class InputPlan(BaseModel):
     financing_state: str = "cash"
     quote_count: int = 0
     order_id: int | None = None
+    needed_by: date | None = None
+    overdue: bool = False
+
+
+class InputPlanEvent(BaseModel):
+    """One append-only plan audit event (see models.InputPlanEvent)."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    input_plan_id: int
+    event_type: str
+    occurred_on: date
+    actor: str | None = None
+    notes: str | None = None
+    payload: dict | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
 
 
 class InputPlanDetail(InputPlan):
     """Plan + everything needed to compare quotes and see the order (detail page)."""
     quotes: list[SupplierQuote] = Field(default_factory=list)
     order: "PurchaseOrder | None" = None
+    events: list[InputPlanEvent] = Field(default_factory=list)
 
 
 class InputPlanSubmit(BaseModel):
@@ -915,8 +954,12 @@ class InputPlanCancel(BaseModel):
 
 
 class SelectQuoteRequest(BaseModel):
+    """Selecting a quote requires saying WHY — the reason is entered by the human
+    (grower or concierge operator), stored, audited, and exported; it is never
+    inferred from the numbers."""
     supplier_quote_id: int
     selected_by: str | None = None
+    reason: str = Field(min_length=3)
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -990,6 +1033,8 @@ class PurchaseOrder(BaseModel):
     # Derived from the selected quote (order lines ARE the quote's lines).
     supplier_name: str | None = None
     total_cost: float | None = None
+    # Derived (procurement_status.procurement_overdue) — never stored.
+    overdue: bool = False
 
 
 class PurchaseOrderDetail(PurchaseOrder):

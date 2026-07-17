@@ -85,6 +85,16 @@ class SprayEvent(Base):
     )
 
     farm: Mapped["Farm"] = relationship(back_populates="spray_events")
+    # Purchase orders whose delivered input this application consumed (set only by
+    # the explicit input-applied endpoint; one in practice, viewonly here).
+    source_orders: Mapped[list["PurchaseOrder"]] = relationship(
+        foreign_keys="PurchaseOrder.spray_event_id", viewonly=True
+    )
+
+    @property
+    def source_order_id(self) -> int | None:
+        orders = self.source_orders or []
+        return orders[0].id if orders else None
 
 
 class ScoutObservation(Base):
@@ -204,6 +214,12 @@ class PlannedSpray(Base):
     follow_up_events: Mapped[list["DecisionFollowUpEvent"]] = relationship(
         back_populates="planned_spray", cascade="all, delete-orphan"
     )
+    # Procurement raised from this decision (Inputs & finance): the reverse edge
+    # of InputPlanItem.planned_spray_id, so the decision surface can show that a
+    # plan/order already exists instead of re-offering "Request supplier quotes".
+    input_plan_items: Mapped[list["InputPlanItem"]] = relationship(
+        back_populates="planned_spray"
+    )
 
     # Derived status fields (read-only, from the canonical app/decision_status.py).
     # Serialized on schemas.PlannedSpray so the frontend never re-derives them.
@@ -256,6 +272,22 @@ class PlannedSpray(Base):
     @property
     def current_next_action(self) -> str:
         return decision_status.current_next_action(self, self.follow_up_events)
+
+    @property
+    def procurement_links(self) -> list[dict]:
+        """Every plan (and its order) ever raised from this decision, newest first."""
+        seen: dict[int, dict] = {}
+        for item in self.input_plan_items or []:
+            plan = item.input_plan
+            if plan is None or plan.id in seen:
+                continue
+            seen[plan.id] = {
+                "input_plan_id": plan.id,
+                "plan_status": plan.status,
+                "order_id": plan.order_id,
+                "order_status": plan.order.status if plan.order is not None else None,
+            }
+        return [seen[k] for k in sorted(seen, reverse=True)]
 
 
 class DecisionInputValue(Base):
@@ -535,6 +567,8 @@ class InputPlan(Base):
     # already FKs back to this one and SQLite can't ALTER in the reverse edge).
     selected_quote_id: Mapped[int | None] = mapped_column(Integer)
     selected_by: Mapped[str | None] = mapped_column(String(120))
+    # Why THIS quote — always entered by the human selecting it, never inferred.
+    selection_reason: Mapped[str | None] = mapped_column(Text)
     # Concierge-pilot provenance (see SprayEvent for the allowed values).
     data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
@@ -549,6 +583,11 @@ class InputPlan(Base):
     )
     order: Mapped["PurchaseOrder | None"] = relationship(
         back_populates="input_plan", uselist=False
+    )
+    events: Mapped[list["InputPlanEvent"]] = relationship(
+        back_populates="input_plan",
+        cascade="all, delete-orphan",
+        order_by="(InputPlanEvent.created_at, InputPlanEvent.id)",
     )
 
     @property
@@ -566,6 +605,20 @@ class InputPlan(Base):
     @property
     def order_id(self) -> int | None:
         return self.order.id if self.order is not None else None
+
+    @property
+    def needed_by(self) -> date | None:
+        dates = [i.needed_by_date for i in (self.items or []) if i.needed_by_date]
+        return min(dates) if dates else None
+
+    @property
+    def overdue(self) -> bool:
+        return procurement_status.procurement_overdue(
+            self.needed_by,
+            self.status,
+            self.order.status if self.order is not None else None,
+            clock.current_date(),
+        )
 
 
 class InputPlanItem(Base):
@@ -606,7 +659,9 @@ class InputPlanItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     input_plan: Mapped["InputPlan"] = relationship(back_populates="items")
-    planned_spray: Mapped["PlannedSpray | None"] = relationship()
+    planned_spray: Mapped["PlannedSpray | None"] = relationship(
+        back_populates="input_plan_items"
+    )
 
     @property
     def source_decision_review_state(self) -> str:
@@ -725,7 +780,7 @@ class FinancingOffer(Base):
     expires_on: Mapped[date | None] = mapped_column(Date)
     required_documents: Mapped[str | None] = mapped_column(Text)
     conditions: Mapped[str | None] = mapped_column(Text)
-    # indicative / accepted / declined / withdrawn (expired is derived, never stored)
+    # indicative / selected / declined / withdrawn (expired is derived, never stored)
     status: Mapped[str] = mapped_column(String(20), default=procurement_status.OFFER_INDICATIVE)
     decided_by: Mapped[str | None] = mapped_column(String(120))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -763,6 +818,10 @@ class PurchaseOrder(Base):
     selected_quote_id: Mapped[int] = mapped_column(
         ForeignKey("supplier_quotes.id"), nullable=False
     )
+    # The SELECTED indicative offer (status "selected"). Column name predates the
+    # accepted→selected vocabulary correction; renaming it is deferred debt (see
+    # ENGINEERING_GUIDELINES.md follow-ups) — the stored status and all user-visible copy already
+    # say "selected".
     accepted_financing_offer_id: Mapped[int | None] = mapped_column(
         ForeignKey("financing_offers.id")
     )
@@ -798,6 +857,16 @@ class PurchaseOrder(Base):
     def total_cost(self) -> float | None:
         return self.selected_quote.total_cost if self.selected_quote else None
 
+    @property
+    def overdue(self) -> bool:
+        plan = self.input_plan
+        return procurement_status.procurement_overdue(
+            plan.needed_by if plan is not None else None,
+            plan.status if plan is not None else None,
+            self.status,
+            clock.current_date(),
+        )
+
 
 class OrderEvent(Base):
     """One append-only event on a purchase order. NEVER updated or deleted.
@@ -825,6 +894,40 @@ class OrderEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     purchase_order: Mapped["PurchaseOrder"] = relationship(back_populates="events")
+
+
+class InputPlanEvent(Base):
+    """One append-only audit event on an input plan. NEVER updated or deleted.
+
+    The plan's user-decision history IS this timeline; InputPlan's status /
+    selected_quote_id / selection_reason columns are read conveniences kept in
+    sync by crud (the OrderEvent pattern). A dedicated table exists because the
+    decision audit trail (DecisionAuditEvent) is keyed to a non-null
+    planned_spray_id with decision-specific vocabulary — a plan can exist with no
+    decision link, or link several — and OrderEvent requires an order, which does
+    not exist yet for pre-order actions. Farm scoping comes through the plan;
+    demo/real separation through the inherited provenance columns.
+    """
+    __tablename__ = "input_plan_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    input_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plans.id"), nullable=False, index=True
+    )
+    # submitted / quote_selected / financing_offer_selected /
+    # financing_offer_declined / ordered / cancelled
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Prior/resulting state and linked ids (from_status, to_status, quote_id,
+    # offer_id, reason, ...).
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    input_plan: Mapped["InputPlan"] = relationship(back_populates="events")
 
 
 class PilotImportBatch(Base):
