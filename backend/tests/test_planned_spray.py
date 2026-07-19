@@ -5,7 +5,25 @@ HTTP workflow, the human review gate, and the evidence aggregation.
 """
 from datetime import date, timedelta
 
+from app import models
+from app.database import SessionLocal
 from app.decision_engine import PLANNED_SPRAY_DISCLAIMER
+
+
+def _insert_legacy_demo_planned(farm_id):
+    """A demo decision written straight to the DB (no API). The API's mixing guard
+    forbids creating demo rows on a real farm, but legacy/pre-guard rows can exist —
+    row-level exclusion from evidence must still hold for them (defense in depth)."""
+    with SessionLocal() as db:
+        db.add(models.PlannedSpray(
+            farm_id=farm_id,
+            intended_date=date.today(),
+            product_name="Legacy Demo Product",
+            check_text="demo snapshot",
+            data_source="demo",
+            data_confidence="simulated",
+        ))
+        db.commit()
 
 
 def _create_farm(client, **overrides):
@@ -262,8 +280,6 @@ def test_delete_planned_spray(client):
 # ------------------------------------------------------------- evidence aggregation
 def test_decision_evidence_metrics(client):
     farm_row = _create_farm(client)
-    # Demo/simulated decision: excluded everywhere.
-    _create_planned(client, farm_row["id"], data_source="demo", data_confidence="simulated")
 
     # Real decision 1: blocked, reviewed, avoided (cost 120 -> counted as avoided).
     p1 = _create_planned(client, farm_row["id"])
@@ -278,6 +294,8 @@ def test_decision_evidence_metrics(client):
         f"/planned-sprays/{p2['id']}/review",
         json={"action": "rejected", "review_comment": "Data looks wrong — re-enter PHI."},
     )
+    # Legacy demo/simulated decision (pre-guard DB row): excluded everywhere.
+    _insert_legacy_demo_planned(farm_row["id"])
 
     ev = client.get(f"/farms/{farm_row['id']}/decision-evidence").json()
     assert ev["decisions_checked"] == 2
@@ -295,12 +313,13 @@ def test_decision_evidence_metrics(client):
 
 def test_demo_planned_sprays_excluded_from_pilot_evidence(client):
     farm_row = _create_farm(client)
-    _create_planned(client, farm_row["id"], data_source="demo", data_confidence="simulated")
     real = _create_planned(client, farm_row["id"])
     client.patch(
         f"/planned-sprays/{real['id']}/outcome",
         json={"outcome": "avoided", "outcome_reason": "Scouting showed no pressure."},
     )
+    # Legacy demo/simulated decision (pre-guard DB row): excluded from evidence.
+    _insert_legacy_demo_planned(farm_row["id"])
 
     evidence = client.get(f"/farms/{farm_row['id']}/pilot-evidence").json()
     block = evidence["pre_spray_decisions"]
@@ -331,3 +350,59 @@ def test_farms_overview_ranks_urgency_and_explains_why(client):
     assert top["needs_review_count"] == 1
     quiet_row = overview[1]
     assert quiet_row["urgency"] == "ok"
+
+
+# ------------------------------------------------- applied quantity round-trip
+def test_applied_outcome_carries_structured_rate_onto_the_spray_event(client):
+    farm_row = _create_farm(
+        client, expected_harvest_date=(date.today() + timedelta(days=30)).isoformat()
+    )
+    p = _create_planned(
+        client, farm_row["id"],
+        pre_harvest_interval_days=1,
+        rate_amount=3.75, rate_unit="lb/acre", treated_acres=12.0, moa_group="FRAC M04",
+    )
+    if p["review_required"]:
+        _approve(client, p["id"])
+    res = client.patch(
+        f"/planned-sprays/{p['id']}/outcome", json={"outcome": "sprayed_as_planned"}
+    )
+    assert res.status_code == 200, res.text
+    event_id = res.json()["spray_event_id"]
+    events = client.get(f"/farms/{farm_row['id']}/spray-events").json()
+    event = next(e for e in events if e["id"] == event_id)
+    assert event["rate_amount"] == 3.75
+    assert event["rate_unit"] == "lb/acre"
+    assert event["treated_acres"] == 12.0
+    assert event["moa_group"] == "FRAC M04"
+
+
+def test_changed_product_never_carries_rate_or_moa(client):
+    farm_row = _create_farm(
+        client, expected_harvest_date=(date.today() + timedelta(days=30)).isoformat()
+    )
+    p = _create_planned(
+        client, farm_row["id"],
+        pre_harvest_interval_days=1,
+        rate_amount=3.75, rate_unit="lb/acre", treated_acres=12.0, moa_group="FRAC M04",
+    )
+    _approve(client, p["id"], action="edited", pca_next_action="Rotate chemistry.")
+    res = client.patch(
+        f"/planned-sprays/{p['id']}/outcome",
+        json={
+            "outcome": "changed_product",
+            "outcome_reason": "Rotated per PCA guidance.",
+            "outcome_product_name": "Switch 62.5 WG",
+            "outcome_active_ingredient": "cyprodinil + fludioxonil",
+        },
+    )
+    assert res.status_code == 200, res.text
+    event_id = res.json()["spray_event_id"]
+    events = client.get(f"/farms/{farm_row['id']}/spray-events").json()
+    event = next(e for e in events if e["id"] == event_id)
+    # The planned rate/MoA belonged to the planned chemistry — never carried over.
+    assert event["rate_amount"] is None
+    assert event["rate_unit"] is None
+    assert event["moa_group"] is None
+    # Treated area is about the ground covered, not the chemistry — it carries.
+    assert event["treated_acres"] == 12.0

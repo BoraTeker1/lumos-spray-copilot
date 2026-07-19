@@ -11,6 +11,9 @@ import tempfile
 _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _TMP.close()
 os.environ["LUMOS_DATABASE_URL"] = f"sqlite:///{_TMP.name}"
+# Tests pin the clock freely (LUMOS_DEMO_TODAY); mark the whole test app as an explicit
+# demo server so the startup interlock (clock.assert_safe_for_serving) lets it boot.
+os.environ["LUMOS_DEMO_MODE"] = "1"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

@@ -107,8 +107,12 @@ def test_demo_orders_are_excluded_from_the_evidence_export(client, pinned_clock)
 def test_demo_reset_refuses_once_real_procurement_exists(client, pinned_clock):
     seed.run()
     assert client.post("/internal/demo/reset").status_code == 200
-    # A single REAL input plan on the demo farm blocks the reset.
-    resp = client.post("/farms/3/input-plans", json={
+    # A real input plan can no longer be created on the demo farm (farm-level
+    # mixing guard) — a real farm with a real plan blocks the reset instead.
+    farm = client.post("/farms", json={
+        "name": "Real Pilot Farm", "country": "US", "crop_type": "strawberry",
+    }).json()
+    resp = client.post(f"/farms/{farm['id']}/input-plans", json={
         "requested_by": "Real grower",
         "items": [{
             "product_name": "Real product", "quantity": 1, "unit": "oz",
@@ -117,6 +121,19 @@ def test_demo_reset_refuses_once_real_procurement_exists(client, pinned_clock):
     })
     assert resp.status_code == 201
     assert client.post("/internal/demo/reset").status_code == 409
+
+
+def test_real_input_plan_rejected_on_demo_farm(client, pinned_clock):
+    seed.run()
+    resp = client.post("/farms/3/input-plans", json={
+        "requested_by": "Real grower",
+        "items": [{
+            "product_name": "Real product", "quantity": 1, "unit": "oz",
+            "needed_by_date": "2026-07-20",
+        }],
+    })
+    assert resp.status_code == 409
+    assert "never mix" in resp.json()["detail"]
 
 
 def _dt(value):

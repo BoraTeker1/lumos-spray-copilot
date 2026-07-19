@@ -20,7 +20,10 @@ class Farm(Base):
     # Two-letter market/country code, e.g. "US" or "TR". Drives PCA vs. agronomist wording.
     country: Mapped[str] = mapped_column(String(2), default="US")
     crop_type: Mapped[str] = mapped_column(String(100), default="greenhouse_tomato")
-    greenhouse_area: Mapped[float | None] = mapped_column(Float)  # m² (TR) or acres (US)
+    greenhouse_area: Mapped[float | None] = mapped_column(Float)  # in area_unit
+    # Explicit unit for greenhouse_area ("acres" / "m2"). Historically the unit was
+    # implied by country (m² in TR, acres in US) — the column makes it data instead.
+    area_unit: Mapped[str | None] = mapped_column(String(10))
     planting_date: Mapped[date | None] = mapped_column(Date)
     expected_harvest_date: Mapped[date | None] = mapped_column(Date)
     # Pilot intake: is a PCA/agronomist already involved with this farm?
@@ -66,13 +69,23 @@ class SprayEvent(Base):
     moa_group: Mapped[str | None] = mapped_column(String(40))
     pesticide_class: Mapped[str | None] = mapped_column(String(100))
     target_pest_or_disease: Mapped[str | None] = mapped_column(String(200))
+    # Legacy free-text dose; structured rate lives in rate_amount + rate_unit.
     dose: Mapped[str | None] = mapped_column(String(100))
+    # Structured applied quantity (entered, not label-verified; units are NOT yet
+    # normalized or converted — captured so quantity evidence becomes possible).
+    rate_amount: Mapped[float | None] = mapped_column(Float)
+    rate_unit: Mapped[str | None] = mapped_column(String(40))
+    treated_acres: Mapped[float | None] = mapped_column(Float)
     application_date: Mapped[date] = mapped_column(Date, nullable=False)
     cost: Mapped[float | None] = mapped_column(Float)
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
     re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
     # Field/block within the farm (same vocabulary as PlannedSpray/ScoutObservation).
     field_block: Mapped[str | None] = mapped_column(String(120))
+    # Pilot CSV-import provenance (mirrors ScoutObservation/PlannedSpray).
+    external_record_id: Mapped[str | None] = mapped_column(String(120))
+    source_system: Mapped[str | None] = mapped_column(String(120))
+    source_filename: Mapped[str | None] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text)
     # Concierge-pilot provenance: where this record came from and how trustworthy it is.
     # data_source: demo / grower_interview / spreadsheet / whatsapp / email / manual_entry / unknown

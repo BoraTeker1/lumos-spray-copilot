@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { FileText, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { useDemoTag } from "@/lib/farm-context";
 import { formatCost } from "@/lib/format";
 import { RECORDED_OUTCOME_LABELS, REVIEW_STATE_LABELS } from "@/lib/labels";
 import { RECORDED_OUTCOME_TONES, REVIEW_STATE_TONES, tone } from "@/lib/tones";
@@ -377,6 +378,9 @@ export function PlannedSprayList({ planned, onChanged, emptyText, compact = fals
 // (approve / block / delay / inspect first / PCA review required), then run the
 // review and record the real outcome in the same sheet.
 export default function PreSpraySheet({ farmId, onChanged }) {
+  // On a demo farm, records created here are saved as simulated demo data — the
+  // backend refuses to mix real and demo records on one farm.
+  const demoTag = useDemoTag(farmId);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [lastCheck, setLastCheck] = useState(null);
@@ -428,6 +432,7 @@ export default function PreSpraySheet({ farmId, onChanged }) {
     try {
       const created = await api.createPlannedSpray(farmId, {
         ...form,
+        ...demoTag,
         values_entered_by: form.values_entered_by.trim() || null,
         pre_harvest_interval_days:
           form.pre_harvest_interval_days === "" ? null : Number(form.pre_harvest_interval_days),
@@ -466,6 +471,13 @@ export default function PreSpraySheet({ farmId, onChanged }) {
             Enter a spray you are <em>considering</em> — product and date are enough to start.
             Lumos returns one clear outcome; decision support only, never a prescription.{" "}
             {DISCLAIMER}
+            {demoTag.data_source ? (
+              <>
+                {" "}
+                This is a demo farm — checks you run here are saved as simulated
+                demo data, never as pilot evidence.
+              </>
+            ) : null}
           </SheetDescription>
         </SheetHeader>
 

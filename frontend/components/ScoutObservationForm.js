@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useDemoTag } from "@/lib/farm-context";
 
 const EMPTY = {
   observation_date: "",
@@ -14,6 +15,8 @@ const EMPTY = {
 
 // Form to log a scouting observation for a farm.
 export default function ScoutObservationForm({ farmId, onCreated }) {
+  // Demo farms only accept simulated records (the backend 409s on mixing).
+  const demoTag = useDemoTag(farmId);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -29,6 +32,7 @@ export default function ScoutObservationForm({ farmId, onCreated }) {
     try {
       await api.createScoutObservation(farmId, {
         ...form,
+        ...demoTag,
         severity_1_to_5:
           form.severity_1_to_5 === "" ? null : Number(form.severity_1_to_5),
         image_url_optional: form.image_url_optional || null,

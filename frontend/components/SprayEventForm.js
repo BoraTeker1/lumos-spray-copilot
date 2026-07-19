@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useDemoTag } from "@/lib/farm-context";
 
 const EMPTY = {
   product_name: "",
@@ -9,6 +10,9 @@ const EMPTY = {
   pesticide_class: "",
   target_pest_or_disease: "",
   dose: "",
+  rate_amount: "",
+  rate_unit: "",
+  treated_acres: "",
   application_date: "",
   cost: "",
   pre_harvest_interval_days: "",
@@ -18,6 +22,8 @@ const EMPTY = {
 
 // Form to log a pesticide spray event for a farm.
 export default function SprayEventForm({ farmId, onCreated }) {
+  // Demo farms only accept simulated records (the backend 409s on mixing).
+  const demoTag = useDemoTag(farmId);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -33,6 +39,10 @@ export default function SprayEventForm({ farmId, onCreated }) {
     try {
       await api.createSprayEvent(farmId, {
         ...form,
+        ...demoTag,
+        rate_amount: form.rate_amount === "" ? null : Number(form.rate_amount),
+        rate_unit: form.rate_unit || null,
+        treated_acres: form.treated_acres === "" ? null : Number(form.treated_acres),
         cost: form.cost === "" ? null : Number(form.cost),
         pre_harvest_interval_days:
           form.pre_harvest_interval_days === ""
@@ -87,6 +97,30 @@ export default function SprayEventForm({ farmId, onCreated }) {
           placeholder="Dose (e.g. 2.5 g/L)"
           value={form.dose}
           onChange={(e) => update("dose", e.target.value)}
+        />
+        <input
+          type="number"
+          step="any"
+          min="0"
+          className={input}
+          placeholder="Rate amount (e.g. 3.75)"
+          value={form.rate_amount}
+          onChange={(e) => update("rate_amount", e.target.value)}
+        />
+        <input
+          className={input}
+          placeholder="Rate unit (e.g. lb/acre)"
+          value={form.rate_unit}
+          onChange={(e) => update("rate_unit", e.target.value)}
+        />
+        <input
+          type="number"
+          step="any"
+          min="0"
+          className={input}
+          placeholder="Treated acres"
+          value={form.treated_acres}
+          onChange={(e) => update("treated_acres", e.target.value)}
         />
         <label className="text-xs text-gray-500">
           Application date *

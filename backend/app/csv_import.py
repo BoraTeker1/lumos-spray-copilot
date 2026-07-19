@@ -22,8 +22,19 @@ from datetime import date, datetime
 
 RECORD_TYPE_PLANNED = "planned_sprays"
 RECORD_TYPE_SCOUTING = "scout_observations"
+RECORD_TYPE_SPRAY_EVENTS = "spray_events"
 
 IGNORE = "ignore"
+
+# Date-format modes for imports. "auto" accepts ISO always and slash dates only when
+# unambiguous; a date that reads validly as BOTH m/d and d/m is an error telling the
+# operator to re-run with an explicit format — a compliance import must never guess
+# which side of the slash is the day.
+DATE_FORMAT_AUTO = "auto"
+DATE_FORMAT_ISO = "iso"
+DATE_FORMAT_MDY = "mdy"
+DATE_FORMAT_DMY = "dmy"
+DATE_FORMATS = (DATE_FORMAT_AUTO, DATE_FORMAT_ISO, DATE_FORMAT_MDY, DATE_FORMAT_DMY)
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,46 @@ PLANNED_SPRAY_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("notes", "str", aliases=("comments", "note")),
 )
 
+# Historical *actual* applications (the reduction baseline's denominator lives here:
+# a prior_period baseline needs the farm's real pre-Lumos spray log on record).
+SPRAY_EVENT_FIELDS: tuple[FieldSpec, ...] = (
+    FieldSpec("external_record_id", "str",
+              aliases=("record id", "id", "rec id", "external id", "record")),
+    FieldSpec("field_block", "str",
+              aliases=("field", "block", "field/block", "field block", "field id")),
+    FieldSpec("application_date", "date", required=True,
+              aliases=("date", "application date", "app date", "date applied",
+                       "sprayed on", "spray date", "date of application")),
+    FieldSpec("product_name", "str", required=True,
+              aliases=("product", "product name", "trade name", "material")),
+    FieldSpec("active_ingredient", "str", regulatory=True,
+              aliases=("ai", "active ingredient", "active")),
+    FieldSpec("moa_group", "str",
+              aliases=("moa", "moa group", "frac", "frac group", "irac", "irac group",
+                       "hrac", "mode of action", "mode-of-action group")),
+    FieldSpec("pesticide_class", "str",
+              aliases=("class", "type", "pesticide class", "product type")),
+    FieldSpec("target_pest_or_disease", "str",
+              aliases=("target", "pest", "disease", "target pest",
+                       "target pest or disease", "pest/disease")),
+    FieldSpec("rate_amount", "float", regulatory=True,
+              aliases=("rate", "application rate", "rate amount")),
+    FieldSpec("rate_unit", "str", regulatory=True,
+              aliases=("rate unit", "unit", "units")),
+    FieldSpec("treated_acres", "float",
+              aliases=("acres", "treated acres", "area", "area (acres)")),
+    FieldSpec("cost", "float",
+              aliases=("cost", "product cost", "total cost", "cost usd",
+                       "application cost")),
+    FieldSpec("pre_harvest_interval_days", "int", regulatory=True,
+              aliases=("phi", "phi days", "phi (days)", "pre-harvest interval",
+                       "pre harvest interval days")),
+    FieldSpec("re_entry_interval_hours", "int", regulatory=True,
+              aliases=("rei", "rei hours", "rei (hours)", "re-entry interval",
+                       "re entry interval hours")),
+    FieldSpec("notes", "str", aliases=("comments", "note")),
+)
+
 SCOUTING_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("external_record_id", "str",
               aliases=("record id", "id", "rec id", "external id", "record")),
@@ -105,6 +156,7 @@ SCOUTING_FIELDS: tuple[FieldSpec, ...] = (
 FIELDS_BY_TYPE = {
     RECORD_TYPE_PLANNED: PLANNED_SPRAY_FIELDS,
     RECORD_TYPE_SCOUTING: SCOUTING_FIELDS,
+    RECORD_TYPE_SPRAY_EVENTS: SPRAY_EVENT_FIELDS,
 }
 
 # Marker used in downloadable templates so example rows are unmistakably not data.
@@ -141,6 +193,23 @@ _TEMPLATE_EXAMPLES = {
         "severity_scale": "1-5",
         "count_value": "",
         "observer": "Sam Scout",
+        "notes": "example row — delete before importing",
+    },
+    RECORD_TYPE_SPRAY_EVENTS: {
+        "external_record_id": TEMPLATE_EXAMPLE_MARKER,
+        "field_block": "Block 4",
+        "application_date": "2026-06-12",
+        "product_name": "Captan 80 WDG",
+        "active_ingredient": "captan",
+        "moa_group": "FRAC M04",
+        "pesticide_class": "fungicide",
+        "target_pest_or_disease": "gray mold",
+        "rate_amount": "3.75",
+        "rate_unit": "lb/acre",
+        "treated_acres": "12",
+        "cost": "120",
+        "pre_harvest_interval_days": "4",
+        "re_entry_interval_hours": "24",
         "notes": "example row — delete before importing",
     },
 }
@@ -201,10 +270,59 @@ def build_mapping(
     return mapping, unmapped
 
 
-_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
+_ISO_FORMAT = "%Y-%m-%d"
+_SLASH_FORMATS = {
+    DATE_FORMAT_MDY: ("%m/%d/%Y", "%m/%d/%y"),
+    DATE_FORMAT_DMY: ("%d/%m/%Y", "%d/%m/%y"),
+}
 
 
-def _parse_value(spec: FieldSpec, raw: str):
+def _try_formats(text: str, formats: tuple[str, ...]) -> date | None:
+    for fmt in formats:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_date(name: str, text: str, date_format: str):
+    """Parse one date cell honoring the import's date_format. Returns (value, error).
+
+    ISO (YYYY-MM-DD) always works. Slash dates follow the explicit format when one
+    was chosen; under "auto" a slash date is accepted only when it is unambiguous
+    (one side must be > 12) — a date valid as both m/d and d/m is an error, because
+    guessing the day/month order would silently shift PHI/REI math by months.
+    """
+    iso = _try_formats(text, (_ISO_FORMAT,))
+    if iso is not None:
+        return iso, None
+    if date_format in (DATE_FORMAT_MDY, DATE_FORMAT_DMY):
+        value = _try_formats(text, _SLASH_FORMATS[date_format])
+        if value is not None:
+            return value, None
+        return None, (
+            f"{name}: unrecognized date '{text}' (use YYYY-MM-DD or "
+            f"{'MM/DD/YYYY' if date_format == DATE_FORMAT_MDY else 'DD/MM/YYYY'})"
+        )
+    if date_format == DATE_FORMAT_ISO:
+        return None, f"{name}: unrecognized date '{text}' (use YYYY-MM-DD)"
+    # auto: only unambiguous slash dates pass.
+    as_mdy = _try_formats(text, _SLASH_FORMATS[DATE_FORMAT_MDY])
+    as_dmy = _try_formats(text, _SLASH_FORMATS[DATE_FORMAT_DMY])
+    if as_mdy is not None and as_dmy is not None and as_mdy != as_dmy:
+        return None, (
+            f"{name}: ambiguous date '{text}' — could be "
+            f"{as_mdy.isoformat()} (month/day) or {as_dmy.isoformat()} (day/month). "
+            f"Re-run the import with date_format 'mdy' or 'dmy'."
+        )
+    value = as_mdy if as_mdy is not None else as_dmy
+    if value is not None:
+        return value, None
+    return None, f"{name}: unrecognized date '{text}' (use YYYY-MM-DD)"
+
+
+def _parse_value(spec: FieldSpec, raw: str, date_format: str = DATE_FORMAT_AUTO):
     """Parse one cell. Returns (value, error). Empty cells are (None, None)."""
     text = (raw or "").strip()
     if not text:
@@ -212,12 +330,7 @@ def _parse_value(spec: FieldSpec, raw: str):
     if spec.kind == "str":
         return text, None
     if spec.kind == "date":
-        for fmt in _DATE_FORMATS:
-            try:
-                return datetime.strptime(text, fmt).date(), None
-            except ValueError:
-                continue
-        return None, f"{spec.name}: unrecognized date '{text}' (use YYYY-MM-DD)"
+        return _parse_date(spec.name, text, date_format)
     cleaned = text.replace("$", "").replace(",", "")
     if spec.kind == "int":
         try:
@@ -334,12 +447,33 @@ def duplicate_key_for_scouting(
     )
 
 
+def duplicate_key_for_spray_event(
+    external_record_id, product_name, application_date, field_block=None
+) -> tuple:
+    ext = (str(external_record_id).strip().lower() if external_record_id else "")
+    if ext:
+        return ("ext", ext)
+    return (
+        "nat",
+        (product_name or "").strip().lower(),
+        application_date.isoformat()
+        if isinstance(application_date, date) else str(application_date),
+        (field_block or "").strip().lower(),
+    )
+
+
 def _row_duplicate_key(record_type: str, values: dict) -> tuple | None:
     if record_type == RECORD_TYPE_PLANNED:
         if values.get("product_name") and values.get("intended_date"):
             return duplicate_key_for_planned(
                 values.get("external_record_id"), values["product_name"],
                 values["intended_date"], values.get("field_block"),
+            )
+    elif record_type == RECORD_TYPE_SPRAY_EVENTS:
+        if values.get("product_name") and values.get("application_date"):
+            return duplicate_key_for_spray_event(
+                values.get("external_record_id"), values["product_name"],
+                values["application_date"], values.get("field_block"),
             )
     else:
         if values.get("visible_issue") and values.get("observation_date"):
@@ -352,10 +486,32 @@ def _row_duplicate_key(record_type: str, values: dict) -> tuple | None:
 
 def _regulatory_warnings(record_type: str, values: dict) -> list[str]:
     """Explicit 'unverified / cannot run' notes for absent regulatory values."""
-    if record_type != RECORD_TYPE_PLANNED:
+    if record_type == RECORD_TYPE_SCOUTING:
         out = []
         if values.get("severity") is None:
             out.append("no severity recorded — threshold comparisons cannot run")
+        return out
+    if record_type == RECORD_TYPE_SPRAY_EVENTS:
+        out = []
+        if values.get("pre_harvest_interval_days") is None:
+            out.append(
+                "PHI missing — unverified; PHI-vs-harvest checks against this "
+                "application cannot run"
+            )
+        if values.get("re_entry_interval_hours") is None:
+            out.append(
+                "REI missing — unverified; the re-entry overlap check cannot see "
+                "this application"
+            )
+        if not values.get("active_ingredient"):
+            out.append(
+                "no active ingredient — this application cannot count toward "
+                "rotation (resistance) checks"
+            )
+        if (values.get("rate_amount") is None) != (not values.get("rate_unit")):
+            out.append(
+                "incomplete application rate — amount and unit must both be present"
+            )
         return out
     out = []
     if values.get("pre_harvest_interval_days") is None:
@@ -381,6 +537,7 @@ def validate_rows(
     raw_rows: list[dict],
     existing_keys: dict | None = None,
     report: DryRunReport | None = None,
+    date_format: str = DATE_FORMAT_AUTO,
 ) -> DryRunReport:
     """Validate pre-structured rows (canonical field -> raw value) into a DryRunReport.
 
@@ -406,7 +563,7 @@ def validate_rows(
                 continue
             text = "" if raw_cell is None else str(raw_cell)
             row.raw[fname] = text
-            value, error = _parse_value(spec_by_name[fname], text)
+            value, error = _parse_value(spec_by_name[fname], text, date_format)
             if error:
                 row.errors.append(error)
             elif value is not None:
@@ -455,6 +612,7 @@ def parse_csv(
     csv_text: str,
     mapping_overrides: dict | None = None,
     existing_keys: dict | None = None,
+    date_format: str = DATE_FORMAT_AUTO,
 ) -> DryRunReport:
     """Parse + validate CSV text into a DryRunReport (never writes anything).
 
@@ -512,4 +670,6 @@ def parse_csv(
             raw[fname] = cells[col_index] if col_index < len(cells) else ""
         raw_rows.append(raw)
 
-    return validate_rows(record_type, raw_rows, existing_keys, report=report)
+    return validate_rows(
+        record_type, raw_rows, existing_keys, report=report, date_format=date_format
+    )

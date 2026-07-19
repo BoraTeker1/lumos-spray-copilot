@@ -79,9 +79,12 @@ def test_demo_decisions_never_count_as_comparables(client, monkeypatch):
     monkeypatch.setenv("LUMOS_DEMO_TODAY", "2026-07-10")
     seed.run()
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
-    # The demo farm has three seeded decision stories — all demo/simulated.
+    # The demo farm has three seeded decision stories — all demo/simulated. A demo
+    # farm only accepts demo records (mixing guard), so the new check is demo-tagged
+    # too; the retrieval must still exclude every demo decision from comparables.
     monkeypatch.setenv("LUMOS_DEMO_TODAY", "2026-07-15")
-    p = _planned(client, us["id"], target_pest_or_disease="lygus bug")
+    p = _planned(client, us["id"], target_pest_or_disease="lygus bug",
+                 data_source="demo", data_confidence="simulated")
     brief = _brief(client, p["id"])
     assert brief["comparable_count"] == 0          # demo excluded from retrieval
     assert brief["rescue_risk"] == "abstain"        # so the guard abstains

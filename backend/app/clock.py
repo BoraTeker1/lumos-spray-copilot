@@ -7,6 +7,10 @@ the seeded story can be reproduced deterministically (screenshots, invariant tes
 
 Caution: with the env var set on a *live* server, every new row is timestamped at the
 anchor. That is intended for demos and tests only — never run a real pilot with it set.
+The API refuses to start with a pinned clock unless LUMOS_DEMO_MODE=1 is also set
+(see `assert_safe_for_serving`), so a leftover pin can never silently corrupt real
+pilot timestamps or PHI/REI date math. Seeding (`python -m app.seed`) is exempt —
+a seeded database is demo data by definition.
 
 Pure modules (decision_engine, recommendation_engine, analytics, reduction,
 pilot_evidence, vision) keep their injectable `today` parameter and never import this
@@ -16,6 +20,33 @@ from __future__ import annotations
 
 import os
 from datetime import date, datetime, time
+
+
+def pinned_anchor() -> str | None:
+    """The LUMOS_DEMO_TODAY pin (ISO date string), or None when running on real time."""
+    return os.environ.get("LUMOS_DEMO_TODAY") or None
+
+
+def mode() -> str:
+    """"pinned" when the demo anchor is set, else "real" (reported by /health)."""
+    return "pinned" if pinned_anchor() else "real"
+
+
+def assert_safe_for_serving() -> None:
+    """Refuse to serve API traffic on a pinned clock unless demo mode is explicit.
+
+    A pinned clock on a live server stamps every new record at the anchor date and
+    computes every PHI/REI check against it — silently corrupting real pilot data.
+    Requiring LUMOS_DEMO_MODE=1 alongside the pin makes "this server is a demo" an
+    explicit operator decision instead of a leftover environment variable.
+    """
+    if pinned_anchor() and os.environ.get("LUMOS_DEMO_MODE") != "1":
+        raise RuntimeError(
+            "LUMOS_DEMO_TODAY is set but LUMOS_DEMO_MODE is not. A pinned clock on a "
+            "live server would timestamp real records at the demo anchor and compute "
+            "PHI/REI checks against it. Set LUMOS_DEMO_MODE=1 to run an explicit demo "
+            "server, or unset LUMOS_DEMO_TODAY for real use."
+        )
 
 
 def current_date() -> date:

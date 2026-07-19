@@ -235,6 +235,9 @@ def test_live_check_is_deterministic_under_pinned_clock(client, pinned_clock):
         "pre_harvest_interval_days": 0,
         "re_entry_interval_hours": 12,
         "estimated_cost": 95.0,
+        # Live checks on the demo farm are demo-tagged (mixing guard).
+        "data_source": "demo",
+        "data_confidence": "simulated",
     }
     a = client.post(f"/farms/{us['id']}/planned-sprays", json=payload).json()
     b = client.post(f"/farms/{us['id']}/planned-sprays", json=payload).json()
@@ -295,6 +298,9 @@ def test_no_invented_threshold_for_targets_without_policy(client, pinned_clock):
         target_pest_or_disease="powdery mildew",
         pre_harvest_interval_days=0,
         re_entry_interval_hours=4,
+        # Live checks on the demo farm are demo-tagged (mixing guard).
+        data_source="demo",
+        data_confidence="simulated",
     )
     rule = next(
         r for r in p["decision_payload"]["rules"] if r["rule_id"] == "scouting_evidence"
@@ -328,10 +334,11 @@ def test_demo_reset_refuses_when_real_data_exists(client, pinned_clock):
 
 def test_demo_reset_refuses_on_real_records_too(client, pinned_clock):
     seed.run()
-    us = next(f for f in client.get("/farms").json() if f["country"] == "US")
-    # One real spray on a demo farm is enough to block the reset.
-    client.post(
-        f"/farms/{us['id']}/spray-events",
+    # A real spray can no longer land on a demo farm at all (mixing guard) — the
+    # reset-blocking real record lives on its own real farm instead.
+    farm = _farm(client)
+    res = client.post(
+        f"/farms/{farm['id']}/spray-events",
         json={
             "product_name": "Real Spray",
             "application_date": PINNED,
@@ -339,7 +346,174 @@ def test_demo_reset_refuses_on_real_records_too(client, pinned_clock):
             "data_confidence": "user_provided",
         },
     )
+    assert res.status_code == 201, res.text
     assert client.post("/internal/demo/reset").status_code == 409
+
+
+# ------------------------------------------------------- demo/real mixing guard
+def test_real_records_are_rejected_on_a_demo_farm(client, pinned_clock):
+    seed.run()
+    us = next(f for f in client.get("/farms").json() if f["country"] == "US")
+    real_spray = {
+        "product_name": "Real Spray",
+        "application_date": PINNED,
+        "data_source": "manual_entry",
+        "data_confidence": "user_provided",
+    }
+    res = client.post(f"/farms/{us['id']}/spray-events", json=real_spray)
+    assert res.status_code == 409
+    assert "never mix" in res.json()["detail"]
+
+    res = client.post(
+        f"/farms/{us['id']}/scout-observations",
+        json={"observation_date": PINNED, "visible_issue": "real issue"},
+    )
+    assert res.status_code == 409
+
+    res = client.post(
+        f"/farms/{us['id']}/planned-sprays",
+        json={"intended_date": PINNED, "product_name": "Real Product"},
+    )
+    assert res.status_code == 409
+
+    res = client.post(
+        f"/farms/{us['id']}/input-plans",
+        json={
+            "requested_by": "Real grower",
+            "items": [{
+                "product_name": "Real product", "quantity": 1, "unit": "oz",
+                "needed_by_date": "2026-07-20",
+            }],
+        },
+    )
+    assert res.status_code == 409
+
+
+def test_demo_records_are_rejected_on_a_real_farm(client, pinned_clock):
+    farm = _farm(client)
+    _planned(client, farm["id"])  # first (real) record sets the farm's nature
+    res = client.post(
+        f"/farms/{farm['id']}/spray-events",
+        json={
+            "product_name": "Simulated Spray",
+            "application_date": PINNED,
+            "data_source": "demo",
+            "data_confidence": "simulated",
+        },
+    )
+    assert res.status_code == 409
+    assert "never mix" in res.json()["detail"]
+
+
+def test_demo_check_run_live_on_a_demo_farm_still_works(client, pinned_clock):
+    """The demo walkthrough runs a check on the demo farm — tagged as demo, it lands."""
+    seed.run()
+    us = next(f for f in client.get("/farms").json() if f["country"] == "US")
+    res = client.post(
+        f"/farms/{us['id']}/planned-sprays",
+        json={
+            "intended_date": PINNED,
+            "product_name": "Captan 80 WDG",
+            "data_source": "demo",
+            "data_confidence": "simulated",
+        },
+    )
+    assert res.status_code == 201, res.text
+
+
+# ------------------------------------------------------------ clock interlock
+def test_pinned_clock_requires_explicit_demo_mode(monkeypatch):
+    """A leftover LUMOS_DEMO_TODAY must never silently serve a live API."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app as main_app
+
+    monkeypatch.setenv("LUMOS_DEMO_TODAY", PINNED)
+    monkeypatch.delenv("LUMOS_DEMO_MODE", raising=False)
+    with pytest.raises(RuntimeError, match="LUMOS_DEMO_MODE"):
+        with TestClient(main_app):
+            pass
+
+
+def test_health_reports_clock_mode(client, pinned_clock):
+    body = client.get("/health").json()
+    assert body["clock_mode"] == "pinned"
+    assert body["pinned_date"] == PINNED
+
+
+# ----------------------------------------------- missing data can never approve
+def test_missing_inputs_never_approve():
+    """The core safety rule: a check that could not run can never produce approve."""
+    from types import SimpleNamespace
+
+    from app.decision_engine import evaluate_planned_spray
+
+    today = date(2026, 7, 10)
+    farm = SimpleNamespace(expected_harvest_date=date(2026, 8, 15))
+    complete = dict(
+        intended_date=today,
+        product_name="Product X",
+        active_ingredient="captan",
+        target_pest_or_disease="botrytis",
+        pre_harvest_interval_days=1,
+        re_entry_interval_hours=4,
+    )
+    scouting = [SimpleNamespace(
+        observation_date=today, visible_issue="botrytis", severity_1_to_5=3
+    )]
+
+    # Control: with every input present and linked scouting evidence, the engine
+    # CAN approve (still provisional, so review is required regardless).
+    control = evaluate_planned_spray(
+        farm, SimpleNamespace(**complete), [], scouting, today=today
+    )
+    assert control.outcome == "approve"
+    assert control.review_required is True  # provisional approve still needs a PCA
+
+    for missing_field in (
+        "pre_harvest_interval_days", "re_entry_interval_hours", "active_ingredient",
+    ):
+        planned = SimpleNamespace(**{**complete, missing_field: None})
+        decision = evaluate_planned_spray(farm, planned, [], scouting, today=today)
+        assert decision.outcome != "approve", missing_field
+        assert decision.review_required is True, missing_field
+        assert decision.missing_information, missing_field
+
+    no_harvest = SimpleNamespace(expected_harvest_date=None)
+    decision = evaluate_planned_spray(
+        no_harvest, SimpleNamespace(**complete), [], scouting, today=today
+    )
+    assert decision.outcome != "approve"
+    assert decision.review_required is True
+
+
+def test_imported_unverified_values_never_approve():
+    from types import SimpleNamespace
+
+    from app.decision_engine import evaluate_planned_spray
+
+    today = date(2026, 7, 10)
+    farm = SimpleNamespace(expected_harvest_date=date(2026, 8, 15))
+    planned = SimpleNamespace(
+        intended_date=today,
+        product_name="Product X",
+        active_ingredient="captan",
+        target_pest_or_disease="botrytis",
+        pre_harvest_interval_days=1,
+        re_entry_interval_hours=4,
+    )
+    scouting = [SimpleNamespace(
+        observation_date=today, visible_issue="botrytis", severity_1_to_5=3
+    )]
+    decision = evaluate_planned_spray(
+        farm, planned, [], scouting, today=today,
+        input_sources={
+            "pre_harvest_interval_days": {"source_type": "imported_unverified"},
+        },
+    )
+    assert decision.outcome != "approve"
+    assert decision.outcome == "pca_review_required"
+    assert decision.review_required is True
 
 
 def test_demo_reset_reseeds_an_all_demo_db(client, pinned_clock):

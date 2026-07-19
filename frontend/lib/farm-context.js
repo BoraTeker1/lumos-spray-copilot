@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { isSecondaryDemoFarm } from "@/lib/farms";
+import { demoProvenance, isSecondaryDemoFarm } from "@/lib/farms";
 
 // Active-farm context for the farm-scoped sidebar pages (Operations, Decisions,
 // Scouting, Applications, Evidence). Farms come from the real, urgency-ranked
@@ -72,4 +72,14 @@ export function FarmProvider({ children }) {
 
 export function useFarmContext() {
   return useContext(FarmContext);
+}
+
+// Demo-provenance tag for records the user creates on this farm (see
+// lib/farms.demoProvenance). Secondary demo farms are filtered out of the
+// context's farm list, so a form on one of them returns {} and the backend's
+// mixing guard answers with its explanatory 409 instead.
+export function useDemoTag(farmId) {
+  const { farms } = useFarmContext();
+  const farm = farms.find((f) => f.id === Number(farmId));
+  return demoProvenance(farm);
 }

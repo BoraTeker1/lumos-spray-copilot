@@ -320,13 +320,17 @@ function FarmDetail({ farmId }) {
 
             {/* Right rail */}
             <div className="space-y-4">
-              <SectionCard
-                title="Field conditions"
-                icon={<CloudSun />}
-                description="Simulated demo weather — not a live feed."
-              >
-                <WeatherCard farmId={farmId} />
-              </SectionCard>
+              {/* Weather is a mock service — demo farms only; a real pilot farm
+                  never renders a simulated widget. */}
+              {isDemoFarm && (
+                <SectionCard
+                  title="Field conditions"
+                  icon={<CloudSun />}
+                  description="Simulated demo weather — not a live feed."
+                >
+                  <WeatherCard farmId={farmId} />
+                </SectionCard>
+              )}
 
               <SectionCard
                 title="Pre-spray risk snapshot"

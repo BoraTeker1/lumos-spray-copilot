@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useDemoTag } from "@/lib/farm-context";
 
 // Measured spray reduction vs. a grower/PCA-declared baseline. Honest by design:
 // no baseline -> no number; low-confidence/early-window numbers are clearly marked
 // "illustrative" and never shown as a headline result. `refreshKey` re-fetches.
 export default function ReductionCard({ farmId, refreshKey }) {
+  // Demo farms only accept simulated records (the backend 409s on mixing).
+  const demoTag = useDemoTag(farmId);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -40,6 +43,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
       method,
       data_source: "grower_interview",
       data_confidence: "user_provided",
+      ...demoTag,
       declared_by: declaredBy || null,
     };
     if (method === "stated_cadence") {

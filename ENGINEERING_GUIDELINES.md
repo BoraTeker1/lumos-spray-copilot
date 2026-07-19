@@ -84,6 +84,32 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 
 Backend + frontend both implement:
 
+- **Pilot-integrity & measurement-foundation cycle (2026-07-18)** — hardening for the first
+  REAL pilot, no new claims:
+  - **Clock interlock:** API refuses to start with `LUMOS_DEMO_TODAY` set unless
+    `LUMOS_DEMO_MODE=1` (see §8); `/health` reports `clock_mode`/`pinned_date`.
+  - **Demo/real mixing guard:** one farm is all-demo or all-real; mismatched record creation
+    409s (`crud.ensure_demo_real_separation`, incl. input plans + both import paths). The
+    frontend demo-tags rows created interactively on demo farms (`useDemoTag`). Fixed a
+    pre-existing bug where API rows with omitted provenance fell to the ORM default
+    `"demo"/"simulated"` — create schemas now default `manual_entry`/`user_provided`.
+  - **Historical spray import:** `spray_events` is a third CSV import record type (dry-run,
+    aliases, dedupe, template; CSV-only — no AI extraction model). This is the
+    `prior_period` reduction baseline's denominator.
+  - **Explicit import date formats:** `date_format` = `auto|iso|mdy|dmy`; `auto` ERRORS on
+    ambiguous m/d-vs-d/m dates instead of guessing.
+  - **Quantity capture (capture only, no computed claims):** SprayEvent gains
+    `rate_amount/rate_unit/treated_acres` (+ `external_record_id/source_system/
+    source_filename`); `Farm.area_unit` ("acres"/"m2") makes the area unit data instead of
+    country-implied; applied outcomes copy rate/acres/MoA from the plan (changed product ⇒
+    rate/MoA never carry over). `NOT_CALCULATED` in pilot_evidence stays verbatim.
+  - **Alembic baseline** (`32a030ba8bc4`) — see §8; the schema can now evolve after real
+    data lands.
+  - **IA consolidation:** primary nav = the decision loop only; Inputs & finance demoted to
+    the bottom nav group; `/compliance` merged into `/evidence` as a tab (route redirects;
+    `CompliancePanel`); ReductionCard + wedge tagline surfaced; WeatherCard renders on demo
+    farms ONLY; invariant tests added for missing-data-never-approves + the mixing guard.
+
 - **Inputs & finance V1 (Phase 1 procurement, 2026-07-16)** — RFQ model, concierge-operated,
   NO real money. Chain: PCA-cleared decision → `InputPlan` (plan == RFQ; status
   draft→submitted_for_quotes→quoted→quote_selected→ordered/cancelled; items snapshot product
@@ -368,6 +394,9 @@ Backend + frontend both implement:
   - `page.js` — dashboard / farm list (risk badge + spend per card; sorts U.S. strawberry first).
   - `farms/[id]/page.js` — farm detail (analytics, weather, compliance, recommendation, review,
     weekly report, pilot evidence, concierge pilot).
+  - `evidence/page.js` — "Evidence & compliance": outer Evidence|Compliance tabs
+    (`?tab=compliance` deep-link; `/compliance` redirects here; the compliance view lives
+    in `components/CompliancePanel.js`), demo/real scope tabs, ReductionCard, exports.
   - `feedback/page.js` — pilot feedback capture.
   - `pilot/new/page.js` — pilot farm intake form.
   - `layout.js`, `globals.css`.
@@ -410,6 +439,12 @@ cd backend && source .venv/bin/activate && pytest
 # Seed / reset demo data (drops + recreates schema, loads 3 demo farms)
 cd backend && source .venv/bin/activate && python -m app.seed
 #   nuclear reset: rm -f backend/lumos.db && python -m app.seed
+#   after seeding a fresh DB, mark it migration-current: alembic stamp head
+
+# Schema changes (Alembic exists as of 2026-07-18 — baseline 32a030ba8bc4):
+#   demo-only DBs may still drop+reseed; a DB with REAL pilot data must migrate:
+#   edit app/models.py -> alembic revision --autogenerate -m "..." -> review the
+#   script (env.py enables SQLite batch mode) -> alembic upgrade head
 
 # Run backend:  uvicorn app.main:app --reload   (http://localhost:8000, docs at /docs)
 
@@ -422,13 +457,22 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **320 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **338 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
   date to a fixed anchor (screenshots / demo-consistency tests); unset, the anchor is today and
   re-seeding before a demo keeps the story fresh. `tests/test_demo_consistency.py` asserts the
   seeded story's invariants.
+- **Clock interlock (2026-07-18):** the API **refuses to start** with `LUMOS_DEMO_TODAY` set
+  unless `LUMOS_DEMO_MODE=1` is also set (a leftover pin would silently corrupt real pilot
+  timestamps and PHI/REI math). Seeding is exempt; tests set the mode var in conftest.
+  `/health` reports `clock_mode` (`real`/`pinned`) + `pinned_date`.
+- **Demo/real mixing guard (2026-07-18):** one farm's records are either ALL demo/simulated or
+  ALL real — creating a mismatched record 409s (`crud.ensure_demo_real_separation`, mirrored on
+  input plans). The frontend demo-tags rows created interactively on demo farms
+  (`useDemoTag` in `lib/farm-context.js`), so the live demo walkthrough still works and its
+  records are honestly simulated. Real pilots always get a fresh farm.
 - **NEVER run `npm run build` while `npm run dev` is running** — they share `.next` and the
   build corrupts the dev server's cache (dev pages start returning 500 MODULE_NOT_FOUND). Stop
   the dev server first, or restart it afterwards with `rm -rf .next && npm run dev`.

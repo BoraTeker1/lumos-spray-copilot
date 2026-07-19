@@ -27,6 +27,13 @@ class ReviewRequiredError(Exception):
     """Raised when an applied outcome is recorded before a required PCA review."""
 
 
+class DemoMixingError(Exception):
+    """Raised when a real record would be created on a farm whose records are
+    simulated demo data (or a demo record on a farm with real records). One farm's
+    story is either all simulated or all real — mixed farms would silently blend
+    demo rows into analytics/compliance/reduction surfaces that read every row."""
+
+
 class OutcomeChronologyError(Exception):
     """Raised when a recorded outcome would create an impossible timeline
     (outcome before its check, or an application before its planned date)."""
@@ -97,6 +104,7 @@ def list_spray_events(db: Session, farm_id: int) -> list[models.SprayEvent]:
 def create_spray_event(
     db: Session, farm_id: int, data: schemas.SprayEventCreate
 ) -> models.SprayEvent:
+    ensure_demo_real_separation(db, farm_id, data)
     event = models.SprayEvent(farm_id=farm_id, **data.model_dump())
     db.add(event)
     db.commit()
@@ -127,6 +135,7 @@ def list_scout_observations(db: Session, farm_id: int) -> list[models.ScoutObser
 def create_scout_observation(
     db: Session, farm_id: int, data: schemas.ScoutObservationCreate
 ) -> models.ScoutObservation:
+    ensure_demo_real_separation(db, farm_id, data)
     obs = models.ScoutObservation(farm_id=farm_id, **data.model_dump())
     db.add(obs)
     db.commit()
@@ -337,6 +346,7 @@ def create_planned_spray(
     provenance derived from `values_source` (the CSV import passes
     "imported_unverified"); imported values can never back a definitive result.
     """
+    ensure_demo_real_separation(db, farm.id, data)
     sprays = list_spray_events(db, farm.id)
     observations = list_scout_observations(db, farm.id)
 
@@ -587,10 +597,17 @@ def record_planned_spray_outcome(
             active_ingredient=(
                 data.outcome_active_ingredient if changed else planned.active_ingredient
             ),
+            # MoA belongs to the planned chemistry — never carried onto a changed product.
+            moa_group=None if changed else planned.moa_group,
             target_pest_or_disease=planned.target_pest_or_disease,
             field_block=planned.field_block,
             application_date=data.application_date or planned.intended_date,
             cost=None if changed else planned.estimated_cost,
+            # The planned rate was for the planned product; a changed product's rate
+            # must be re-entered (same rule as PHI/REI below). Treated area carries.
+            rate_amount=None if changed else planned.rate_amount,
+            rate_unit=None if changed else planned.rate_unit,
+            treated_acres=planned.treated_acres,
             # PHI/REI were entered for the planned product; they do not carry over to a
             # different product — the changed product's values must be re-entered.
             pre_harvest_interval_days=None if changed else planned.pre_harvest_interval_days,
@@ -804,6 +821,16 @@ def _existing_duplicate_keys(db: Session, farm_id: int, record_type: str) -> dic
             keys[csv_import.duplicate_key_for_planned(
                 None, p.product_name, p.intended_date, p.field_block
             )] = label
+    elif record_type == csv_import.RECORD_TYPE_SPRAY_EVENTS:
+        for s in list_spray_events(db, farm_id):
+            label = f"spray event #{s.id} ({s.product_name} on {s.application_date})"
+            if s.external_record_id:
+                keys[csv_import.duplicate_key_for_spray_event(
+                    s.external_record_id, None, None
+                )] = label
+            keys[csv_import.duplicate_key_for_spray_event(
+                None, s.product_name, s.application_date, s.field_block
+            )] = label
     else:
         for o in list_scout_observations(db, farm_id):
             label = f"scouting observation #{o.id} ({o.visible_issue} on {o.observation_date})"
@@ -840,6 +867,10 @@ def commit_import(
     sprays) field-level DecisionInputValue rows tagged imported_unverified — imported
     regulatory values never silently become verified and never auto-approve.
     """
+    ensure_demo_real_separation(
+        db, farm.id,
+        SimpleNamespace(data_source=data_source, data_confidence=data_confidence),
+    )
     payload = report.as_payload()
     batch = models.PilotImportBatch(
         farm_id=farm.id,
@@ -898,6 +929,36 @@ def commit_import(
             planned.values_source = "imported_unverified"
             created_ids.append(planned.id)
         batch.planned_spray_count = len(created_ids)
+    elif record_type == csv_import.RECORD_TYPE_SPRAY_EVENTS:
+        for row in report.importable_rows:
+            values = row.values
+            event = models.SprayEvent(
+                farm_id=farm.id,
+                product_name=values["product_name"],
+                active_ingredient=values.get("active_ingredient"),
+                moa_group=values.get("moa_group"),
+                pesticide_class=values.get("pesticide_class"),
+                target_pest_or_disease=values.get("target_pest_or_disease"),
+                application_date=values["application_date"],
+                rate_amount=values.get("rate_amount"),
+                rate_unit=values.get("rate_unit"),
+                treated_acres=values.get("treated_acres"),
+                cost=values.get("cost"),
+                pre_harvest_interval_days=values.get("pre_harvest_interval_days"),
+                re_entry_interval_hours=values.get("re_entry_interval_hours"),
+                field_block=values.get("field_block"),
+                external_record_id=values.get("external_record_id"),
+                source_system=source_system,
+                source_filename=source_filename,
+                notes=values.get("notes"),
+                data_source=data_source,
+                data_confidence=data_confidence,
+                pilot_import_batch_id=batch.id,
+            )
+            db.add(event)
+            db.flush()
+            created_ids.append(event.id)
+        batch.spray_event_count = len(created_ids)
     else:
         for row in report.importable_rows:
             values = row.values
@@ -959,6 +1020,7 @@ def commit_import(
             "ai_judgment_id": batch.ai_judgment_id,
             "planned_spray_count": batch.planned_spray_count,
             "scouting_observation_count": batch.scouting_observation_count,
+            "spray_event_count": batch.spray_event_count,
             "imported_at": batch.created_at.isoformat(),
         },
         "created_record_ids": created_ids,
@@ -977,6 +1039,7 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
         req.csv_text,
         mapping_overrides=req.mapping,
         existing_keys=_existing_duplicate_keys(db, farm.id, req.record_type),
+        date_format=req.date_format,
     )
     if req.dry_run:
         return {
@@ -1007,6 +1070,7 @@ def import_rows(db: Session, farm: models.Farm, req: schemas.RowImportRequest) -
         req.record_type,
         req.rows,
         existing_keys=_existing_duplicate_keys(db, farm.id, req.record_type),
+        date_format=req.date_format,
     )
     if req.dry_run:
         return {
@@ -1181,6 +1245,10 @@ def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm
             cost=sp.cost,
             pre_harvest_interval_days=sp.pre_harvest_interval_days,
             re_entry_interval_hours=sp.re_entry_interval_hours,
+            # Explicit real provenance — omitting it would fall through to the ORM
+            # column default ("demo"/"simulated") and mistag a real pilot's records.
+            data_source="manual_entry",
+            data_confidence="user_provided",
         ))
 
     if data.scouting_concern:
@@ -1189,6 +1257,8 @@ def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm
             observation_date=clock.current_date(),
             visible_issue=data.scouting_concern,
             severity_1_to_5=data.scouting_severity_1_to_5,
+            data_source="manual_entry",
+            data_confidence="user_provided",
         ))
 
     db.commit()
@@ -1206,6 +1276,7 @@ def import_pilot_data(
     to the batch via `pilot_import_batch_id`, so the audit trail is complete. Returns the batch
     (with its counts populated).
     """
+    ensure_demo_real_separation(db, farm.id, data)
     batch = models.PilotImportBatch(
         farm_id=farm.id,
         source_label=data.source_label,
@@ -1291,6 +1362,7 @@ def set_pca_policy(
     db: Session, farm_id: int, data: schemas.PcaPolicyCreate
 ) -> models.PcaPolicy:
     """Record a new policy for the farm+target (the latest one is what the engine uses)."""
+    ensure_demo_real_separation(db, farm_id, data)
     policy = models.PcaPolicy(farm_id=farm_id, **data.model_dump())
     db.add(policy)
     db.commit()
@@ -1312,11 +1384,47 @@ def set_spray_baseline(
     db: Session, farm_id: int, data: schemas.SprayBaselineCreate
 ) -> models.SprayBaseline:
     """Record a new baseline for the farm (latest one is the one reduction uses)."""
+    ensure_demo_real_separation(db, farm_id, data)
     baseline = models.SprayBaseline(farm_id=farm_id, **data.model_dump())
     db.add(baseline)
     db.commit()
     db.refresh(baseline)
     return baseline
+
+
+# ------------------------------------------------- Demo/real farm separation
+# Farm-scoped record types whose provenance defines whether a farm is a demo farm.
+# (Procurement rows enforce the same rule separately against their plan/decision —
+# see _validate_plan_item — and always trace back to one of these.)
+_FARM_RECORD_MODELS = (
+    models.SprayEvent, models.ScoutObservation, models.PlannedSpray,
+    models.SprayBaseline, models.PcaPolicy,
+)
+
+
+def ensure_demo_real_separation(db: Session, farm_id: int, new_record) -> None:
+    """Reject a record whose demo-ness contradicts the farm's existing records.
+
+    The descriptive surfaces (analytics, compliance snapshot, weekly report,
+    reduction, audit packet) deliberately read every row on a farm; keeping each
+    farm all-demo or all-real is what keeps those surfaces honest without
+    re-filtering six code paths. Farm-level mirror of the procurement guard in
+    `_validate_plan_item`. A farm with no records yet accepts either kind — the
+    first record sets the farm's nature.
+    """
+    new_is_demo = decision_status.is_demo_record(new_record)
+    for model in _FARM_RECORD_MODELS:
+        for row in db.scalars(select(model).where(model.farm_id == farm_id)):
+            if decision_status.is_demo_record(row) != new_is_demo:
+                have, adding = (
+                    ("simulated demo", "a real") if new_is_demo is False
+                    else ("real", "a simulated demo")
+                )
+                raise DemoMixingError(
+                    f"simulated demo records and real records can never mix on one "
+                    f"farm — this farm already has {have} records and this would add "
+                    f"{adding} one. Create a separate farm for real pilot data."
+                )
 
 
 # ------------------------------------------------------------------ Demo reset
@@ -1442,6 +1550,9 @@ def _validate_plan_item(
 def create_input_plan(
     db: Session, farm: models.Farm, data: schemas.InputPlanCreate
 ) -> models.InputPlan:
+    # Farm-level demo/real separation (the item/decision-level checks below guard
+    # the chain's internal consistency; this guards the plan against the farm).
+    ensure_demo_real_separation(db, farm.id, data)
     plan = models.InputPlan(
         farm_id=farm.id, **data.model_dump(exclude={"items"})
     )

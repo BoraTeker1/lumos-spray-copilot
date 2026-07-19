@@ -114,6 +114,7 @@ def run() -> None:
             country="TR",
             crop_type="greenhouse_tomato",
             greenhouse_area=4000.0,
+            area_unit="m2",
             planting_date=today - timedelta(days=70),
             # Harvest very soon -> falls inside the 7-day PHI of recent sprays.
             expected_harvest_date=today + timedelta(days=3),
@@ -195,6 +196,7 @@ def run() -> None:
             country="TR",
             crop_type="greenhouse_tomato",
             greenhouse_area=2500.0,
+            area_unit="m2",
             planting_date=today - timedelta(days=40),
             # Harvest far away -> no PHI risk.
             expected_harvest_date=today + timedelta(days=45),
@@ -239,7 +241,8 @@ def run() -> None:
             location="Watsonville, California",
             country="US",
             crop_type="strawberry",
-            greenhouse_area=18.0,  # 18 acres (US farms store area in acres)
+            greenhouse_area=18.0,
+            area_unit="acres",
             planting_date=today - timedelta(days=90),
             # Harvest in 2 days -> falls inside a recent spray's PHI window.
             expected_harvest_date=today + timedelta(days=2),

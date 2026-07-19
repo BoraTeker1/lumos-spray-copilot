@@ -29,7 +29,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import ActivityTimeline from "@/components/ActivityTimeline";
-import ComplianceCard from "@/components/ComplianceCard";
 import DecisionQueue from "@/components/DecisionQueue";
 import EmptyState from "@/components/EmptyState";
 import MetricCard from "@/components/MetricCard";
@@ -65,7 +64,6 @@ export default function OperationsPage() {
   const [planned, setPlanned] = useState([]);
   const [sprays, setSprays] = useState([]);
   const [observations, setObservations] = useState([]);
-  const [compliance, setCompliance] = useState(null);
   const [evidence, setEvidence] = useState(null);
   const [error, setError] = useState(null);
   const [scoutDialogOpen, setScoutDialogOpen] = useState(false);
@@ -73,19 +71,17 @@ export default function OperationsPage() {
   const load = useCallback(async () => {
     if (!farmId) return;
     try {
-      const [ov, p, s, o, c, ev] = await Promise.all([
+      const [ov, p, s, o, ev] = await Promise.all([
         api.getFarmOverview(farmId),
         api.listPlannedSprays(farmId),
         api.listSprayEvents(farmId),
         api.listScoutObservations(farmId),
-        api.getCompliance(farmId),
         api.getDecisionEvidence(farmId),
       ]);
       setOverview(ov);
       setPlanned(p);
       setSprays(s);
       setObservations(o);
-      setCompliance(c);
       setEvidence(ev);
       setError(null);
     } catch (err) {
@@ -110,7 +106,7 @@ export default function OperationsPage() {
       <EmptyState
         icon={ShieldCheck}
         title="No farms yet"
-        description="Seed the demo data (cd backend && python -m app.seed) or add a pilot farm to start checking planned sprays."
+        description="Add a pilot farm to start checking planned sprays — the intake takes about two minutes and nothing else is required."
         cta={
           <Link href="/pilot/new">
             <Button>Add pilot farm</Button>
@@ -175,7 +171,7 @@ export default function OperationsPage() {
         <Button size="sm">Record outcomes</Button>
       </Link>
     ) : overview?.urgency === "flags" ? (
-      <Link href="/compliance">
+      <Link href="/evidence?tab=compliance">
         <Button size="sm">Review risks</Button>
       </Link>
     ) : null;
@@ -194,6 +190,9 @@ export default function OperationsPage() {
         title="Operations"
         meta={
           <>
+            <span className="font-medium text-leaf-700">
+              The decision layer before the spray.
+            </span>
             <span>
               {activeFarm.name}
               {activeFarm.location ? ` · ${activeFarm.location}` : ""}
@@ -363,13 +362,6 @@ export default function OperationsPage() {
             )}
           </SectionCard>
 
-          <SectionCard
-            title="Field risk"
-            icon={<TriangleAlert />}
-            description="Pre-spray risk snapshot — entered values, not verified label data."
-          >
-            <ComplianceCard data={compliance} />
-          </SectionCard>
         </div>
       </div>
 
@@ -386,13 +378,17 @@ export default function OperationsPage() {
           </SectionCard>
         </div>
         <div className="space-y-4 lg:col-span-5">
-          <SectionCard
-            title="Field conditions"
-            icon={<CloudSun />}
-            description="Simulated demo weather — not a live feed."
-          >
-            <WeatherCard farmId={farmId} />
-          </SectionCard>
+          {/* Weather is a mock service — shown on demo farms only; a real pilot
+              farm never renders a simulated widget. */}
+          {overview?.is_demo && (
+            <SectionCard
+              title="Field conditions"
+              icon={<CloudSun />}
+              description="Simulated demo weather — not a live feed."
+            >
+              <WeatherCard farmId={farmId} />
+            </SectionCard>
+          )}
 
           <SectionCard
             title="Pilot evidence"

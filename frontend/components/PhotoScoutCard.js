@@ -2,12 +2,15 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useDemoTag } from "@/lib/farm-context";
 
 // "Do I really need to spray?" photo copilot. Upload a field photo, a multimodal model
 // (Claude) describes what it appears to see, and the finding pre-fills a scouting note the
 // grower/PCA must review and confirm. Honest by design: AI-suggested, not a diagnosis, never
 // "spray now". The confirmed note feeds the existing rule engine (CV is an input, not the decider).
 export default function PhotoScoutCard({ farmId, onCreated }) {
+  // Demo farms only accept simulated records (the backend 409s on mixing).
+  const demoTag = useDemoTag(farmId);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [concern, setConcern] = useState("");
@@ -52,6 +55,7 @@ export default function PhotoScoutCard({ farmId, onCreated }) {
     try {
       await api.createScoutObservation(farmId, {
         ...result.suggested_observation,
+        ...demoTag,
         visible_issue: issue || null,
         severity_1_to_5: severity === "" ? null : Number(severity),
       });

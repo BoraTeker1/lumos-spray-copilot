@@ -8,7 +8,7 @@ import io
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app import ai_brief, clock, crud, csv_import, decision_status, extraction, llm, schemas
@@ -48,15 +48,31 @@ app.add_middleware(
 )
 
 
+# Demo/real mixing is rejected wherever a record is created (several crud entry
+# points share the guard), so it maps to 409 once here instead of per-route.
+@app.exception_handler(crud.DemoMixingError)
+def _demo_mixing_handler(request, exc: crud.DemoMixingError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
 @app.on_event("startup")
 def _startup() -> None:
+    # A pinned demo clock must be an explicit choice (LUMOS_DEMO_MODE=1), never a
+    # leftover env var silently corrupting real pilot timestamps and PHI/REI math.
+    clock.assert_safe_for_serving()
     init_db()
 
 
 # ------------------------------------------------------------------------ Health
 @app.get("/health", tags=["health"])
 def health():
-    return {"status": "ok", "service": "lumos-spray-copilot"}
+    return {
+        "status": "ok",
+        "service": "lumos-spray-copilot",
+        # "pinned" means LUMOS_DEMO_TODAY is anchoring every date — demo server only.
+        "clock_mode": clock.mode(),
+        "pinned_date": clock.pinned_anchor(),
+    }
 
 
 # ------------------------------------------------------------------------- Farms
@@ -925,11 +941,13 @@ async def farm_document_extraction(
     the rows and commits them via POST /farms/{id}/import/rows.
     """
     farm = _require_farm(db, farm_id)
-    if record_type not in csv_import.FIELDS_BY_TYPE:
+    # AI extraction supports the record types with an extraction output model —
+    # spray_events history is CSV-import only for now.
+    if record_type not in extraction.OUTPUT_MODELS:
         raise HTTPException(
             status_code=422,
             detail=f"Unknown record_type '{record_type}'. Use one of: "
-            f"{', '.join(sorted(csv_import.FIELDS_BY_TYPE))}.",
+            f"{', '.join(sorted(extraction.OUTPUT_MODELS))}.",
         )
 
     file_bytes = None

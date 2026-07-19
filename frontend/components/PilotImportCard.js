@@ -17,6 +17,18 @@ import { Button } from "@/components/ui/button";
 const RECORD_TYPES = [
   { value: "planned_sprays", label: "Planned sprays (recommendations)" },
   { value: "scout_observations", label: "Scouting observations" },
+  // Historical actual applications — the reduction baseline's denominator.
+  // CSV-only: there is no AI-extraction model for spray history (yet).
+  { value: "spray_events", label: "Spray history (actual applications)", csvOnly: true },
+];
+
+// How slash dates in the file are read. "auto" refuses ambiguous m/d-vs-d/m rows
+// instead of guessing — a wrong guess silently shifts PHI/REI math by months.
+const DATE_FORMATS = [
+  { value: "auto", label: "Dates: auto (ambiguous rows error)" },
+  { value: "iso", label: "Dates: YYYY-MM-DD only" },
+  { value: "mdy", label: "Dates: MM/DD/YYYY" },
+  { value: "dmy", label: "Dates: DD/MM/YYYY" },
 ];
 
 // Canonical fields per record type (mirrors backend csv_import.py) for the
@@ -33,6 +45,12 @@ const FIELD_OPTIONS = {
     "external_record_id", "field_block", "observation_date", "crop_stage",
     "visible_issue", "severity", "severity_scale", "count_value", "observer", "notes",
   ],
+  spray_events: [
+    "external_record_id", "field_block", "application_date", "product_name",
+    "active_ingredient", "moa_group", "pesticide_class", "target_pest_or_disease",
+    "rate_amount", "rate_unit", "treated_acres", "cost",
+    "pre_harvest_interval_days", "re_entry_interval_hours", "notes",
+  ],
 };
 
 const AI_ROW_METADATA = ["source_snippet", "row_confidence"];
@@ -40,6 +58,7 @@ const AI_ROW_METADATA = ["source_snippet", "row_confidence"];
 export default function PilotImportCard({ farmId, onImported }) {
   const [mode, setMode] = useState("csv"); // "csv" | "ai"
   const [recordType, setRecordType] = useState("planned_sprays");
+  const [dateFormat, setDateFormat] = useState("auto");
   const [text, setText] = useState("");
   const [filename, setFilename] = useState(null);
   const [aiFile, setAiFile] = useState(null);
@@ -95,6 +114,7 @@ export default function PilotImportCard({ farmId, onImported }) {
         csv_text: text,
         mapping: overrides ?? mapping,
         dry_run: dryRun,
+        date_format: dateFormat,
         source_filename: filename,
       });
       setReport(result.report);
@@ -208,7 +228,12 @@ export default function PilotImportCard({ farmId, onImported }) {
           <button
             type="button"
             className={`px-2.5 py-1.5 ${mode === "ai" ? "bg-gray-900 text-white" : "bg-white text-gray-600"}`}
-            onClick={() => { setMode("ai"); reset(); }}
+            onClick={() => {
+              setMode("ai");
+              // Spray history is CSV-only — no AI-extraction model exists for it.
+              if (recordType === "spray_events") setRecordType("planned_sprays");
+              reset();
+            }}
           >
             AI extract (PDF / text)
           </button>
@@ -221,10 +246,21 @@ export default function PilotImportCard({ farmId, onImported }) {
             reset(true);
           }}
         >
-          {RECORD_TYPES.map((t) => (
+          {RECORD_TYPES.filter((t) => mode === "csv" || !t.csvOnly).map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
+        {mode === "csv" && (
+          <select
+            className="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+            value={dateFormat}
+            onChange={(e) => setDateFormat(e.target.value)}
+          >
+            {DATE_FORMATS.map((f) => (
+              <option key={f.value} value={f.value}>{f.label}</option>
+            ))}
+          </select>
+        )}
         {mode === "csv" && (
           <a
             className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"

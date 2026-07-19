@@ -23,8 +23,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import CompliancePanel from "@/components/CompliancePanel";
 import DataTable from "@/components/DataTable";
 import DecisionEvidenceCard from "@/components/DecisionEvidenceCard";
+import ReductionCard from "@/components/ReductionCard";
 import { inDateRange } from "@/components/DateRangeFilter";
 import EmptyState from "@/components/EmptyState";
 import FilterBar from "@/components/FilterBar";
@@ -148,6 +150,14 @@ export default function EvidencePage() {
   const [evidence, setEvidence] = useState(null);
   const [error, setError] = useState(null);
   const [scope, setScope] = useState(null); // "demo" | "real" (default derived on load)
+  // Outer view: "evidence" | "compliance" (the old /compliance page lives here now;
+  // ?tab=compliance deep-links to it — read on mount, SSR-safe).
+  const [view, setView] = useState("evidence");
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "compliance") {
+      setView("compliance");
+    }
+  }, []);
   const [inputPlans, setInputPlans] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [fieldFilter, setFieldFilter] = useState("");
@@ -281,12 +291,13 @@ export default function EvidencePage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        breadcrumbs={[{ label: "Evidence & reports" }, { label: activeFarm.name }]}
-        title="Evidence & reports"
+        breadcrumbs={[{ label: "Evidence & compliance" }, { label: activeFarm.name }]}
+        title="Evidence & compliance"
         meta={
           <span>
-            Outcomes, documentation completeness, and on-demand reports for{" "}
-            {activeFarm.name}. Simulated and real records are never combined.
+            Outcomes, documentation completeness, compliance signals, and on-demand
+            reports for {activeFarm.name}. Simulated and real records are never
+            combined.
           </span>
         }
         actions={
@@ -317,6 +328,26 @@ export default function EvidencePage() {
         </div>
       )}
 
+      {/* Outer view: pilot evidence vs. the compliance attention view (the former
+          /compliance page — that route redirects here). */}
+      <Tabs value={view} onValueChange={setView}>
+        <TabsList>
+          <TabsTrigger value="evidence">
+            <FileCheck className="h-4 w-4" />
+            Evidence
+          </TabsTrigger>
+          <TabsTrigger value="compliance">
+            <TriangleAlert className="h-4 w-4" />
+            Compliance
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="compliance">
+          <CompliancePanel />
+        </TabsContent>
+
+        <TabsContent value="evidence">
+          <div className="space-y-6">
       {/* Explicit scope control — simulated and real evidence never mix. */}
       <Tabs value={scope || "real"} onValueChange={setScope}>
         <TabsList>
@@ -537,6 +568,17 @@ export default function EvidencePage() {
         </SectionCard>
       )}
 
+      {/* Measured spray reduction — the pesticide-reduction story, front and
+          center. Its honesty gates stay: no declared baseline means no number,
+          and weak/simulated baselines render as illustrative, never a headline. */}
+      <SectionCard
+        title="Measured spray reduction"
+        icon={<ListChecks />}
+        description="Sprays vs. a grower/PCA-declared baseline. No baseline, no number; low-confidence figures are marked illustrative."
+      >
+        <ReductionCard farmId={farmId} refreshKey={`${planned.length}`} />
+      </SectionCard>
+
       {/* Reports & exports — generated on demand; no stored history to misstate. */}
       <SectionCard
         title="Reports & exports"
@@ -606,6 +648,9 @@ export default function EvidencePage() {
           )}
         </div>
       </SectionCard>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

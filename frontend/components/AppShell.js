@@ -14,7 +14,6 @@ import {
   Leaf,
   MessageSquare,
   PanelLeft,
-  ShieldAlert,
   ShieldCheck,
   ShoppingCart,
   Sprout,
@@ -25,17 +24,19 @@ import { cn } from "@/lib/utils";
 
 // Sidebar sections. Every farm-scoped page reads the active farm from
 // FarmProvider; /internal stays deliberately unlinked (operator tooling).
+// The primary group IS the wedge — the pre-spray decision loop (scout → check →
+// review → apply → evidence). Everything else, including the Phase-1 procurement
+// module, lives in the secondary group: reachable, never co-equal.
 const MAIN_NAV = [
   { href: "/", label: "Operations", icon: LayoutDashboard, exact: true },
   { href: "/farms", label: "Farms & fields", icon: Sprout },
   { href: "/decisions", label: "Decisions", icon: ShieldCheck },
   { href: "/scouting", label: "Scouting", icon: Eye },
   { href: "/applications", label: "Applications", icon: Droplets },
-  { href: "/inputs", label: "Inputs & finance", icon: ShoppingCart },
-  { href: "/compliance", label: "Compliance", icon: ShieldAlert },
-  { href: "/evidence", label: "Evidence & reports", icon: FileCheck },
+  { href: "/evidence", label: "Evidence & compliance", icon: FileCheck },
 ];
 const BOTTOM_NAV = [
+  { href: "/inputs", label: "Inputs & finance", icon: ShoppingCart },
   { href: "/pilot/new", label: "Pilot setup", icon: ClipboardList },
   { href: "/feedback", label: "Feedback", icon: MessageSquare },
 ];

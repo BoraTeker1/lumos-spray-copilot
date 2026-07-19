@@ -26,8 +26,11 @@ FollowUpEventType = Literal[
     "harvest_outcome", "yield_quality_outcome", "note",
 ]
 ImpactLevel = Literal["positive", "neutral", "negative", "unknown"]
-# CSV pilot-import record types.
-ImportRecordType = Literal["planned_sprays", "scout_observations"]
+# CSV pilot-import record types. spray_events = historical *actual* applications —
+# the reduction baseline's denominator.
+ImportRecordType = Literal["planned_sprays", "scout_observations", "spray_events"]
+# Import date-format modes; "auto" rejects ambiguous m/d-vs-d/m dates (never guessed).
+ImportDateFormat = Literal["auto", "iso", "mdy", "dmy"]
 
 
 # --------------------------------------------------------------------------- Farm
@@ -37,6 +40,8 @@ class FarmBase(BaseModel):
     country: str = "US"
     crop_type: str = "greenhouse_tomato"
     greenhouse_area: float | None = None
+    # Unit of greenhouse_area ("acres" / "m2") — explicit data, not implied by country.
+    area_unit: Literal["acres", "m2"] | None = None
     planting_date: date | None = None
     expected_harvest_date: date | None = None
     advisor_involved: bool | None = None
@@ -52,6 +57,7 @@ class FarmUpdate(BaseModel):
     country: str | None = None
     crop_type: str | None = None
     greenhouse_area: float | None = None
+    area_unit: Literal["acres", "m2"] | None = None
     planting_date: date | None = None
     expected_harvest_date: date | None = None
     advisor_involved: bool | None = None
@@ -70,14 +76,23 @@ class SprayEventBase(BaseModel):
     pesticide_class: str | None = None
     target_pest_or_disease: str | None = None
     dose: str | None = None
+    # Structured applied quantity (entered values; units not normalized/converted).
+    rate_amount: float | None = Field(default=None, gt=0)
+    rate_unit: str | None = None
+    treated_acres: float | None = Field(default=None, gt=0)
     application_date: date
     cost: float | None = None
     pre_harvest_interval_days: int | None = None
     re_entry_interval_hours: int | None = None
     field_block: str | None = None
+    external_record_id: str | None = None
+    source_system: str | None = None
+    source_filename: str | None = None
     notes: str | None = None
-    data_source: str | None = None
-    data_confidence: str | None = None
+    # Default = a real manual entry. (Explicit None used to fall through to the ORM
+    # column default "demo"/"simulated", silently tagging real API records as demo.)
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
     pilot_import_batch_id: int | None = None
 
 
@@ -111,8 +126,9 @@ class ScoutObservationBase(BaseModel):
     observer: str | None = None
     source_system: str | None = None
     source_filename: str | None = None
-    data_source: str | None = None
-    data_confidence: str | None = None
+    # Default = a real manual entry (see SprayEventBase for why not None).
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
     pilot_import_batch_id: int | None = None
 
 
@@ -501,6 +517,7 @@ class RowImportRequest(BaseModel):
     record_type: ImportRecordType
     rows: list[dict]
     dry_run: bool = True
+    date_format: ImportDateFormat = "auto"
     source_label: str | None = None
     source_filename: str | None = None
     imported_by: str | None = None
@@ -520,6 +537,9 @@ class CsvImportRequest(BaseModel):
     csv_text: str
     mapping: dict[str, str] | None = None
     dry_run: bool = True
+    # How slash dates are read; "auto" errors on ambiguous m/d-vs-d/m rows instead
+    # of guessing (a wrong guess silently shifts PHI/REI math by months).
+    date_format: ImportDateFormat = "auto"
     source_system: str | None = None
     source_filename: str | None = None
     imported_by: str | None = None

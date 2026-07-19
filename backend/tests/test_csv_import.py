@@ -226,3 +226,116 @@ def test_scouting_csv_commit(client):
     assert obs["observer"] == "Sam Scout"
     assert obs["data_source"] == "spreadsheet"
     assert obs["source_filename"] == "scouting.csv"
+
+
+# --------------------------------------------------- spray-event history import
+SPRAY_HEADER = "Record ID,Field,Product,AI,Date,Rate,Rate Unit,Acres,Cost,PHI,REI"
+
+
+def test_spray_event_history_csv_commit(client):
+    farm = _farm(client)
+    csv_text = (
+        SPRAY_HEADER + "\n"
+        "S1,Block 2,Captan 80 WDG,captan,2026-06-12,3.75,lb/acre,12,120,4,24\n"
+        "S2,Block 2,Captan 80 WDG,captan,2026-06-20,3.75,lb/acre,12,120,4,24"
+    )
+    result = _import(
+        client, farm["id"], csv_text, record_type="spray_events",
+        dry_run=False, source_filename="spray_log.csv", imported_by="Operator",
+    )
+    assert result["committed"] is True
+    assert result["batch"]["record_type"] == "spray_events"
+    assert result["batch"]["spray_event_count"] == 2
+
+    events = client.get(f"/farms/{farm['id']}/spray-events").json()
+    assert len(events) == 2
+    latest = events[0]  # listed newest-first
+    assert latest["product_name"] == "Captan 80 WDG"
+    assert latest["rate_amount"] == 3.75
+    assert latest["rate_unit"] == "lb/acre"
+    assert latest["treated_acres"] == 12.0
+    assert latest["external_record_id"] == "S2"
+    assert latest["data_source"] == "spreadsheet"
+    assert latest["source_filename"] == "spray_log.csv"
+
+    # Re-import: everything is a duplicate, nothing is written twice.
+    again = _import(
+        client, farm["id"], csv_text, record_type="spray_events", dry_run=False,
+    )
+    assert again["batch"]["spray_event_count"] == 0
+    assert again["report"]["duplicate_count"] == 2
+    assert len(client.get(f"/farms/{farm['id']}/spray-events").json()) == 2
+
+
+def test_spray_event_import_warns_on_missing_regulatory_values():
+    report = csv_import.parse_csv(
+        "spray_events",
+        "Product,Date\nCaptan 80 WDG,2026-06-12",
+    )
+    (row,) = report.rows
+    assert row.importable  # warnings never block the import
+    joined = " ".join(row.warnings)
+    assert "PHI missing" in joined
+    assert "REI missing" in joined
+    assert "no active ingredient" in joined
+
+
+def test_spray_event_template_download(client):
+    resp = client.get("/import/templates/spray_events.csv")
+    assert resp.status_code == 200
+    assert "application_date" in resp.text
+    assert csv_import.TEMPLATE_EXAMPLE_MARKER in resp.text
+
+
+# ------------------------------------------------------------------ date formats
+def test_auto_date_format_rejects_ambiguous_slash_dates():
+    report = csv_import.parse_csv(
+        "spray_events",
+        "Product,Date\nCaptan,07/04/2026",
+    )
+    (row,) = report.rows
+    assert not row.importable
+    assert any("ambiguous date" in e for e in row.errors)
+    assert any("'mdy' or 'dmy'" in e for e in row.errors)
+
+
+def test_auto_date_format_accepts_unambiguous_slash_dates():
+    report = csv_import.parse_csv(
+        "spray_events",
+        "Product,Date\nCaptan,07/18/2026\nCaptan,18/07/2026",
+    )
+    first, second = report.rows
+    assert first.values["application_date"].isoformat() == "2026-07-18"
+    assert second.values["application_date"].isoformat() == "2026-07-18"
+
+
+def test_explicit_dmy_and_mdy_formats():
+    dmy = csv_import.parse_csv(
+        "spray_events", "Product,Date\nCaptan,07/04/2026", date_format="dmy",
+    )
+    assert dmy.rows[0].values["application_date"].isoformat() == "2026-04-07"
+    mdy = csv_import.parse_csv(
+        "spray_events", "Product,Date\nCaptan,07/04/2026", date_format="mdy",
+    )
+    assert mdy.rows[0].values["application_date"].isoformat() == "2026-07-04"
+
+
+def test_iso_date_format_rejects_slash_dates():
+    report = csv_import.parse_csv(
+        "planned_sprays", "Product,Date\nSwitch,07/18/2026", date_format="iso",
+    )
+    (row,) = report.rows
+    assert not row.importable
+    assert any("use YYYY-MM-DD" in e for e in row.errors)
+
+
+def test_date_format_flows_through_the_endpoint(client):
+    farm = _farm(client)
+    result = _import(
+        client, farm["id"],
+        "Product,Date\nCaptan,07/04/2026",
+        record_type="spray_events", date_format="dmy", dry_run=False,
+    )
+    assert result["batch"]["spray_event_count"] == 1
+    (event,) = client.get(f"/farms/{farm['id']}/spray-events").json()
+    assert event["application_date"] == "2026-04-07"

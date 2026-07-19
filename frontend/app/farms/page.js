@@ -86,7 +86,7 @@ function DemoToolsMenu({ onReset, resetting }) {
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
         >
           <RotateCcw className="h-4 w-4" />
-          {resetting ? "Resetting…" : "Reset YC demo data"}
+          {resetting ? "Resetting…" : "Reset demo data"}
         </button>
       </div>
     </details>
@@ -132,7 +132,7 @@ export default function FarmsPage() {
   async function resetDemo() {
     if (
       !window.confirm(
-        "Reset the YC demo? This drops and re-seeds ALL demo data, anchored to today."
+        "Reset the demo data? This drops and re-seeds ALL demo data, anchored to today."
       )
     ) {
       return;
@@ -378,7 +378,7 @@ export default function FarmsPage() {
         <EmptyState
           icon={Sprout}
           title="No farms yet"
-          description="Seed the demo data (cd backend && python -m app.seed) or add a pilot farm."
+          description="Add a pilot farm to get started — the intake takes about two minutes."
           cta={
             <Link href="/pilot/new">
               <Button>Add pilot farm</Button>

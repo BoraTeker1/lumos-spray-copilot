@@ -111,6 +111,18 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "rate",
+      header: "Rate / acres",
+      priority: "secondary",
+      render: (s) => (
+        <span className="whitespace-nowrap text-xs text-gray-600">
+          {s.rate_amount != null ? `${s.rate_amount} ${s.rate_unit || ""}`.trim() : "—"}
+          {" · "}
+          {s.treated_acres != null ? `${s.treated_acres} ac` : "—"}
+        </span>
+      ),
+    },
+    {
       key: "target",
       header: "Target",
       priority: "secondary",

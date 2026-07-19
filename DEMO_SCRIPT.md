@@ -23,8 +23,8 @@ re-run `python -m app.seed` first for a clean state. The homepage hero has the t
    **🇺🇸 Golden Coast Strawberry Ranch**.
 2. **(30s) The seeded blocked decision.** The **Decision queue** shows the story that already
    happened: a 4th captan cover spray planned **two days before harvest** came back
-   **BLOCK — definitive** (PHI arithmetic shown: intended date + 4 days clears *after* harvest,
-   plus "use number 4 of captan in 30 days"; definitive because the values were
+   **BLOCK — PCA-authorized** (PHI arithmetic shown: intended date + 4 days clears *after*
+   harvest, plus "use number 4 of captan in 30 days"; PCA-authorized because the values were
    **PCA-entered** — the source authority is printed on every rule). The demo PCA **edited**
    the guidance — switch to a PHI-0 product — and the recorded outcome is
    **Changed product → Switch 62.5 WG**, applied on the intended day.
@@ -34,9 +34,11 @@ re-run `python -m app.seed` first for a clean state. The homepage hero has the t
 3. **(35s) Run one live.** Click **Check a planned spray** → product `Captan 80 WDG` + date;
    expand compliance values → AI `captan`, PHI `4`, REI `24` → **Run the decision check** →
    **PROVISIONAL BLOCK**, with the triggered rules, the exact calculations, inputs used, and
-   who entered them. *"Grower-entered values can never produce a definitive verdict — only
-   PCA-confirmed or label-verified data can. Honest by construction."* Approve as the PCA,
-   record **Avoided** with a reason.
+   who entered them. *"Grower-entered values always yield a provisional verdict — only
+   PCA-entered or label-verified data can back a PCA-authorized one. Honest by
+   construction."* Approve as the PCA, record **Avoided** with a reason.
+   (Checks run live on a demo farm are saved as **simulated demo data** — the sheet says so —
+   and real records can never mix onto a demo farm.)
 4. **(15s) Evidence + close.** Evidence tab → **Decision evidence**: decisions checked,
    conflicts caught, sprays changed/avoided, PCA acceptance rate — demo data excluded,
    every caveat printed. *"This is the per-pilot scoreboard we'll fill with real growers."*

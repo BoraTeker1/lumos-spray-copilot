@@ -7,4 +7,5 @@ pydantic>=2.8
 httpx>=0.27
 python-multipart>=0.0.9   # file uploads (field-photo analysis)
 anthropic>=0.40           # multimodal photo analysis (optional; falls back to a mock without a key)
+alembic>=1.13             # schema migrations (baseline exists; required once real pilot data lands)
 pytest>=8.2
