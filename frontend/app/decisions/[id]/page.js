@@ -11,6 +11,7 @@ import Breadcrumbs from "@/components/Breadcrumbs";
 import StatusBadge from "@/components/StatusBadge";
 import { nextActionLabel } from "@/lib/status";
 import { DecisionReview, OutcomeRecorder } from "@/components/PreSpraySheet";
+import PcaDispositionCard from "@/components/PcaDispositionCard";
 
 // One-page printable/shareable decision record for a single pre-spray check:
 // inputs, every rule with its calculation and source authority, missing data,
@@ -30,6 +31,14 @@ import {
   isProvisionalAuthority,
 } from "@/lib/labels";
 import { formatArea, formatCost, formatDate } from "@/lib/format";
+
+// Section numbers are allocated in render order rather than hardcoded: two of
+// these sections are conditional, and hand-computed numbers (previously
+// `auditEvents.length > 0 ? 6 : 5`) drift the moment another one is added.
+function makeCounter() {
+  let n = 0;
+  return () => (n += 1);
+}
 
 function Section({ number, title, children }) {
   return (
@@ -70,6 +79,15 @@ const SOURCE_TYPE_BADGE = {
   imported_unverified: "amber",
   user_entered: "outline",
   demo: "outline",
+};
+
+// Mirrors STATUS.disposition in lib/status.js; used in the printable record where
+// a badge component would not survive print styling.
+const DISPOSITION_LABELS = {
+  follow_baseline: "Spray as scheduled",
+  defer: "Defer",
+  rescout: "Re-scout first",
+  insufficient_evidence: "Insufficient evidence",
 };
 
 const FOLLOW_UP_TYPES = [
@@ -181,17 +199,22 @@ export default function DecisionRecordPage({ params }) {
   const [inputValues, setInputValues] = useState([]);
   const [auditEvents, setAuditEvents] = useState([]);
   const [followUps, setFollowUps] = useState([]);
+  const [dispositions, setDispositions] = useState([]);
   const [error, setError] = useState(null);
 
   async function loadTrail(id) {
-    const [values, audit, events] = await Promise.all([
+    const [values, audit, events, calls] = await Promise.all([
       api.listInputValues(id),
       api.listAuditEvents(id),
       api.listFollowUpEvents(id),
+      // Dispositions only exist for pilot (block-linked) decisions; an empty list
+      // is the normal case everywhere else.
+      api.listPcaDispositions(id).catch(() => []),
     ]);
     setInputValues(values);
     setAuditEvents(audit);
     setFollowUps(events);
+    setDispositions(calls);
   }
 
   async function loadAll() {
@@ -222,6 +245,8 @@ export default function DecisionRecordPage({ params }) {
     provisional && ["approve", "block"].includes(planned.decision_outcome);
   const decided = planned.outcome !== "planned";
   const reviewed = ["approved", "edited", "rejected"].includes(planned.review_state);
+  // Allocates section numbers in render order; see makeCounter above.
+  const step = makeCounter();
 
   return (
     <div className="mx-auto max-w-5xl space-y-4">
@@ -286,7 +311,7 @@ export default function DecisionRecordPage({ params }) {
         {/* ------------------------------------------------ printable record */}
         <div className="rounded-xl border border-gray-200 bg-white p-6 print:border-0 print:p-0">
           <div className="space-y-5">
-            <Section number={1} title="Decision rationale — checks performed">
+            <Section number={step()} title="Decision rationale — checks performed">
               <ul className="space-y-2">
                 {rules.map((r) => (
                   <li key={r.rule_id} className="text-sm">
@@ -314,7 +339,7 @@ export default function DecisionRecordPage({ params }) {
               )}
             </Section>
 
-            <Section number={2} title="Supporting evidence — inputs used">
+            <Section number={step()} title="Supporting evidence — inputs used">
               <div className="grid gap-x-8 sm:grid-cols-2">
                 <Row label="Product" value={planned.product_name} />
                 <Row label="Active ingredient" value={planned.active_ingredient} />
@@ -404,7 +429,7 @@ export default function DecisionRecordPage({ params }) {
               )}
             </Section>
 
-            <Section number={3} title="PCA / agronomist review">
+            <Section number={step()} title="PCA / agronomist review">
               <div className="grid gap-x-8 sm:grid-cols-2">
                 <Row
                   label="Review status"
@@ -428,7 +453,48 @@ export default function DecisionRecordPage({ params }) {
               )}
             </Section>
 
-            <Section number={4} title="Final recorded outcome">
+            {dispositions.length > 0 && (
+              <Section number={step()} title="PCA pilot decision (Botrytis deferral)">
+                <p className="mb-2 text-xs text-gray-500">
+                  The licensed advisor&apos;s judgement about this scheduled
+                  application, recorded separately from the compliance check above and
+                  from what was ultimately done. Append-only: a change supersedes the
+                  earlier entry and never removes it.
+                </p>
+                <ul className="space-y-2">
+                  {dispositions.map((d) => {
+                    const isSuperseded = dispositions.some(
+                      (o) => o.supersedes_id === d.id
+                    );
+                    return (
+                      <li
+                        key={d.id}
+                        className={`rounded border border-gray-200 p-2 text-sm ${
+                          isSuperseded ? "text-gray-400" : "text-gray-800"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium">
+                            {DISPOSITION_LABELS[d.disposition] || d.disposition}
+                            {isSuperseded && " (superseded)"}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {d.decided_at?.slice(0, 16).replace("T", " ")}
+                          </span>
+                        </div>
+                        <p className="mt-1">{d.rationale}</p>
+                        <p className="mt-1 text-[11px] text-gray-500">
+                          Credential #{d.pca_credential_id} · inputs digest{" "}
+                          {d.snapshot_digest_at_decision?.slice(0, 12)}…
+                        </p>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Section>
+            )}
+
+            <Section number={step()} title="Final recorded outcome">
               <div className="grid gap-x-8 sm:grid-cols-2">
                 <Row
                   label="Outcome"
@@ -465,7 +531,7 @@ export default function DecisionRecordPage({ params }) {
             </Section>
 
             {auditEvents.length > 0 && (
-              <Section number={5} title="Immutable audit history">
+              <Section number={step()} title="Immutable audit history">
                 <ol className="space-y-1.5">
                   {auditEvents.map((e) => (
                     <li key={e.id} className="text-xs">
@@ -505,7 +571,7 @@ export default function DecisionRecordPage({ params }) {
               </Section>
             )}
 
-            <Section number={auditEvents.length > 0 ? 6 : 5} title="Follow-up timeline">
+            <Section number={step()} title="Follow-up timeline">
               {planned.follow_up_required && followUps.length === 0 && (
                 <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
                   Follow-up required: this outcome ({planned.outcome.replace(/_/g, " ")})
@@ -633,6 +699,10 @@ export default function DecisionRecordPage({ params }) {
               before application.
             </p>
           </div>
+
+          {/* Only meaningful for block-linked decisions: a disposition must be
+              anchored to a risk snapshot, and a snapshot is always about a block. */}
+          {planned.block_id && <PcaDispositionCard plannedId={planned.id} />}
 
           <AiBriefCard plannedId={planned.id} />
 

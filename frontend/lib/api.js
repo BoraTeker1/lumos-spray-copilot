@@ -3,11 +3,56 @@
 const BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// Session-held credentials. Never persisted to localStorage: a PCA token signs
+// professional recommendations, so it lives for one browser session and no longer.
+const PCA_TOKEN_KEY = "lumos.pcaToken";
+const OPERATOR_KEY_KEY = "lumos.operatorKey";
+
+function sessionValue(key) {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(key) || null;
+  } catch {
+    return null; // private mode / storage disabled
+  }
+}
+
+export const credentials = {
+  getPcaToken: () => sessionValue(PCA_TOKEN_KEY),
+  setPcaToken: (token) => window.sessionStorage.setItem(PCA_TOKEN_KEY, token),
+  clearPcaToken: () => window.sessionStorage.removeItem(PCA_TOKEN_KEY),
+  getOperatorKey: () => sessionValue(OPERATOR_KEY_KEY),
+  setOperatorKey: (key) => window.sessionStorage.setItem(OPERATOR_KEY_KEY, key),
+  clearOperatorKey: () => window.sessionStorage.removeItem(OPERATOR_KEY_KEY),
+};
+
+function pcaHeaders() {
+  const token = credentials.getPcaToken();
+  return token ? { "X-Lumos-Pca-Token": token } : {};
+}
+
+function operatorHeaders() {
+  const key = credentials.getOperatorKey();
+  return key ? { "X-Lumos-Operator-Key": key } : {};
+}
+
+// Query string from defined values only, so an omitted filter is truly omitted.
+function qs(params) {
+  const pairs = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== null && v !== ""
+  );
+  return pairs.length ? `?${new URLSearchParams(pairs)}` : "";
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
     cache: "no-store",
     ...options,
+    // MERGED, not spread-over. `...options` used to come after `headers`, so any
+    // caller passing headers replaced the object wholesale and silently dropped
+    // Content-Type — every POST body went up untyped. Merging is what makes the
+    // X-Lumos-Pca-Token / X-Lumos-Operator-Key headers possible at all.
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -269,6 +314,106 @@ export const api = {
     request(`/internal/orders/${orderId}/events`, {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  // ---------------------------------------------------------- Botrytis pilot
+  // Blocks — the comparison unit. Never inferred from the legacy `field_block` text.
+  listBlocks: (farmId) => request(`/farms/${farmId}/blocks`),
+  createBlock: (farmId, data) =>
+    request(`/farms/${farmId}/blocks`, { method: "POST", body: JSON.stringify(data) }),
+
+  // Observations. Append-only: a correction posts a new row with `supersedes_id`.
+  listWeatherObservations: (farmId, blockId) =>
+    request(`/farms/${farmId}/weather-observations${qs({ block_id: blockId })}`),
+  createWeatherObservation: (farmId, data) =>
+    request(`/farms/${farmId}/weather-observations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listScoutingSamples: (farmId, blockId) =>
+    request(`/farms/${farmId}/scouting-samples${qs({ block_id: blockId })}`),
+  createScoutingSample: (farmId, data) =>
+    request(`/farms/${farmId}/scouting-samples`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // Risk snapshot — freezes what was knowable. Immutable once written.
+  createRiskSnapshot: (plannedId, data = {}) =>
+    request(`/planned-sprays/${plannedId}/risk-snapshot`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listRiskSnapshots: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/risk-snapshots`),
+
+  // PCA disposition — ALWAYS requires a credential; there is no anonymous path.
+  createPcaDisposition: (plannedId, data) =>
+    request(`/planned-sprays/${plannedId}/pca-disposition`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers: pcaHeaders(),
+    }),
+  listPcaDispositions: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/pca-dispositions`),
+
+  // Protocol, arms, and block-level outcomes.
+  listPilotProtocols: (farmId) => request(`/farms/${farmId}/pilot-protocols`),
+  createPilotProtocol: (farmId, data) =>
+    request(`/farms/${farmId}/pilot-protocols`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listBlockAssignments: (protocolId) =>
+    request(`/pilot-protocols/${protocolId}/assignments`),
+  createBlockAssignment: (protocolId, data) =>
+    request(`/pilot-protocols/${protocolId}/assignments`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listBlockOutcomes: (farmId, blockId) =>
+    request(`/farms/${farmId}/block-outcomes${qs({ block_id: blockId })}`),
+  createBlockOutcome: (farmId, data) =>
+    request(`/farms/${farmId}/block-outcomes`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // ------------------------------------------------- operator-only (/internal)
+  // Risk assessments are SHADOW: this is the only surface that returns them, and it
+  // is deliberately absent from every PCA-facing payload.
+  runRiskAssessment: (plannedId, data = {}) =>
+    request(`/planned-sprays/${plannedId}/risk-assessment`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listShadowAssessments: (farmId) =>
+    request(`/internal/pilot/assessments${qs({ farm_id: farmId })}`, {
+      headers: operatorHeaders(),
+    }),
+  listPcaCredentials: () =>
+    request("/internal/pca-credentials", { headers: operatorHeaders() }),
+  createPcaCredential: (data) =>
+    request("/internal/pca-credentials", {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers: operatorHeaders(),
+    }),
+  revokePcaCredential: (credentialId) =>
+    request(`/internal/pca-credentials/${credentialId}/revoke`, {
+      method: "POST",
+      body: JSON.stringify({}),
+      headers: operatorHeaders(),
+    }),
+  authorizePcaForFarm: (credentialId, data) =>
+    request(`/internal/pca-credentials/${credentialId}/farm-authorizations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers: operatorHeaders(),
+    }),
+  listFarmPcaAuthorizations: (farmId) =>
+    request(`/internal/farms/${farmId}/pca-authorizations`, {
+      headers: operatorHeaders(),
     }),
 
   // CSV export URLs (used as direct download links)

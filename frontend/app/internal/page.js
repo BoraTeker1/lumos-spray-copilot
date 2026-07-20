@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
+import PilotOperatorCard from "@/components/PilotOperatorCard";
 import { api } from "@/lib/api";
 
 // INTERNAL tooling — deliberately not linked from the app navigation.
@@ -211,6 +212,16 @@ export default function InternalToolsPage() {
             )}
           </>
         )}
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">Botrytis shadow pilot</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Issue and authorize PCA credentials, review the protocol, and read shadow
+          risk assessments. Assessments are operator-only by construction — they are
+          absent from the PCA-facing decision payload, not merely hidden in their UI.
+        </p>
+        <PilotOperatorCard farmId={farmId} />
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">

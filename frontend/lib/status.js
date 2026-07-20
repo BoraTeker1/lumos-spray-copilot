@@ -50,6 +50,26 @@ export const STATUS = {
     avoided: { label: "Avoided", tone: "good", icon: Ban },
     inspected_first: { label: "Inspected first", tone: "good", icon: Search },
   },
+  // PCA disposition — the licensed advisor's judgement about a scheduled spray.
+  // Orthogonal to `verdict`, `review` and `outcome`: they are four different facts
+  // about four different moments. No value means "safe".
+  disposition: {
+    follow_baseline: { label: "Spray as scheduled", tone: "neutral", icon: Droplets },
+    defer: { label: "Defer", tone: "info", icon: Clock },
+    rescout: { label: "Re-scout first", tone: "warn", icon: Search },
+    insufficient_evidence: {
+      label: "Insufficient evidence", tone: "warn", icon: FileWarning,
+    },
+  },
+  // Disease-risk band. OPERATOR-ONLY while the pilot is blinded — the PCA-facing
+  // payload carries no risk field at all, so this never renders on their surfaces.
+  // `low` is a band, NOT a statement that deferring is safe.
+  riskBand: {
+    low: { label: "Low band", tone: "good", icon: CircleCheck },
+    moderate: { label: "Moderate band", tone: "warn", icon: TriangleAlert },
+    high: { label: "High band", tone: "risk", icon: OctagonX },
+    abstain: { label: "Abstained", tone: "neutral", icon: CircleHelp },
+  },
   // Evidence / documentation state (evidence_state).
   evidence: {
     complete: { label: "Complete", tone: "good", icon: CircleCheck },
@@ -172,6 +192,32 @@ export function planNextStep(status) {
 }
 
 // current_next_action machine key -> the specific button/action label.
+// Why a risk model declined to answer. Mirrors app/disease_risk.py's ABSTAIN_*
+// constants. Shown in full — an abstention with its reasons IS the useful artifact
+// during the pilot, not an error to hide.
+export const ABSTAIN_REASON_LABELS = {
+  thresholds_not_supplied:
+    "Published thresholds have not been transcribed from the primary source yet",
+  no_snapshot_payload: "No input snapshot was available",
+  unknown_model_version: "That model version is not registered",
+  no_station_within_range: "No weather station close enough to this block",
+  no_weather_in_window: "No weather readings in the lookback window",
+  weather_gap_exceeds_limit: "Weather record has a gap wider than the limit",
+  no_leaf_wetness_or_accepted_proxy: "No leaf-wetness data, and no accepted proxy",
+  scouting_older_than_limit: "Most recent scouting sample is too old",
+  no_scouting_sample_for_target: "No scouting sample for this target",
+  conflicting_readings_same_hour:
+    "Two stations disagree irreconcilably about the same hour",
+  crop_or_target_outside_pilot_scope: "Crop or target is outside the pilot's scope",
+  demo_or_simulated_input_present: "A demo/simulated input was present",
+  input_observed_after_as_of:
+    "An input is dated after the decision moment — this is a snapshot bug, not a data gap",
+};
+
+export function abstainReasonLabel(reason) {
+  return ABSTAIN_REASON_LABELS[reason] || reason;
+}
+
 export const NEXT_ACTION_LABELS = {
   await_pca_review: "Review (PCA)",
   resolve_conflict: "Resolve conflict",

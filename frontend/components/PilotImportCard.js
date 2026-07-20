@@ -20,6 +20,10 @@ const RECORD_TYPES = [
   // Historical actual applications — the reduction baseline's denominator.
   // CSV-only: there is no AI-extraction model for spray history (yet).
   { value: "spray_events", label: "Spray history (actual applications)", csvOnly: true },
+  // Botrytis pilot observation inputs. CSV-only: these are instrument and
+  // standardized-count records, not prose a model should be reading.
+  { value: "weather_observations", label: "Weather observations (pilot)", csvOnly: true },
+  { value: "scouting_samples", label: "Scouting samples (pilot)", csvOnly: true },
 ];
 
 // How slash dates in the file are read. "auto" refuses ambiguous m/d-vs-d/m rows
@@ -50,6 +54,16 @@ const FIELD_OPTIONS = {
     "active_ingredient", "moa_group", "pesticide_class", "target_pest_or_disease",
     "rate_amount", "rate_unit", "treated_acres", "cost",
     "pre_harvest_interval_days", "re_entry_interval_hours", "notes",
+  ],
+  weather_observations: [
+    "station_id", "station_name", "station_distance_km", "observed_at",
+    "temperature_c", "relative_humidity_pct", "rainfall_mm",
+    "leaf_wetness_minutes", "wetness_is_measured",
+  ],
+  scouting_samples: [
+    "external_record_id", "block_name", "observed_at", "method", "target",
+    "units_inspected", "units_affected", "severity_index", "severity_scale",
+    "scout_name",
   ],
 };
 
