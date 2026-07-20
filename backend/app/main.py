@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import (
-    ai_brief, clock, crud, csv_import, decision_status, extraction, llm,
+    ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction, llm,
     pca_authority, schemas,
 )
 from app.analytics import compute_cost_analytics
@@ -536,6 +536,46 @@ def post_risk_snapshot(
 def get_risk_snapshots(planned_id: int, db: Session = Depends(get_db)):
     _require_planned_spray(db, planned_id)
     return crud.list_risk_snapshots(db, planned_id)
+
+
+@app.post(
+    "/planned-sprays/{planned_id}/risk-assessment",
+    response_model=schemas.DiseaseRiskAssessment,
+    status_code=201,
+    tags=["pilot-risk"],
+)
+def post_risk_assessment(
+    planned_id: int,
+    payload: schemas.DiseaseRiskAssessmentCreate,
+    db: Session = Depends(get_db),
+):
+    """Run a versioned rule over the decision's latest snapshot. Operator tooling.
+
+    Returns the assessment to the OPERATOR who triggered it. This is not a PCA-facing
+    route: while the pilot is blinded the PCA's own view of the decision carries no
+    risk field at all, so recording a disposition cannot be influenced by it.
+
+    `botrytis_wetness_v1` currently abstains on every input — its published thresholds
+    have not been transcribed. That is a visible, reported state, not a silent failure.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    try:
+        return crud.create_disease_risk_assessment(
+            db, planned,
+            model_version=payload.model_version or disease_risk.DEFAULT_MODEL_VERSION,
+        )
+    except crud.SnapshotRequiredError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get(
+    "/internal/pilot/assessments",
+    response_model=list[schemas.DiseaseRiskAssessment],
+    tags=["internal"],
+)
+def get_shadow_assessments(farm_id: int | None = None, db: Session = Depends(get_db)):
+    """The ONLY surface that returns shadow assessments before unblinding."""
+    return crud.list_shadow_assessments(db, farm_id)
 
 
 def _require_planned_spray(db: Session, planned_id: int):

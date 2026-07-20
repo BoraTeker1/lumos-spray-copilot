@@ -12,8 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import (
-    clock, csv_import, decision_status, models, pca_authority, procurement_status,
-    risk_snapshot, schemas, target_aliases,
+    clock, csv_import, decision_status, disease_risk, models, pca_authority,
+    procurement_status, risk_snapshot, schemas, target_aliases,
 )
 from app.decision_engine import evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -455,6 +455,110 @@ def latest_risk_snapshot(
 ) -> models.RiskInputSnapshot | None:
     snapshots = list_risk_snapshots(db, planned_spray_id)
     return snapshots[-1] if snapshots else None
+
+
+class SnapshotRequiredError(Exception):
+    """Raised when an assessment is requested for a decision with no snapshot."""
+
+
+def farm_is_unblinded(db: Session, farm_id: int) -> bool:
+    """Has this farm's pilot protocol reached its recorded unblinding moment?
+
+    False for now: `PilotProtocol` does not exist yet, so every assessment is shadow.
+    When it lands, this reads `unblinded_at` — a protocol-versioned event with a
+    recorded date, deliberately NOT a config toggle or an environment variable,
+    because when the PCA started seeing risk output is part of the pilot's evidence.
+    """
+    return False
+
+
+def create_disease_risk_assessment(
+    db: Session,
+    planned: models.PlannedSpray,
+    *,
+    model_version: str = disease_risk.DEFAULT_MODEL_VERSION,
+    snapshot: models.RiskInputSnapshot | None = None,
+) -> models.DiseaseRiskAssessment:
+    """Run a versioned rule over this decision's latest snapshot and store the result.
+
+    Append-only: there is no update path. Re-running produces a NEW row, so a changed
+    model version or a later snapshot is visible as a sequence rather than overwriting
+    what was shown at the time.
+    """
+    snapshot = snapshot or latest_risk_snapshot(db, planned.id)
+    if snapshot is None:
+        raise SnapshotRequiredError(
+            "no risk snapshot exists for this decision — an assessment must be "
+            "anchored to the inputs that were knowable when it was made"
+        )
+
+    result = disease_risk.assess(
+        snapshot.payload,
+        model_version=model_version,
+        input_digest=snapshot.input_digest,
+    )
+
+    row = models.DiseaseRiskAssessment(
+        snapshot_id=snapshot.id,
+        planned_spray_id=planned.id,
+        farm_id=planned.farm_id,
+        block_id=snapshot.block_id,
+        model_family=result.model_family,
+        model_version=result.model_version,
+        input_digest=result.input_digest,
+        risk_band=result.risk_band,
+        probability=result.probability_or_index,
+        evidence_grade=result.evidence_grade,
+        horizon_hours=result.horizon_hours,
+        abstained=result.abstained,
+        abstain_reason=result.abstain_reason,
+        missing_inputs=list(result.missing_or_unreliable_inputs),
+        calibration_status=result.calibration_status,
+        local_validation_status=result.local_validation_status,
+        citation=result.citation,
+        calculation=result.calculation or None,
+        # Shadow unless the protocol says otherwise. Defaulting the other way would
+        # mean a wiring mistake silently unblinds the pilot.
+        is_shadow=not farm_is_unblinded(db, planned.farm_id),
+    )
+    db.add(row)
+    _add_audit_event(
+        db, planned, "risk_assessment_computed",
+        actor="lumos-rule-engine",
+        after={
+            "model_version": result.model_version,
+            "risk_band": result.risk_band,
+            "abstained": result.abstained,
+            "abstain_reason": result.abstain_reason,
+            "input_digest": result.input_digest,
+            "is_shadow": row.is_shadow,
+        },
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_disease_risk_assessments(
+    db: Session, planned_spray_id: int
+) -> list[models.DiseaseRiskAssessment]:
+    return list(
+        db.scalars(
+            select(models.DiseaseRiskAssessment)
+            .where(models.DiseaseRiskAssessment.planned_spray_id == planned_spray_id)
+            .order_by(models.DiseaseRiskAssessment.computed_at)
+        )
+    )
+
+
+def list_shadow_assessments(
+    db: Session, farm_id: int | None = None
+) -> list[models.DiseaseRiskAssessment]:
+    """Operator-only view. The single place shadow rows are readable before unblinding."""
+    stmt = select(models.DiseaseRiskAssessment)
+    if farm_id is not None:
+        stmt = stmt.where(models.DiseaseRiskAssessment.farm_id == farm_id)
+    return list(db.scalars(stmt.order_by(models.DiseaseRiskAssessment.computed_at.desc())))
 
 
 # ----------------------------------------------------------------------- SprayEvents

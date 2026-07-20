@@ -345,6 +345,63 @@ class RiskInputSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
 
+class DiseaseRiskAssessment(Base):
+    """One versioned rule's output for one snapshot. Append-only.
+
+    Anchored to a snapshot (NOT NULL) because an assessment whose inputs cannot be
+    reproduced is not evidence — it is an opinion with a timestamp.
+
+    `is_shadow` is the load-bearing column of the pilot. While True the row is omitted
+    from every PCA-facing serializer — not hidden in the UI, absent from the payload —
+    so the PCA's disposition is recorded without having seen it. That is what makes
+    their decision usable as an unbiased baseline to score the rule against later.
+    Unblinding is a protocol-versioned event (PilotProtocol.unblinded_at), not a flag
+    someone can flip.
+
+    There is no product, rate or action column here, mirroring
+    `disease_risk.RiskAssessment`: this row cannot express a pesticide recommendation.
+    """
+    __tablename__ = "disease_risk_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("risk_input_snapshots.id"), nullable=False, index=True
+    )
+    planned_spray_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planned_sprays.id"), index=True
+    )
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+
+    model_family: Mapped[str] = mapped_column(String(60), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    # Ties the result to the exact inputs it saw; reproducible from the audit record.
+    input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    risk_band: Mapped[str] = mapped_column(String(20), nullable=False)
+    probability: Mapped[float | None] = mapped_column(Float)
+    evidence_grade: Mapped[str | None] = mapped_column(String(2))
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    abstained: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    abstain_reason: Mapped[str | None] = mapped_column(String(80))
+    # Every reason, not just the first — the full evidence gap is the useful artifact.
+    missing_inputs: Mapped[list | None] = mapped_column(JSON)
+
+    # Never derived from agreement with a PCA; only from realized outcomes (Phase 2).
+    calibration_status: Mapped[str] = mapped_column(
+        String(40), default="not_calibrated", nullable=False
+    )
+    local_validation_status: Mapped[str | None] = mapped_column(Text)
+    citation: Mapped[str | None] = mapped_column(Text)
+    calculation: Mapped[dict | None] = mapped_column(JSON)
+
+    is_shadow: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    data_source: Mapped[str] = mapped_column(String(40), default="rule_engine")
+    data_confidence: Mapped[str] = mapped_column(String(40), default="computed")
+
+
 class PlannedSpray(Base):
     """An *intended* spray checked before it happens — the pre-spray decision point.
 

@@ -300,6 +300,46 @@ class RiskInputSnapshot(BaseModel):
     created_at: datetime
 
 
+class DiseaseRiskAssessmentCreate(BaseModel):
+    """Operator-triggered. Runs against the decision's latest snapshot."""
+    model_config = ConfigDict(protected_namespaces=())
+    model_version: str | None = None
+
+
+class DiseaseRiskAssessment(BaseModel):
+    """OPERATOR-FACING ONLY.
+
+    This schema is deliberately not referenced by any PCA-facing response model. While
+    `is_shadow` is True the PCA must not see a risk band, and the guarantee is that the
+    field is absent from their payload — not that the UI declines to draw it. The only
+    route that returns this is the operator-gated shadow view.
+
+    Note the fields that do not exist: no product, no rate, no recommended action.
+    """
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+    id: int
+    snapshot_id: int
+    planned_spray_id: int | None = None
+    farm_id: int
+    block_id: int
+    model_family: str
+    model_version: str
+    input_digest: str
+    risk_band: str
+    probability: float | None = None
+    evidence_grade: str | None = None
+    horizon_hours: int
+    abstained: bool
+    abstain_reason: str | None = None
+    missing_inputs: list | None = None
+    calibration_status: str
+    local_validation_status: str | None = None
+    citation: str | None = None
+    calculation: dict | None = None
+    is_shadow: bool
+    computed_at: datetime
+
+
 # --------------------------------------------------------------------- SprayEvent
 class SprayEventBase(BaseModel):
     product_name: str
