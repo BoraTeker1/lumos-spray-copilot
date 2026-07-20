@@ -14,10 +14,10 @@ from sqlalchemy.orm import Session
 
 from app import (
     ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction, llm,
-    pca_authority, schemas,
+    operator_key, pca_authority, schemas,
 )
 from app.analytics import compute_cost_analytics
-from app.database import get_db, init_db
+from app.database import SessionLocal, get_db, init_db
 from app.pilot_evidence import (
     build_ai_calibration,
     build_decision_evidence,
@@ -50,6 +50,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _operator_key_middleware(request, call_next):
+    """Gate every /internal path behind the deployment's operator key.
+
+    Middleware rather than a per-route dependency ON PURPOSE. These routes mint PCA
+    credentials and grant farm authorizations, so the guarantee that matters is "every
+    path under /internal", not "every route someone remembered to annotate" — the
+    fifteenth internal route added six months from now is covered by construction.
+
+    No-ops when LUMOS_OPERATOR_KEY is unset (demo/local development); `_startup`
+    refuses to boot in that state once the database holds real records.
+    """
+    if request.url.path.startswith("/internal"):
+        reason = operator_key.denial_reason(
+            request.headers.get(operator_key.KEY_HEADER)
+        )
+        if reason is not None:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": operator_key.DENIAL_MESSAGES.get(reason, reason)},
+            )
+    return await call_next(request)
 
 
 # Demo/real mixing is rejected wherever a record is created (several crud entry
@@ -143,6 +167,14 @@ def _startup() -> None:
     # leftover env var silently corrupting real pilot timestamps and PHI/REI math.
     clock.assert_safe_for_serving()
     init_db()
+    # An unprotected operator surface must be impossible once real data exists.
+    # Reuses the same conservative "might be real pilot data" test that guards the
+    # demo-reset endpoint, rather than inventing a second definition of "real".
+    db = SessionLocal()
+    try:
+        operator_key.assert_safe_for_serving(crud.has_non_demo_data(db))
+    finally:
+        db.close()
 
 
 # ------------------------------------------------------------------------ Health
