@@ -48,6 +48,12 @@ your task needs. Optimized so future Claude/Cursor sessions avoid re-reading the
 - **Current priority is real-world validation, not more product building.**
 - **Stop building product unless a validation need directly requires it.** Default answer to
   "should I build X?" is no — get buyer evidence first.
+- **As of 2026-07-20** the repo is repointed at ONE falsifiable hypothesis: the Botrytis
+  deferral shadow pilot (`BOTRYTIS_PILOT.md`). V1 of the evidence loop is built and the
+  remaining blockers are not code — they are the threshold source table, the farm's actual
+  weather data, the PCA's action threshold, and whether block randomization is operationally
+  acceptable. **Do not build the reporting/calibration layer until real outcomes exist**; its
+  shape will be wrong until you have seen one real block outcome.
 
 ---
 
@@ -83,6 +89,53 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 ## 5. Product Features Already Built
 
 Backend + frontend both implement:
+
+- **Botrytis Deferral Shadow Pilot V1 (2026-07-20)** — the current focus. Full contract in
+  **`BOTRYTIS_PILOT.md`**; read that before touching any of it. One falsifiable hypothesis:
+  can a licensed PCA defer a scheduled Botrytis application 24–72h, and can we measure it?
+  - **Pilot observation layer:** `Block` (the comparison unit, nullable `block_id` links;
+    `field_block` free text deliberately untouched), `WeatherObservation` + `ScoutingSample`
+    (units in the column names, dual `observed_at`/`recorded_at`, append-only with
+    `supersedes_id`, partial unique indexes `WHERE supersedes_id IS NULL`), and two more CSV
+    record types.
+  - **`app/risk_snapshot.py` + `RiskInputSnapshot` — the leakage boundary.** Framework-free,
+    and its signature admits ONLY block + observations, so post-decision data cannot be passed
+    in without a visible contract change. Admissibility is checked on BOTH timestamps: the
+    load-bearing rule is `recorded_at > as_of`, because filtering on `observed_at` alone looks
+    correct and silently leaks hindsight. Content-addressed (sha256 over canonical JSON).
+  - **`app/disease_risk.py` — versioned rules that mostly abstain.** No LLM in this path at
+    all. `RiskAssessment` has no product/rate/action field, so a pesticide recommendation is
+    *inexpressible*, not merely forbidden. Bands are `low|moderate|high|abstain` — there is no
+    "safe". Every abstention condition runs BEFORE the rule and ALL reasons are reported.
+    **`botrytis_wetness_v1` is registered and abstains with `thresholds_not_supplied`: its
+    coefficients are deliberately absent, and must be transcribed from the primary source, not
+    recalled or searched for** — see BOTRYTIS_PILOT.md §3 for why a plausible number would pass
+    every writable test.
+  - **`DiseaseRiskAssessment` + shadow mode:** `is_shadow` defaults True and shadow rows are
+    omitted from every PCA-facing serializer (absent from the payload, not hidden in the UI).
+    `GET /internal/pilot/assessments` is the only surface that returns them. Unblinding is a
+    dated, protocol-versioned event (`PilotProtocol.unblinded_at`), never a config toggle.
+  - **`PcaDisposition`** (`follow_baseline|defer|rescout|insufficient_evidence`, mandatory
+    rationale, anchored to a snapshot digest, append-only, always credential-gated via
+    `crud.require_pca_for_farm`). **Strictly orthogonal:** recording one never writes a
+    `decision_*`/`review_*` column, and `defer` neither unlocks an applied outcome nor
+    satisfies a required review. Four facts about four moments — engine verdict, review,
+    disposition, outcome — stay separate, or the pilot measures nothing.
+  - **`PilotProtocol` / `BlockAssignment` / `BlockOutcomeObservation`:** thin versioned
+    protocol reference (the protocol is a document), offline randomization with its seed
+    recorded, and per-block/per-harvest outcomes. The last is deliberately NOT on
+    `DecisionFollowUpEvent` (whose `planned_spray_id` is non-null) — packout is evidence for
+    many decisions and for none in particular.
+  - **`DELETE /planned-sprays/{id}` now 409s** once a decision carries evidence beyond its
+    creation. The cascade on `input_values`/`audit_events`/`follow_up_events` made the
+    unguarded route silently destroy the immutable audit trail.
+  - **Honest units:** `treated_area_unit` records what the acre-named `treated_acres` actually
+    is; `pilot_evidence._sum_treated_area` refuses to total a mixed-unit set rather than
+    converting. `NOT_CALCULATED` gains `seasonal_pesticide_use_reduction` — deferring passes is
+    not a season-total reduction.
+  - Frontend: `PcaDispositionCard` on `/decisions/[id]` (renders nothing about risk, and
+    cannot), `PilotOperatorCard` on `/internal`, `disposition`/`riskBand` STATUS kinds.
+    `lib/api.js` now merges headers instead of letting `...options` clobber them.
 
 - **Pilot-integrity & measurement-foundation cycle (2026-07-18)** — hardening for the first
   REAL pilot, no new claims:
@@ -353,7 +406,11 @@ Backend + frontend both implement:
   `PilotFeedback`, `PilotImportBatch`, `SprayBaseline`, `PilotEvent` (workflow telemetry),
   `DecisionInputValue` (field-level provenance, append-only supersede chain),
   `DecisionAuditEvent` (immutable audit history), `DecisionFollowUpEvent` (append-only
-  follow-up timeline), `PcaPolicy`. Sprays/scouting carry `data_source` +
+  follow-up timeline), `PcaPolicy`. Botrytis pilot (§5, `BOTRYTIS_PILOT.md`): `Block`,
+  `WeatherObservation`, `ScoutingSample`, `RiskInputSnapshot` (immutable),
+  `DiseaseRiskAssessment` (append-only, shadow), `PcaDisposition` (append-only, attributed),
+  `PilotProtocol`, `BlockAssignment`, `BlockOutcomeObservation` (append-only),
+  `PcaCredential` + `PcaFarmAuthorization`. Sprays/scouting carry `data_source` +
   `data_confidence` + `pilot_import_batch_id`; `SprayBaseline` carries the same provenance (one
   per farm, latest wins). `PlannedSpray` snapshots the decision (`decision_*`,
   `decision_payload` JSON, legacy `check_*`), the PCA review (`review_*`, `pca_next_action`),
@@ -381,9 +438,11 @@ Backend + frontend both implement:
   - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
     `/export/pilot-feedback.csv`
   - `GET /health`; interactive docs at `/docs`.
-- **Disposable SQLite / no migrations:** there is **no Alembic**. `seed.run()` calls
-  `Base.metadata.drop_all` then recreates — schema changes are applied by re-seeding
-  (`rm -f backend/lumos.db && python -m app.seed`). Treat `lumos.db` as throwaway demo data.
+- **Alembic exists (baseline `32a030ba8bc4`); the DB is NO LONGER disposable.** This
+  paragraph used to say "no Alembic, re-seed to change the schema". That is now true
+  only for a demo-only database. `seed.run()` still calls `Base.metadata.drop_all`, so
+  **`rm -f backend/lumos.db && python -m app.seed` DESTROYS REAL PILOT DATA** — see §8
+  for the migration workflow. After seeding a fresh demo DB, `alembic stamp head`.
 
 ---
 
@@ -437,9 +496,14 @@ Backend + frontend both implement:
 cd backend && source .venv/bin/activate && pytest
 
 # Seed / reset demo data (drops + recreates schema, loads 3 demo farms)
+# DEMO-ONLY DATABASES. Both of these DESTROY real pilot data — check first with
+#   python -c "from app.database import SessionLocal; from app import crud;
+#              print(crud.has_non_demo_data(SessionLocal()))"
 cd backend && source .venv/bin/activate && python -m app.seed
 #   nuclear reset: rm -f backend/lumos.db && python -m app.seed
 #   after seeding a fresh DB, mark it migration-current: alembic stamp head
+#   (running create_all — e.g. an ad-hoc script calling init_db() — desyncs the DB
+#    from Alembic; symptom is "table X already exists" on upgrade. Reseed + stamp.)
 
 # Schema changes (Alembic exists as of 2026-07-18 — baseline 32a030ba8bc4):
 #   demo-only DBs may still drop+reseed; a DB with REAL pilot data must migrate:
@@ -457,7 +521,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **338 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **507 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
@@ -468,6 +532,13 @@ npm run dev        # http://localhost:3000
   unless `LUMOS_DEMO_MODE=1` is also set (a leftover pin would silently corrupt real pilot
   timestamps and PHI/REI math). Seeding is exempt; tests set the mode var in conftest.
   `/health` reports `clock_mode` (`real`/`pinned`) + `pinned_date`.
+- **Operator-key interlock (2026-07-20):** the `/internal` surface mints PCA credentials and
+  grants farm authorizations, so leaving it open makes every authorization guarantee
+  decorative. Set `LUMOS_OPERATOR_KEY` and present it as `X-Lumos-Operator-Key`; enforced by
+  **middleware on the path prefix** (`app/operator_key.py`), so a route added later is covered
+  by construction. Unset, `/internal` stays open for demo/local use — but the API **refuses to
+  start** once `crud.has_non_demo_data` is true. Not auth infrastructure: no login, no session,
+  no password, no user table.
 - **Demo/real mixing guard (2026-07-18):** one farm's records are either ALL demo/simulated or
   ALL real — creating a mismatched record 409s (`crud.ensure_demo_real_separation`, mirrored on
   input plans). The frontend demo-tags rows created interactively on demo farms
