@@ -23,6 +23,11 @@ from datetime import date, datetime
 RECORD_TYPE_PLANNED = "planned_sprays"
 RECORD_TYPE_SCOUTING = "scout_observations"
 RECORD_TYPE_SPRAY_EVENTS = "spray_events"
+# Pilot record types (CSV only — AI extraction is deliberately not offered for these,
+# mirroring the spray_events decision: a mis-extracted weather hour or sample
+# denominator would corrupt a risk snapshot silently).
+RECORD_TYPE_WEATHER = "weather_observations"
+RECORD_TYPE_SCOUTING_SAMPLES = "scouting_samples"
 
 IGNORE = "ignore"
 
@@ -153,11 +158,83 @@ SCOUTING_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("notes", "str", aliases=("comments", "note", "evidence notes")),
 )
 
+# Hourly weather readings feeding a disease-risk snapshot. `observed_at` is a
+# datetime, not a date: a Botrytis wetness rule is computed over hours, and collapsing
+# a reading to its day would silently average away the thing being measured.
+WEATHER_OBSERVATION_FIELDS: tuple[FieldSpec, ...] = (
+    FieldSpec("station_id", "str", required=True,
+              aliases=("station", "station id", "station code", "site", "site id")),
+    FieldSpec("station_name", "str", aliases=("station name", "site name")),
+    FieldSpec("station_distance_km", "float", regulatory=True,
+              aliases=("distance", "distance km", "station distance",
+                       "station distance km", "distance to block km")),
+    FieldSpec("observed_at", "datetime", required=True,
+              aliases=("timestamp", "datetime", "date time", "observed at",
+                       "observation time", "reading time", "time")),
+    FieldSpec("temperature_c", "float", regulatory=True,
+              aliases=("temp", "temperature", "temp c", "temperature c",
+                       "air temperature", "temperature (c)")),
+    FieldSpec("relative_humidity_pct", "float",
+              aliases=("rh", "humidity", "relative humidity", "rh %", "rh pct",
+                       "relative humidity pct", "humidity (%)")),
+    FieldSpec("rainfall_mm", "float",
+              aliases=("rain", "rainfall", "precip", "precipitation", "rain mm",
+                       "rainfall mm")),
+    FieldSpec("leaf_wetness_minutes", "float", regulatory=True,
+              aliases=("leaf wetness", "wetness", "lw", "leaf wetness minutes",
+                       "wetness minutes", "lwd", "leaf wetness duration")),
+    FieldSpec("wetness_is_measured", "bool",
+              aliases=("wetness measured", "wetness is measured", "measured wetness",
+                       "sensor wetness")),
+    FieldSpec("quality_flag", "str",
+              aliases=("quality", "flag", "quality flag", "qc", "qc flag")),
+    FieldSpec("source_reference", "str",
+              aliases=("source", "reference", "source reference", "export")),
+)
+
+# Standardized scouting samples: a numerator over a STATED denominator. Deliberately
+# separate from `scout_observations` (severity + free text), which cannot support a
+# threshold because it has no denominator.
+SCOUTING_SAMPLE_FIELDS: tuple[FieldSpec, ...] = (
+    FieldSpec("external_record_id", "str",
+              aliases=("record id", "id", "rec id", "external id", "record")),
+    FieldSpec("block_name", "str", required=True,
+              aliases=("block", "block name", "field", "field/block", "field block")),
+    FieldSpec("observed_at", "datetime", required=True,
+              aliases=("date", "datetime", "timestamp", "observed at", "scout date",
+                       "observation date", "sample date")),
+    FieldSpec("method", "str", required=True,
+              aliases=("method", "sampling method", "scouting method", "protocol")),
+    FieldSpec("target", "str", required=True,
+              aliases=("pest", "disease", "target", "pest/disease", "issue",
+                       "target pest or disease")),
+    FieldSpec("units_inspected", "int", required=True, regulatory=True,
+              aliases=("inspected", "units inspected", "sample size", "n",
+                       "plants inspected", "fruit inspected", "denominator")),
+    FieldSpec("units_affected", "int", required=True, regulatory=True,
+              aliases=("affected", "units affected", "infected", "positives",
+                       "plants affected", "fruit affected", "numerator")),
+    FieldSpec("severity_index", "float",
+              aliases=("severity", "severity index", "mean severity")),
+    FieldSpec("severity_scale", "str", aliases=("severity scale", "scale")),
+    FieldSpec("scout_name", "str", aliases=("scout", "scouted by", "observer")),
+    FieldSpec("notes", "str", aliases=("comments", "note")),
+)
+
 FIELDS_BY_TYPE = {
     RECORD_TYPE_PLANNED: PLANNED_SPRAY_FIELDS,
     RECORD_TYPE_SCOUTING: SCOUTING_FIELDS,
     RECORD_TYPE_SPRAY_EVENTS: SPRAY_EVENT_FIELDS,
+    RECORD_TYPE_WEATHER: WEATHER_OBSERVATION_FIELDS,
+    RECORD_TYPE_SCOUTING_SAMPLES: SCOUTING_SAMPLE_FIELDS,
 }
+
+# Sampling methods a scouting sample may declare. Mirrors schemas.ScoutingMethod;
+# kept here as plain data so this module stays framework-free.
+SCOUTING_METHODS = (
+    "whole_plant_count", "fruit_count", "flower_count", "leaf_count",
+    "trap_count", "transect_walk", "other",
+)
 
 # Marker used in downloadable templates so example rows are unmistakably not data.
 TEMPLATE_EXAMPLE_MARKER = "EXAMPLE-DELETE-THIS-ROW"
@@ -210,6 +287,34 @@ _TEMPLATE_EXAMPLES = {
         "cost": "120",
         "pre_harvest_interval_days": "4",
         "re_entry_interval_hours": "24",
+        "notes": "example row — delete before importing",
+    },
+    RECORD_TYPE_WEATHER: {
+        "station_id": "CIMIS-111",
+        "station_name": "Watsonville West",
+        "station_distance_km": "3.2",
+        "observed_at": "2026-07-18 06:00",
+        "temperature_c": "14.5",
+        "relative_humidity_pct": "94",
+        "rainfall_mm": "0",
+        "leaf_wetness_minutes": "60",
+        "wetness_is_measured": "measured",
+        "quality_flag": "",
+        # Weather has no external-id column, so the marker rides here — the example
+        # row must be unmistakably not data on every record type.
+        "source_reference": TEMPLATE_EXAMPLE_MARKER,
+    },
+    RECORD_TYPE_SCOUTING_SAMPLES: {
+        "external_record_id": TEMPLATE_EXAMPLE_MARKER,
+        "block_name": "North 1",
+        "observed_at": "2026-07-18 08:30",
+        "method": "fruit_count",
+        "target": "botrytis",
+        "units_inspected": "100",
+        "units_affected": "4",
+        "severity_index": "",
+        "severity_scale": "",
+        "scout_name": "Sam Scout",
         "notes": "example row — delete before importing",
     },
 }
@@ -322,6 +427,46 @@ def _parse_date(name: str, text: str, date_format: str):
     return None, f"{name}: unrecognized date '{text}' (use YYYY-MM-DD)"
 
 
+# Accepted truthy/falsy spellings. Anything else is an error rather than a guess: an
+# unrecognized wetness-provenance cell silently reading False would present a derived
+# value as a measurement.
+_TRUE_TEXT = ("true", "yes", "y", "1", "measured", "sensor")
+_FALSE_TEXT = ("false", "no", "n", "0", "derived", "estimated", "modelled", "modeled")
+
+
+def _parse_bool(name: str, text: str):
+    lowered = text.strip().lower()
+    if lowered in _TRUE_TEXT:
+        return True, None
+    if lowered in _FALSE_TEXT:
+        return False, None
+    return None, (
+        f"{name}: '{text}' is not a yes/no value (use true/false, yes/no, or "
+        f"measured/derived)"
+    )
+
+
+# Timestamp spellings accepted for hourly readings. Date-only is deliberately NOT
+# accepted for a datetime field: collapsing an hourly reading to midnight would put
+# real readings in the wrong hour of a wetness calculation.
+_DATETIME_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+)
+
+
+def _parse_datetime(name: str, text: str):
+    cleaned = text.strip().replace("Z", "")
+    for fmt in _DATETIME_FORMATS:
+        try:
+            return datetime.strptime(cleaned, fmt), None
+        except ValueError:
+            continue
+    return None, (
+        f"{name}: unrecognized timestamp '{text}' — use YYYY-MM-DD HH:MM (an hourly "
+        f"reading needs its hour; a date alone cannot be placed in a wetness window)"
+    )
+
+
 def _parse_value(spec: FieldSpec, raw: str, date_format: str = DATE_FORMAT_AUTO):
     """Parse one cell. Returns (value, error). Empty cells are (None, None)."""
     text = (raw or "").strip()
@@ -331,6 +476,10 @@ def _parse_value(spec: FieldSpec, raw: str, date_format: str = DATE_FORMAT_AUTO)
         return text, None
     if spec.kind == "date":
         return _parse_date(spec.name, text, date_format)
+    if spec.kind == "datetime":
+        return _parse_datetime(spec.name, text)
+    if spec.kind == "bool":
+        return _parse_bool(spec.name, text)
     cleaned = text.replace("$", "").replace(",", "")
     if spec.kind == "int":
         try:
@@ -462,7 +611,45 @@ def duplicate_key_for_spray_event(
     )
 
 
+def duplicate_key_for_weather(station_id, observed_at) -> tuple:
+    """One reading per station per timestamp.
+
+    Re-importing an overlapping export is the normal case, not an edge case, and a
+    duplicated hour would double-count wetness inside a risk window.
+    """
+    return (
+        "nat",
+        (station_id or "").strip().lower(),
+        observed_at.isoformat() if isinstance(observed_at, datetime) else str(observed_at),
+    )
+
+
+def duplicate_key_for_scouting_sample(
+    external_record_id, block_name, target, observed_at
+) -> tuple:
+    ext = (str(external_record_id).strip().lower() if external_record_id else "")
+    if ext:
+        return ("ext", ext)
+    return (
+        "nat",
+        (block_name or "").strip().lower(),
+        (target or "").strip().lower(),
+        observed_at.isoformat() if isinstance(observed_at, datetime) else str(observed_at),
+    )
+
+
 def _row_duplicate_key(record_type: str, values: dict) -> tuple | None:
+    if record_type == RECORD_TYPE_WEATHER:
+        if values.get("station_id") and values.get("observed_at"):
+            return duplicate_key_for_weather(values["station_id"], values["observed_at"])
+        return None
+    if record_type == RECORD_TYPE_SCOUTING_SAMPLES:
+        if values.get("block_name") and values.get("target") and values.get("observed_at"):
+            return duplicate_key_for_scouting_sample(
+                values.get("external_record_id"), values["block_name"],
+                values["target"], values["observed_at"],
+            )
+        return None
     if record_type == RECORD_TYPE_PLANNED:
         if values.get("product_name") and values.get("intended_date"):
             return duplicate_key_for_planned(
@@ -486,6 +673,34 @@ def _row_duplicate_key(record_type: str, values: dict) -> tuple | None:
 
 def _regulatory_warnings(record_type: str, values: dict) -> list[str]:
     """Explicit 'unverified / cannot run' notes for absent regulatory values."""
+    if record_type == RECORD_TYPE_WEATHER:
+        out = []
+        if values.get("temperature_c") is None:
+            out.append("no temperature — this hour cannot contribute to a wetness rule")
+        if values.get("leaf_wetness_minutes") is None:
+            out.append(
+                "no leaf wetness — the risk assessment will abstain unless an "
+                "accepted proxy is available for this hour"
+            )
+        elif values.get("wetness_is_measured") is None:
+            out.append(
+                "leaf wetness given without stating whether it was measured — it "
+                "will be treated as derived, lowering the evidence grade"
+            )
+        if values.get("station_distance_km") is None:
+            out.append(
+                "station distance not stated — distance cannot be assumed, so the "
+                "evidence grade cannot reach its highest level"
+            )
+        return out
+    if record_type == RECORD_TYPE_SCOUTING_SAMPLES:
+        out = []
+        if values.get("severity_index") is not None and not values.get("severity_scale"):
+            out.append(
+                "severity index given without its scale — it cannot be compared to "
+                "any threshold and will be ignored"
+            )
+        return out
     if record_type == RECORD_TYPE_SCOUTING:
         out = []
         if values.get("severity") is None:
@@ -538,6 +753,7 @@ def validate_rows(
     existing_keys: dict | None = None,
     report: DryRunReport | None = None,
     date_format: str = DATE_FORMAT_AUTO,
+    known_block_names: set[str] | None = None,
 ) -> DryRunReport:
     """Validate pre-structured rows (canonical field -> raw value) into a DryRunReport.
 
@@ -545,6 +761,10 @@ def validate_rows(
     the AI document extraction feeds its extracted rows through the exact same code —
     same type/required checks, same regulatory warnings, same duplicate detection.
     Never writes anything; values are never guessed.
+
+    `known_block_names` lets the caller supply the farm's existing block names (lower-
+    cased) so a sample naming an unknown block fails in the DRY RUN rather than at
+    commit. A dry run that says "importable" and then fails is worse than no dry run.
     """
     if record_type not in FIELDS_BY_TYPE:
         raise ValueError(f"Unknown record type '{record_type}'")
@@ -569,8 +789,10 @@ def validate_rows(
             elif value is not None:
                 row.values[fname] = value
 
-        # Template example rows must never be importable data.
-        if TEMPLATE_EXAMPLE_MARKER in (row.raw.get("external_record_id") or ""):
+        # Template example rows must never be importable data. Scanned across EVERY
+        # cell, not just external_record_id: the weather template has no external-id
+        # column, so an id-only check would let its example row import as real data.
+        if any(TEMPLATE_EXAMPLE_MARKER in (v or "") for v in row.raw.values()):
             row.errors.append(
                 "this is the template's example row — delete it before importing"
             )
@@ -578,6 +800,40 @@ def validate_rows(
         for s in specs:
             if s.required and row.values.get(s.name) is None:
                 row.errors.append(f"{s.name} is required and missing")
+
+        # A sample's numerator must fit inside its stated denominator, and the
+        # sampling method must be one the system can compare across samples.
+        if record_type == RECORD_TYPE_SCOUTING_SAMPLES:
+            inspected = row.values.get("units_inspected")
+            affected = row.values.get("units_affected")
+            if inspected is not None and inspected <= 0:
+                row.errors.append(
+                    "units_inspected must be greater than 0 — an incidence needs a "
+                    "denominator"
+                )
+            if (
+                inspected is not None and affected is not None
+                and affected > inspected
+            ):
+                row.errors.append(
+                    f"units_affected ({affected}) exceeds units_inspected "
+                    f"({inspected}) — an incidence above 100% is a recording error"
+                )
+            method = (row.values.get("method") or "").strip().lower().replace(" ", "_")
+            if method and method not in SCOUTING_METHODS:
+                row.errors.append(
+                    f"method '{row.values.get('method')}' is not a recognised sampling "
+                    f"method (one of: {', '.join(SCOUTING_METHODS)})"
+                )
+            elif method:
+                row.values["method"] = method
+            block_name = (row.values.get("block_name") or "").strip()
+            if block_name and known_block_names is not None:
+                if block_name.lower() not in known_block_names:
+                    row.errors.append(
+                        f"block '{block_name}' does not exist on this farm — create "
+                        f"the block first; a sample is never attached to a guess"
+                    )
 
         # Scouting severity honesty: an out-of-1-5 severity needs its scale stated.
         if record_type == RECORD_TYPE_SCOUTING:
@@ -613,6 +869,7 @@ def parse_csv(
     mapping_overrides: dict | None = None,
     existing_keys: dict | None = None,
     date_format: str = DATE_FORMAT_AUTO,
+    known_block_names: set[str] | None = None,
 ) -> DryRunReport:
     """Parse + validate CSV text into a DryRunReport (never writes anything).
 
@@ -671,5 +928,6 @@ def parse_csv(
         raw_rows.append(raw)
 
     return validate_rows(
-        record_type, raw_rows, existing_keys, report=report, date_format=date_format
+        record_type, raw_rows, existing_keys, report=report, date_format=date_format,
+        known_block_names=known_block_names,
     )

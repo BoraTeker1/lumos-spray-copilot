@@ -526,3 +526,91 @@ def test_demo_reset_reseeds_an_all_demo_db(client, pinned_clock):
     farms = client.get("/farms").json()
     assert len(farms) == 3
     assert any(f["country"] == "US" for f in farms)
+
+
+# ---------------------------------------------------------- outcome vocabulary parity
+def test_outcome_vocabulary_has_one_source_of_truth():
+    """crud, pilot_evidence and schemas must never drift from decision_status.
+
+    The vocabulary used to be restated in four places. Three now derive from
+    decision_status; schemas.PlannedSprayOutcome still spells the Literal out because
+    a Literal cannot be built from a runtime tuple readably — so this test is the
+    thing that keeps it honest.
+    """
+    import typing
+
+    from app import crud, decision_status, pilot_evidence, schemas
+
+    canonical = decision_status.PLANNED_SPRAY_OUTCOMES
+
+    assert crud.APPLIED_OUTCOMES is decision_status.APPLIED_OUTCOMES
+    assert pilot_evidence._PLANNED_OUTCOMES == canonical
+    assert set(typing.get_args(schemas.PlannedSprayOutcome)) == set(canonical)
+
+    # "planned" is a starting state, not a recorded decision.
+    assert decision_status.OUTCOME_PLANNED not in canonical
+    # Applied and non-applied partition the vocabulary with no overlap.
+    assert set(decision_status.APPLIED_OUTCOMES).isdisjoint(
+        decision_status.NON_APPLIED_OUTCOMES
+    )
+
+
+# ------------------------------------------------- treated area is never unit-blended
+def _area_record(acres, unit):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(treated_acres=acres, treated_area_unit=unit)
+
+
+def test_treated_area_totals_carry_their_unit():
+    from app.pilot_evidence import _sum_treated_area
+
+    total, unit, note = _sum_treated_area(
+        [_area_record(4.0, "acres"), _area_record(6.0, "acres")]
+    )
+    assert total == 10.0
+    assert unit == "acres"
+    assert note is None
+
+
+def test_treated_area_refuses_to_add_acres_to_square_metres():
+    """The false-reduction guard: mixed units produce NO number, not a wrong one."""
+    from app.pilot_evidence import _sum_treated_area
+
+    total, unit, note = _sum_treated_area(
+        [_area_record(4.0, "acres"), _area_record(2000.0, "m2")]
+    )
+    assert total is None
+    assert unit is None
+    assert "more than one area unit" in note
+    assert "no conversion table exists" in note
+
+
+def test_treated_area_never_assumes_acres_when_unit_is_missing():
+    """An undeclared unit stays undeclared. Silently labelling it acres is the bug."""
+    from app.pilot_evidence import _sum_treated_area
+
+    total, unit, note = _sum_treated_area([_area_record(4.0, None)])
+    assert total == 4.0
+    assert unit is None
+    assert "unit unspecified" in note
+
+    # A declared unit mixed with an undeclared one is still a refusal.
+    total, unit, note = _sum_treated_area(
+        [_area_record(4.0, "acres"), _area_record(1.0, None)]
+    )
+    assert total is None
+    assert "unspecified" in note
+
+
+def test_no_code_path_claims_a_seasonal_or_active_ingredient_reduction():
+    """Three different metrics that must never be read as one another."""
+    from app.pilot_evidence import NOT_CALCULATED
+
+    for key in (
+        "active_ingredient_quantity_avoided",
+        "risk_weighted_pesticide_reduction",
+        "seasonal_pesticide_use_reduction",
+    ):
+        assert key in NOT_CALCULATED
+        assert "not calculated" in NOT_CALCULATED[key]

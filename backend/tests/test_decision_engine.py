@@ -380,6 +380,49 @@ def test_policy_below_threshold_triggers_inspect_first_with_pca_citation():
     assert rule.inputs["max_linked_severity"] == 2
 
 
+def test_off_scale_severity_is_never_compared_to_a_threshold():
+    """A 3 on a 1-10 scale is not a 3 on a 1-5 scale.
+
+    Before this guard the engine read `severity_1_to_5` straight out of an imported
+    record and compared it to the PCA threshold regardless of the scale stated
+    alongside it — reading "threshold met" off a number that meant something else.
+    The reading is reported and excluded, never converted.
+    """
+    off_scale = obs("lygus bug", days_ago=1, severity=3)
+    off_scale.severity_scale = "1-10"
+
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(ai="pyrethrins", target="lygus bug", phi=0, rei=12),
+        [], [off_scale],
+        pca_policies=[policy(threshold=3)], today=TODAY,
+    )
+
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.triggered is True, "an incomparable severity must not satisfy a threshold"
+    assert d.outcome != "approve"
+    assert rule.inputs["max_linked_severity"] is None
+    assert rule.inputs["excluded_off_scale_severities"] == [
+        {"severity": 3, "severity_scale": "1-10"}
+    ]
+    assert "not comparable" in rule.detail.lower()
+    assert rule.inputs["threshold_severity_scale"] == "1-5"
+
+
+def test_unstated_severity_scale_is_treated_as_the_default_scale():
+    """Every pre-existing record has no scale stated; they stay comparable."""
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30),
+        planned(ai="pyrethrins", target="lygus bug", phi=0, rei=12),
+        [], [obs("lygus bug", days_ago=1, severity=4)],
+        pca_policies=[policy(threshold=3)], today=TODAY,
+    )
+    rule = next(r for r in d.rules if r.rule_id == "scouting_evidence")
+    assert rule.inputs["max_linked_severity"] == 4
+    assert rule.inputs["excluded_off_scale_severities"] == []
+    assert rule.triggered is False
+
+
 def test_policy_no_scouting_at_all_triggers_inspect_first():
     d = evaluate_planned_spray(
         farm(harvest_offset_days=30),

@@ -55,10 +55,8 @@ def _scouting_backed(spray, scout_observations) -> bool:
     return False
 
 
-# Recorded real-world outcomes for a planned spray (mirrors schemas.PlannedSprayOutcome).
-_PLANNED_OUTCOMES = (
-    "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first"
-)
+# Recorded real-world outcomes for a planned spray (canonical list in decision_status).
+_PLANNED_OUTCOMES = decision_status.PLANNED_SPRAY_OUTCOMES
 # Explicit, stated assumption behind the review-minutes-saved estimate. Not a measurement.
 ASSUMED_MANUAL_CHECK_MINUTES = 10
 
@@ -171,6 +169,38 @@ def derive_follow_up_summary(planned, events) -> dict:
     }
 
 
+def _sum_treated_area(records) -> tuple[float | None, str | None, str | None]:
+    """Total treated area, but ONLY when every contributing record shares one unit.
+
+    `treated_acres` is acre-named and not acre-guaranteed (see models.SprayEvent).
+    Adding acres to square metres produces a number that is wrong in a way nobody
+    can see downstream, so a mixed set refuses to produce a total and says why.
+    Returns (total, unit, refusal_reason) — exactly one of total/reason is None.
+    """
+    with_area = [
+        r for r in records if float(getattr(r, "treated_acres", None) or 0.0) > 0.0
+    ]
+    if not with_area:
+        return 0.0, None, None
+
+    # A missing unit is treated as its own unknown value, not quietly assumed acres.
+    units = {getattr(r, "treated_area_unit", None) or "unspecified" for r in with_area}
+    if len(units) > 1:
+        return None, None, (
+            "not summed — the contributing records use more than one area unit "
+            f"({', '.join(sorted(units))}) and no conversion table exists"
+        )
+
+    unit = units.pop()
+    total = sum(float(getattr(r, "treated_acres", None) or 0.0) for r in with_area)
+    if unit == "unspecified":
+        return round(total, 2), None, (
+            "unit unspecified — the total is the sum of entered values, whose unit "
+            "was never recorded; do not label it acres"
+        )
+    return round(total, 2), unit, None
+
+
 def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict, dict, dict]:
     """(confirmed, estimated, follow_up_stats) metric blocks from non-demo decisions.
 
@@ -184,9 +214,7 @@ def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict
     }
 
     confirmed_avoided = [p for p in real_planned if summaries[p.id]["confirmed_avoided"]]
-    confirmed_avoided_acres = sum(
-        float(getattr(p, "treated_acres", None) or 0.0) for p in confirmed_avoided
-    )
+    avoided_area, avoided_area_unit, avoided_area_note = _sum_treated_area(confirmed_avoided)
     delays = [
         summaries[p.id]["confirmed_delay_days"]
         for p in real_planned
@@ -220,7 +248,10 @@ def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict
 
     confirmed = {
         "applications_confirmed_avoided": len(confirmed_avoided),
-        "treated_acres_confirmed_avoided": round(confirmed_avoided_acres, 2),
+        # Area carries its unit. None means the records disagreed and were NOT added up.
+        "treated_area_confirmed_avoided": avoided_area,
+        "treated_area_confirmed_avoided_unit": avoided_area_unit,
+        "treated_area_confirmed_avoided_note": avoided_area_note,
         "confirmed_delay_days_total": sum(delays) if delays else 0,
         "confirmed_delayed_decisions": len(delays),
         "confirmed_replacement_applications": len(replacements),
@@ -238,7 +269,9 @@ def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict
             "avoided' sums the entered planned costs of follow-up-confirmed avoided "
             "applications; net = gross avoided - additional scouting - rescue costs. "
             "Replacement application costs are reported separately, not netted. A "
-            "negative net is reported as negative."
+            "negative net is reported as negative. Treated area is reported only with "
+            "its unit and only when all contributing records share one — areas in "
+            "different units are never converted or combined."
         ),
     }
 
@@ -287,6 +320,12 @@ NOT_CALCULATED = {
     "risk_weighted_pesticide_reduction": (
         "not calculated — no authoritative risk-weighting methodology/source is "
         "integrated; a home-made weighting would be misleading"
+    ),
+    "seasonal_pesticide_use_reduction": (
+        "not calculated — avoiding or deferring individual applications is a change "
+        "in application count for those decisions, NOT a season-total reduction: the "
+        "spray may recur later and a rescue treatment may exceed what was avoided. A "
+        "season total needs a full-season denominator this record set does not have"
     ),
 }
 
@@ -816,6 +855,7 @@ def _export_decision_row(planned, follow_ups, audit_events, input_values) -> dic
         "field_block": planned.field_block,
         "crop": planned.crop,
         "treated_acres": planned.treated_acres,
+        "treated_area_unit": planned.treated_area_unit,
         "planned": {
             "product_name": planned.product_name,
             "epa_reg_no": planned.epa_reg_no,

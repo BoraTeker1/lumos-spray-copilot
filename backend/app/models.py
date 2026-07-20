@@ -1,7 +1,9 @@
 """SQLAlchemy ORM models for Lumos Spray Copilot."""
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app import clock, decision_status, procurement_status
@@ -56,6 +58,50 @@ class Farm(Base):
     purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
+    blocks: Mapped[list["Block"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
+
+
+class Block(Base):
+    """A field block — the unit of pilot assignment and outcome measurement.
+
+    Deliberately NOT derived from the existing free-text `field_block` column on
+    sprays/scouting/planned sprays. That string is grower shorthand entered per
+    record; inferring block identity from it would fabricate structure nobody
+    recorded, and two records reading "north 3" are not evidence of one block.
+    `field_block` is left exactly as it is; records join a block only through the
+    explicit nullable `block_id`.
+
+    A block is needed because control/intervention assignment, marketable packout,
+    cull rates, and cultivar/phenology are all measured per block per harvest — none
+    of which can hang off a string.
+    """
+    __tablename__ = "blocks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    crop: Mapped[str | None] = mapped_column(String(100))
+    cultivar: Mapped[str | None] = mapped_column(String(120))
+    area: Mapped[float | None] = mapped_column(Float)  # in area_unit
+    area_unit: Mapped[str | None] = mapped_column(String(10))  # "acres" / "m2"
+    planting_date: Mapped[date | None] = mapped_column(Date)
+    expected_harvest_date: Mapped[date | None] = mapped_column(Date)
+    # Phenology as OBSERVED, with the date of that observation. Never inferred from
+    # the planting date — a computed growth stage would be an agronomic claim nobody
+    # made, and the risk snapshot must be able to tell "recorded" from "guessed".
+    phenology_stage: Mapped[str | None] = mapped_column(String(60))
+    phenology_observed_on: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Concierge-pilot provenance (see SprayEvent for the allowed values). Defaults to
+    # real entry, not demo — a block created through the API is a real block unless
+    # the caller says otherwise (the demo seed sets these explicitly).
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship(back_populates="blocks")
 
 
 class SprayEvent(Base):
@@ -75,13 +121,20 @@ class SprayEvent(Base):
     # normalized or converted — captured so quantity evidence becomes possible).
     rate_amount: Mapped[float | None] = mapped_column(Float)
     rate_unit: Mapped[str | None] = mapped_column(String(40))
+    # `treated_acres` is acre-NAMED but not acre-guaranteed: it predates Farm.area_unit
+    # and a m2 farm stored square metres in it. `treated_area_unit` records what the
+    # number actually is, defaulted from the farm at write time. NOTHING converts
+    # between units — a mixed set is refused, never silently added up.
     treated_acres: Mapped[float | None] = mapped_column(Float)
+    treated_area_unit: Mapped[str | None] = mapped_column(String(10))
     application_date: Mapped[date] = mapped_column(Date, nullable=False)
     cost: Mapped[float | None] = mapped_column(Float)
     pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
     re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
     # Field/block within the farm (same vocabulary as PlannedSpray/ScoutObservation).
     field_block: Mapped[str | None] = mapped_column(String(120))
+    # Optional link to a real Block entity. Never backfilled from `field_block`.
+    block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"), index=True)
     # Pilot CSV-import provenance (mirrors ScoutObservation/PlannedSpray).
     external_record_id: Mapped[str | None] = mapped_column(String(120))
     source_system: Mapped[str | None] = mapped_column(String(120))
@@ -124,6 +177,8 @@ class ScoutObservation(Base):
     # Pilot CSV-import fields (all optional; provenance for real scouting records).
     external_record_id: Mapped[str | None] = mapped_column(String(120))
     field_block: Mapped[str | None] = mapped_column(String(120))
+    # Optional link to a real Block entity. Never backfilled from `field_block`.
+    block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"), index=True)
     severity_scale: Mapped[str | None] = mapped_column(String(40))  # e.g. "1-5", "1-10"
     count_value: Mapped[float | None] = mapped_column(Float)
     observer: Mapped[str | None] = mapped_column(String(120))
@@ -137,6 +192,157 @@ class ScoutObservation(Base):
     )
 
     farm: Mapped["Farm"] = relationship(back_populates="scout_observations")
+
+
+class WeatherObservation(Base):
+    """One weather reading, append-only, as an input to a disease-risk assessment.
+
+    No weather has ever been persisted in this system: `app/weather.py` computes an
+    advisory disease-pressure number on the fly from a hardcoded per-city dict that
+    never varies with time. That is fine for an advisory card and useless as model
+    input — a risk assessment has to be reproducible from the exact readings that
+    existed at the decision moment.
+
+    TWO timestamps, and both matter:
+      * `observed_at` — when the weather happened.
+      * `recorded_at` — when Lumos learned about it.
+    A reading about Tuesday that was entered on Friday is still hindsight, so the
+    snapshot builder admits a row only when BOTH are at or before the prediction
+    time. Filtering on `observed_at` alone is the subtle leak this column exists to
+    prevent.
+
+    Ingestion is CSV/concierge only — no weather-provider integration exists, and none
+    should be built before the provider and field requirements are known.
+    """
+    __tablename__ = "weather_observations"
+    __table_args__ = (
+        # At most ONE original reading per station per timestamp. A duplicated hour
+        # would double-count wetness inside a risk window and silently change a
+        # snapshot digest, so this is enforced by the database rather than trusted to
+        # the import's dedupe.
+        #
+        # PARTIAL (supersedes_id IS NULL) because corrections deliberately repeat the
+        # station+timestamp of the row they replace — a plain unique index would make
+        # the append-only correction path impossible.
+        Index(
+            "uq_weather_observation_station_hour",
+            "station_id", "observed_at",
+            unique=True,
+            sqlite_where=text("supersedes_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    # Weather is usually recorded per station, not per block; nullable by design.
+    block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"), index=True)
+    station_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    station_name: Mapped[str | None] = mapped_column(String(160))
+    # How far the station is from the block. Distance degrades the evidence grade and
+    # past a threshold forces abstention — it is never assumed to be zero.
+    station_distance_km: Mapped[float | None] = mapped_column(Float)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=clock.current_datetime
+    )
+    temperature_c: Mapped[float | None] = mapped_column(Float)
+    relative_humidity_pct: Mapped[float | None] = mapped_column(Float)
+    rainfall_mm: Mapped[float | None] = mapped_column(Float)
+    leaf_wetness_minutes: Mapped[float | None] = mapped_column(Float)
+    # True only when a sensor measured wetness. A value derived from humidity is a
+    # different kind of evidence and must never be presented as a measurement.
+    wetness_is_measured: Mapped[bool | None] = mapped_column(Boolean)
+    source_type: Mapped[str] = mapped_column(String(40), default="manual_entry")
+    source_reference: Mapped[str | None] = mapped_column(String(255))
+    # Operator/station-reported quality note (e.g. "sensor fault"). Any value here
+    # excludes the row from assessment rather than being silently averaged over.
+    quality_flag: Mapped[str | None] = mapped_column(String(60))
+    # Corrections append a new row pointing at the one they replace — never an edit.
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("weather_observations.id")
+    )
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class ScoutingSample(Base):
+    """A standardized scouting sample: a numerator over a STATED denominator.
+
+    Distinct from `ScoutObservation`, which stays exactly as it is for the existing
+    decision engine. That model cannot support a threshold: its `count_value` is a
+    bare number with no denominator and no consumer anywhere in the codebase, and its
+    `severity_scale` is free text the engine never read (an imported 1-10 severity was
+    silently compared against a 1-5 threshold — see
+    `decision_engine.severity_is_comparable_to_threshold`).
+
+    Incidence here is DERIVED server-side from `units_affected / units_inspected`, so
+    a percentage can never be asserted without the sample it came from.
+    """
+    __tablename__ = "scouting_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    # A sample is always OF a block — that is what makes it comparable across arms.
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=clock.current_datetime
+    )
+    # Sampling method, from a fixed vocabulary (see schemas.ScoutingMethod). Two
+    # samples taken by different methods are not directly comparable.
+    method: Mapped[str] = mapped_column(String(40), nullable=False)
+    target: Mapped[str] = mapped_column(String(200), nullable=False)
+    units_inspected: Mapped[int] = mapped_column(Integer, nullable=False)
+    units_affected: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Derived, never accepted from input.
+    incidence_pct: Mapped[float | None] = mapped_column(Float)
+    severity_index: Mapped[float | None] = mapped_column(Float)
+    severity_scale: Mapped[str | None] = mapped_column(String(40))
+    scout_name: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(String(40), default="manual_entry")
+    source_reference: Mapped[str | None] = mapped_column(String(255))
+    external_record_id: Mapped[str | None] = mapped_column(String(120))
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("scouting_samples.id"))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class RiskInputSnapshot(Base):
+    """Exactly what was knowable at one prediction moment. Immutable.
+
+    There is no update and no delete. The whole value of this row is that it can be
+    re-read years later and shown to contain only information that existed at
+    `as_of` — a mutable snapshot proves nothing.
+
+    `excluded` records what was left OUT and why (future reading, recorded late,
+    superseded, quality-flagged, demo). "We did not use this, and here is why" is
+    part of the evidence, not an implementation detail.
+
+    See `app/risk_snapshot.py` for the two-timestamp admissibility rule this stores
+    the result of.
+    """
+    __tablename__ = "risk_input_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+    planned_spray_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planned_sprays.id"), index=True
+    )
+    # The prediction moment. Everything in `payload` was observable AND recorded by it.
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    target: Mapped[str] = mapped_column(String(80), nullable=False)
+    snapshot_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # sha256 over the canonical payload — re-snapshotting the same as_of must
+    # reproduce this exactly, which is what makes an assessment auditable.
+    input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    excluded: Mapped[list | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
 
 class PlannedSpray(Base):
@@ -162,8 +368,12 @@ class PlannedSpray(Base):
     # Pilot CSV-import / real-record fields (all optional).
     external_record_id: Mapped[str | None] = mapped_column(String(120))
     field_block: Mapped[str | None] = mapped_column(String(120))
+    # Optional link to a real Block entity. Never backfilled from `field_block`.
+    block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"), index=True)
     crop: Mapped[str | None] = mapped_column(String(100))
+    # See SprayEvent.treated_area_unit — the unit is data, not implied by the column name.
     treated_acres: Mapped[float | None] = mapped_column(Float)
+    treated_area_unit: Mapped[str | None] = mapped_column(String(10))
     epa_reg_no: Mapped[str | None] = mapped_column(String(60))
     # FRAC/IRAC/HRAC mode-of-action group, when known.
     moa_group: Mapped[str | None] = mapped_column(String(40))
@@ -199,6 +409,11 @@ class PlannedSpray(Base):
     review_status: Mapped[str] = mapped_column(String(20), default="not_reviewed")
     review_comment: Mapped[str | None] = mapped_column(Text)
     reviewed_by: Mapped[str | None] = mapped_column(String(120))
+    # The credential that backed an approve/edit, when the farm is enrolled. Free-text
+    # `reviewed_by` records what someone typed; this records who could prove it.
+    reviewed_by_credential_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pca_credentials.id")
+    )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
     # PCA's replacement guidance when the review action is "edited".
     pca_next_action: Mapped[str | None] = mapped_column(Text)
@@ -462,6 +677,62 @@ class PcaPolicy(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="pca_policies")
+
+
+class PcaCredential(Base):
+    """A licensed PCA who may record dispositions, and the farms they may act on.
+
+    Everywhere else in this system a PCA is a free-text string (`reviewed_by`,
+    `entered_by`, `actor`) — unvalidated, uncorrelated, and impossible to hold to
+    account. That is tolerable for advisory notes; it is not tolerable for a
+    professional decision that authorizes deferring a scheduled fungicide.
+
+    This is deliberately NOT authentication: there is no login, no session, no
+    password, and no user model. An operator issues a token out of band; only its
+    sha256 is stored, so a database leak does not yield usable tokens. Authorization
+    is farm-scoped through PcaFarmAuthorization, and because `farm_id` is this
+    system's only isolation boundary, that scoping IS the tenant boundary.
+    """
+    __tablename__ = "pca_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # The professional licence this credential claims. Recorded and shown verbatim;
+    # Lumos does NOT verify it against any registry — see BOTRYTIS_PILOT.md.
+    license_identifier: Mapped[str] = mapped_column(String(60), nullable=False)
+    license_state: Mapped[str] = mapped_column(String(2), default="CA")
+    # sha256 of the issued token. The token itself is shown once at issuance and is
+    # never stored, logged, or recoverable.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    # First few characters, so an operator can tell two tokens apart in the UI
+    # without the system holding anything that could be replayed.
+    token_prefix: Mapped[str | None] = mapped_column(String(12))
+    issued_by: Mapped[str | None] = mapped_column(String(120))
+    active_from: Mapped[date | None] = mapped_column(Date)
+    active_to: Mapped[date | None] = mapped_column(Date)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    authorizations: Mapped[list["PcaFarmAuthorization"]] = relationship(
+        back_populates="credential", cascade="all, delete-orphan"
+    )
+
+
+class PcaFarmAuthorization(Base):
+    """Which farms one PCA credential may act on. Revoked, never deleted."""
+    __tablename__ = "pca_farm_authorizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pca_credential_id: Mapped[int] = mapped_column(
+        ForeignKey("pca_credentials.id"), nullable=False, index=True
+    )
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    granted_on: Mapped[date | None] = mapped_column(Date)
+    granted_by: Mapped[str | None] = mapped_column(String(120))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    credential: Mapped["PcaCredential"] = relationship(back_populates="authorizations")
 
 
 class Recommendation(Base):
@@ -966,6 +1237,9 @@ class PilotImportBatch(Base):
     spray_event_count: Mapped[int] = mapped_column(Integer, default=0)
     scouting_observation_count: Mapped[int] = mapped_column(Integer, default=0)
     planned_spray_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Pilot record types (weather readings and standardized scouting samples).
+    weather_observation_count: Mapped[int] = mapped_column(Integer, default=0)
+    scouting_sample_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="pilot_import_batches")

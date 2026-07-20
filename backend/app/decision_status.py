@@ -30,6 +30,21 @@ RESOLVED_REVIEW_STATUSES = ("approved", "edited", "rejected")
 # Review statuses that unlock recording an APPLIED outcome (rejected does not).
 APPLIED_OUTCOME_UNLOCK_STATUSES = ("approved", "edited")
 
+# --- Recorded real-world outcomes: the single source of truth ------------------
+# This vocabulary used to be restated in crud.py, pilot_evidence.py and schemas.py,
+# so a new outcome value had to be added in four places to be consistent. Everything
+# derives from here now; `schemas.PlannedSprayOutcome` still spells the Literal out
+# (a Literal cannot be built from a runtime tuple without losing readability) and
+# `test_invariants.py` asserts the two never drift.
+OUTCOME_PLANNED = "planned"
+# Outcomes that mean a spray was actually applied — these create the linked SprayEvent.
+APPLIED_OUTCOMES = ("sprayed_as_planned", "changed_product")
+# Outcomes that document a non-application honestly.
+NON_APPLIED_OUTCOMES = ("delayed", "avoided", "inspected_first")
+# Every outcome a human can record. `planned` is the not-yet-recorded default and is
+# deliberately excluded — it is a starting state, not a decision.
+PLANNED_SPRAY_OUTCOMES = APPLIED_OUTCOMES + NON_APPLIED_OUTCOMES
+
 
 def review_state(planned) -> str:
     """One derived vocabulary for the review situation of a planned spray.

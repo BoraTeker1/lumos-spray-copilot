@@ -87,7 +87,16 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
             <Metric
               label="Applications confirmed avoided"
               value={data.confirmed.applications_confirmed_avoided}
-              hint={`${data.confirmed.treated_acres_confirmed_avoided} acres confirmed avoided`}
+              hint={
+                // Area is only shown with its unit. A refusal (mixed units) shows
+                // the reason instead of a number — never a unitless total.
+                data.confirmed.treated_area_confirmed_avoided === null
+                  ? data.confirmed.treated_area_confirmed_avoided_note
+                  : `${data.confirmed.treated_area_confirmed_avoided} ${
+                      data.confirmed.treated_area_confirmed_avoided_unit ||
+                      "(unit not recorded)"
+                    } confirmed avoided`
+              }
             />
             <Metric
               label="Rescue treatments (failures)"

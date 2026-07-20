@@ -27,8 +27,27 @@ FollowUpEventType = Literal[
 ]
 ImpactLevel = Literal["positive", "neutral", "negative", "unknown"]
 # CSV pilot-import record types. spray_events = historical *actual* applications —
-# the reduction baseline's denominator.
-ImportRecordType = Literal["planned_sprays", "scout_observations", "spray_events"]
+# the reduction baseline's denominator. The three pilot types (weather, standardized
+# scouting samples, block outcomes) are CSV-only: AI extraction is deliberately NOT
+# offered for them, mirroring the spray_events decision.
+ImportRecordType = Literal[
+    "planned_sprays", "scout_observations", "spray_events",
+    "weather_observations", "scouting_samples",
+]
+
+# Standardized scouting methods. Two samples taken by different methods are not
+# directly comparable, so the method travels with every sample and is never inferred.
+ScoutingMethod = Literal[
+    "whole_plant_count", "fruit_count", "flower_count", "leaf_count",
+    "trap_count", "transect_walk", "other",
+]
+
+# Where an observation came from. Separate from `data_source` (the concierge-pilot
+# provenance vocabulary) because an observation's origin and its trustworthiness are
+# different questions.
+ObservationSourceType = Literal[
+    "manual_entry", "station_export", "imported_unverified", "pca_verified", "demo",
+]
 # Import date-format modes; "auto" rejects ambiguous m/d-vs-d/m dates (never guessed).
 ImportDateFormat = Literal["auto", "iso", "mdy", "dmy"]
 
@@ -68,6 +87,219 @@ class Farm(FarmBase):
     id: int
 
 
+# ----------------------------------------------------------------- PCA credentials
+class PcaCredentialCreate(BaseModel):
+    """Issue a credential. The token is generated server-side and never supplied."""
+    display_name: str = Field(min_length=1)
+    license_identifier: str = Field(min_length=1)
+    license_state: str = "CA"
+    issued_by: str | None = None
+    active_from: date | None = None
+    active_to: date | None = None
+
+
+class PcaCredential(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    display_name: str
+    license_identifier: str
+    license_state: str
+    token_prefix: str | None = None
+    issued_by: str | None = None
+    active_from: date | None = None
+    active_to: date | None = None
+    revoked_at: datetime | None = None
+    # Stated by the operator at issuance; Lumos has no registry to check it against
+    # and never implies otherwise.
+    license_verified_by_lumos: bool = False
+
+
+class PcaCredentialIssued(PcaCredential):
+    """The issuance response — the ONLY time the plaintext token exists in a payload.
+
+    It is not stored and cannot be re-read; a lost token is revoked and reissued.
+    """
+    token: str
+    token_notice: str = (
+        "Store this token now — only its hash is kept, so it can never be shown "
+        "again. If it is lost, revoke this credential and issue a new one."
+    )
+
+
+class PcaFarmAuthorizationCreate(BaseModel):
+    farm_id: int
+    granted_on: date | None = None
+    granted_by: str | None = None
+
+
+class PcaFarmAuthorization(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    pca_credential_id: int
+    farm_id: int
+    granted_on: date | None = None
+    granted_by: str | None = None
+    revoked_at: datetime | None = None
+
+
+# -------------------------------------------------------------------------- Block
+class BlockBase(BaseModel):
+    name: str
+    crop: str | None = None
+    cultivar: str | None = None
+    area: float | None = Field(default=None, gt=0)
+    area_unit: Literal["acres", "m2"] | None = None
+    planting_date: date | None = None
+    expected_harvest_date: date | None = None
+    # Phenology is recorded as observed, with its observation date — never computed
+    # from the planting date. A stage without a date is refused rather than dated
+    # silently (see the validator below).
+    phenology_stage: str | None = None
+    phenology_observed_on: date | None = None
+    notes: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+    @model_validator(mode="after")
+    def _phenology_needs_a_date(self):
+        if self.phenology_stage and self.phenology_observed_on is None:
+            raise ValueError(
+                "phenology_observed_on is required when phenology_stage is given — a "
+                "growth stage without an observation date cannot be placed in time, "
+                "and dating it for you would invent an observation."
+            )
+        return self
+
+
+class BlockCreate(BlockBase):
+    pass
+
+
+class Block(BlockBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+
+
+# ------------------------------------------------------------ WeatherObservation
+class WeatherObservationCreate(BaseModel):
+    block_id: int | None = None
+    station_id: str = Field(min_length=1)
+    station_name: str | None = None
+    station_distance_km: float | None = Field(default=None, ge=0)
+    observed_at: datetime
+    temperature_c: float | None = None
+    relative_humidity_pct: float | None = Field(default=None, ge=0, le=100)
+    rainfall_mm: float | None = Field(default=None, ge=0)
+    leaf_wetness_minutes: float | None = Field(default=None, ge=0)
+    # Must be stated when wetness is given: a derived value is a different kind of
+    # evidence from a measurement, and the risk assessment grades them differently.
+    wetness_is_measured: bool | None = None
+    source_type: ObservationSourceType = "manual_entry"
+    source_reference: str | None = None
+    quality_flag: str | None = None
+    supersedes_id: int | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+    @model_validator(mode="after")
+    def _wetness_provenance_is_explicit(self):
+        if self.leaf_wetness_minutes is not None and self.wetness_is_measured is None:
+            raise ValueError(
+                "wetness_is_measured is required when leaf_wetness_minutes is given — "
+                "a sensor measurement and a value derived from humidity are different "
+                "evidence, and assuming either one would misstate the evidence grade"
+            )
+        return self
+
+
+class WeatherObservation(WeatherObservationCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    recorded_at: datetime
+
+
+# --------------------------------------------------------------- ScoutingSample
+class ScoutingSampleCreate(BaseModel):
+    """A sample is a numerator over a stated denominator. Incidence is DERIVED."""
+    block_id: int
+    observed_at: datetime
+    method: ScoutingMethod
+    target: str = Field(min_length=1)
+    units_inspected: int = Field(gt=0)
+    units_affected: int = Field(ge=0)
+    severity_index: float | None = Field(default=None, ge=0)
+    severity_scale: str | None = None
+    scout_name: str | None = None
+    notes: str | None = None
+    source_type: ObservationSourceType = "manual_entry"
+    source_reference: str | None = None
+    external_record_id: str | None = None
+    supersedes_id: int | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+    @model_validator(mode="after")
+    def _affected_within_inspected(self):
+        if self.units_affected > self.units_inspected:
+            raise ValueError(
+                f"units_affected ({self.units_affected}) cannot exceed units_inspected "
+                f"({self.units_inspected}) — an incidence above 100% is a recording "
+                f"error, not a reading"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _severity_index_needs_its_scale(self):
+        if self.severity_index is not None and not self.severity_scale:
+            raise ValueError(
+                "severity_scale is required when severity_index is given — a severity "
+                "without its scale cannot be compared to anything"
+            )
+        return self
+
+
+class ScoutingSample(ScoutingSampleCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    recorded_at: datetime
+    # Derived server-side from units_affected / units_inspected; never accepted as
+    # input, so a percentage can never be asserted without the sample behind it.
+    incidence_pct: float | None = None
+
+
+# ----------------------------------------------------------- RiskInputSnapshot
+class RiskSnapshotCreate(BaseModel):
+    """Freeze the inputs for a decision. `as_of` defaults to now.
+
+    An explicit `as_of` is accepted so an operator can reconstruct a snapshot for a
+    past decision moment — the two-timestamp filter makes that safe, because a
+    reading entered after that moment is excluded no matter when it was observed.
+    """
+    as_of: datetime | None = None
+    horizon_hours: int = Field(default=72, gt=0, le=168)
+
+
+class RiskInputSnapshot(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    block_id: int
+    planned_spray_id: int | None = None
+    as_of: datetime
+    horizon_hours: int
+    target: str
+    snapshot_version: str
+    payload: dict
+    input_digest: str
+    # What was deliberately left out, and why (future / recorded late / superseded /
+    # quality-flagged / demo). Part of the evidence, not a detail.
+    excluded: list | None = None
+    created_at: datetime
+
+
 # --------------------------------------------------------------------- SprayEvent
 class SprayEventBase(BaseModel):
     product_name: str
@@ -85,6 +317,8 @@ class SprayEventBase(BaseModel):
     pre_harvest_interval_days: int | None = None
     re_entry_interval_hours: int | None = None
     field_block: str | None = None
+    # Optional link to a real Block. Never inferred from `field_block`.
+    block_id: int | None = None
     external_record_id: str | None = None
     source_system: str | None = None
     source_filename: str | None = None
@@ -104,6 +338,9 @@ class SprayEvent(SprayEventBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     farm_id: int
+    # Server-derived from Farm.area_unit, never client-supplied: what unit
+    # `treated_acres` is actually in. None = never declared, not "assume acres".
+    treated_area_unit: str | None = None
     # The purchase order whose delivered input this application consumed, when it
     # was procured through Inputs & finance (derived; None for everything else —
     # most applications are NOT procured through Lumos and carry no link).
@@ -121,6 +358,8 @@ class ScoutObservationBase(BaseModel):
     # Pilot CSV-import provenance (all optional).
     external_record_id: str | None = None
     field_block: str | None = None
+    # Optional link to a real Block. Never inferred from `field_block`.
+    block_id: int | None = None
     severity_scale: str | None = None
     count_value: float | None = None
     observer: str | None = None
@@ -175,6 +414,8 @@ DecisionOutcome = Literal[
 ]
 # Recorded real-world outcomes. Applied outcomes (sprayed_as_planned / changed_product)
 # create the linked SprayEvent; the others document a non-application honestly.
+# CANONICAL LIST: decision_status.PLANNED_SPRAY_OUTCOMES. Spelled out here because a
+# Literal cannot be built from a runtime tuple readably; test_invariants asserts parity.
 PlannedSprayOutcome = Literal[
     "sprayed_as_planned", "changed_product", "delayed", "avoided", "inspected_first"
 ]
@@ -196,6 +437,8 @@ class PlannedSprayCreate(BaseModel):
     # Real-record / import fields (all optional).
     external_record_id: str | None = None
     field_block: str | None = None
+    # Optional link to a real Block. Never inferred from `field_block`.
+    block_id: int | None = None
     crop: str | None = None
     treated_acres: float | None = Field(default=None, gt=0)
     epa_reg_no: str | None = None
@@ -329,8 +572,11 @@ class PlannedSpray(BaseModel):
     estimated_cost: float | None = None
     external_record_id: str | None = None
     field_block: str | None = None
+    block_id: int | None = None
     crop: str | None = None
     treated_acres: float | None = None
+    # Server-derived from Farm.area_unit (see SprayEvent.treated_area_unit).
+    treated_area_unit: str | None = None
     epa_reg_no: str | None = None
     moa_group: str | None = None
     rate_amount: float | None = None
@@ -354,6 +600,9 @@ class PlannedSpray(BaseModel):
     review_status: str
     review_comment: str | None = None
     reviewed_by: str | None = None
+    # Set when an approve/edit was backed by an authorized PCA credential. None means
+    # the attribution is an unverified free-text name (the pre-pilot behaviour).
+    reviewed_by_credential_id: int | None = None
     reviewed_at: datetime | None = None
     pca_next_action: str | None = None
     outcome: str

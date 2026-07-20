@@ -223,6 +223,20 @@ class PlannedSprayDecision:
         }
 
 
+# The severity scale `PcaPolicy.min_severity_to_treat` is expressed on. An observation
+# recorded on any OTHER scale is not comparable to that threshold and is never
+# converted: a 3 on a 1-10 scale is not a 3 on a 1-5 scale, and silently comparing them
+# reads as "threshold met" when it is not. Unstated means the default scale.
+DEFAULT_SEVERITY_SCALE = "1-5"
+_COMPARABLE_SEVERITY_SCALES = ("", "1-5", "1to5", "1_5", "0-5", "0to5")
+
+
+def severity_is_comparable_to_threshold(observation) -> bool:
+    """Is this observation's severity on the same scale as a PCA threshold?"""
+    scale = (getattr(observation, "severity_scale", None) or "").strip().lower()
+    return scale.replace(" ", "") in _COMPARABLE_SEVERITY_SCALES
+
+
 def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -686,13 +700,35 @@ def evaluate_planned_spray(
         )
         if policy is not None:
             threshold = policy.min_severity_to_treat
+            # Only severities recorded on the threshold's own scale may be compared.
+            # An observation on another scale is reported, never converted, and never
+            # counted as evidence — converting it would invent a reading.
+            comparable = [o for o in linked if severity_is_comparable_to_threshold(o)]
+            off_scale = [
+                (getattr(o, "severity_1_to_5", None), getattr(o, "severity_scale", None))
+                for o in linked
+                if not severity_is_comparable_to_threshold(o)
+                and getattr(o, "severity_1_to_5", None) is not None
+            ]
             severities = [
-                s for s in (getattr(o, "severity_1_to_5", None) for o in linked)
+                s for s in (getattr(o, "severity_1_to_5", None) for o in comparable)
                 if s is not None
             ]
             max_linked_severity = max(severities) if severities else None
             evidence_sufficient = (
                 max_linked_severity is not None and max_linked_severity >= threshold
+            )
+            off_scale_note = (
+                ""
+                if not off_scale
+                else (
+                    " " + "; ".join(
+                        f"an observation recorded as severity {value} on the "
+                        f"'{scale}' scale is NOT comparable to a "
+                        f"{DEFAULT_SEVERITY_SCALE} threshold and was not counted"
+                        for value, scale in off_scale
+                    ) + "."
+                )
             )
             if evidence_sufficient:
                 detail = (
@@ -706,7 +742,7 @@ def evaluate_planned_spray(
                     f"PCA-entered action threshold for '{target}': treat only if "
                     f"scouting severity >= {threshold}; the latest linked scouting "
                     f"severity is {max_linked_severity if max_linked_severity is not None else 'not recorded'}"
-                    f" — below the entered threshold."
+                    f" — below the entered threshold." + off_scale_note
                 )
             else:
                 detail = (
@@ -731,7 +767,14 @@ def evaluate_planned_spray(
                     "recent_observations_checked": len(recent_obs),
                     "max_linked_severity": max_linked_severity,
                     "pca_entered_threshold": threshold,
+                    "threshold_severity_scale": DEFAULT_SEVERITY_SCALE,
                     "policy_entered_by": getattr(policy, "entered_by", None),
+                    # Observations excluded because their scale differs from the
+                    # threshold's — recorded so the exclusion is auditable.
+                    "excluded_off_scale_severities": [
+                        {"severity": value, "severity_scale": scale}
+                        for value, scale in off_scale
+                    ],
                 },
                 source_authority=AUTHORITY_PCA,
                 entered_by=getattr(policy, "entered_by", None),

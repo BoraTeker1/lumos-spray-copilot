@@ -11,7 +11,10 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import clock, csv_import, decision_status, models, procurement_status, schemas, target_aliases
+from app import (
+    clock, csv_import, decision_status, models, pca_authority, procurement_status,
+    risk_snapshot, schemas, target_aliases,
+)
 from app.decision_engine import evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
 
@@ -20,7 +23,7 @@ from app.recommendation_engine import generate_recommendation
 _SEVERITY_TO_RISK = {"none": "low", "caution": "moderate", "critical": "elevated"}
 
 # Real-world outcomes that mean a spray was actually applied (they create the SprayEvent).
-APPLIED_OUTCOMES = ("sprayed_as_planned", "changed_product")
+APPLIED_OUTCOMES = decision_status.APPLIED_OUTCOMES
 
 
 class ReviewRequiredError(Exception):
@@ -42,6 +45,26 @@ class OutcomeChronologyError(Exception):
 class FollowUpError(Exception):
     """Raised when a follow-up event is invalid (no recorded outcome yet, or an
     impossible timeline)."""
+
+
+class PcaAuthorityError(Exception):
+    """Raised when PCA authority is claimed without an authorized credential.
+
+    Carries the machine-readable denial reason so the route can report *why* — an
+    authorized PCA being refused needs to know whether their token is unknown,
+    expired, revoked, or simply not granted this farm."""
+
+    def __init__(self, reason: str, message: str | None = None):
+        self.reason = reason
+        super().__init__(message or pca_authority.denial_message(reason))
+
+
+class CrossFarmReferenceError(Exception):
+    """Raised when a record would reference a row belonging to a different farm.
+
+    With no tenant model, `farm_id` IS the isolation boundary — so every FK that
+    crosses between farm-scoped rows must be checked explicitly. Silently accepting
+    a foreign block would attach one farm's outcomes to another farm's decisions."""
 
 
 # Compliance/decision-critical fields carried as DecisionInputValue rows (field-level
@@ -90,6 +113,350 @@ def delete_farm(db: Session, farm: models.Farm) -> None:
     db.commit()
 
 
+# ------------------------------------------------------------------ PCA credentials
+def create_pca_credential(
+    db: Session, data: schemas.PcaCredentialCreate
+) -> tuple[models.PcaCredential, str]:
+    """Issue a credential; returns (row, plaintext token). The token is shown once."""
+    token = pca_authority.generate_token()
+    credential = models.PcaCredential(
+        **data.model_dump(),
+        token_hash=pca_authority.hash_token(token),
+        token_prefix=pca_authority.token_prefix(token),
+    )
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    return credential, token
+
+
+def list_pca_credentials(db: Session) -> list[models.PcaCredential]:
+    return list(db.scalars(select(models.PcaCredential).order_by(models.PcaCredential.id)))
+
+
+def get_pca_credential(db: Session, credential_id: int) -> models.PcaCredential | None:
+    return db.get(models.PcaCredential, credential_id)
+
+
+def revoke_pca_credential(
+    db: Session, credential: models.PcaCredential
+) -> models.PcaCredential:
+    """Revocation is a timestamp, never a delete — the dispositions it signed remain
+    attributable after the credential stops being usable."""
+    if credential.revoked_at is None:
+        credential.revoked_at = clock.current_datetime()
+        db.commit()
+        db.refresh(credential)
+    return credential
+
+
+def resolve_pca_token(db: Session, token: str | None) -> models.PcaCredential | None:
+    """Look a credential up by token digest. The plaintext is never stored or logged."""
+    if not token:
+        return None
+    return db.scalar(
+        select(models.PcaCredential).where(
+            models.PcaCredential.token_hash == pca_authority.hash_token(token)
+        )
+    )
+
+
+def authorize_pca_for_farm(
+    db: Session, credential: models.PcaCredential, data: schemas.PcaFarmAuthorizationCreate
+) -> models.PcaFarmAuthorization:
+    auth = models.PcaFarmAuthorization(
+        pca_credential_id=credential.id, **data.model_dump()
+    )
+    db.add(auth)
+    db.commit()
+    db.refresh(auth)
+    return auth
+
+
+def revoke_farm_authorization(
+    db: Session, auth: models.PcaFarmAuthorization
+) -> models.PcaFarmAuthorization:
+    if auth.revoked_at is None:
+        auth.revoked_at = clock.current_datetime()
+        db.commit()
+        db.refresh(auth)
+    return auth
+
+
+def list_farm_authorizations(db: Session, farm_id: int) -> list[models.PcaFarmAuthorization]:
+    return list(
+        db.scalars(
+            select(models.PcaFarmAuthorization)
+            .where(models.PcaFarmAuthorization.farm_id == farm_id)
+            .order_by(models.PcaFarmAuthorization.id)
+        )
+    )
+
+
+def require_pca_for_farm(
+    db: Session, token: str | None, farm_id: int
+) -> models.PcaCredential:
+    """Resolve a token to a credential authorized for `farm_id`, or raise.
+
+    The single authorization entry point — every route that records a professional
+    decision goes through here so a new route cannot invent a weaker check.
+    """
+    if not token:
+        raise PcaAuthorityError(pca_authority.DENY_NO_TOKEN)
+    credential = resolve_pca_token(db, token)
+    reason = pca_authority.authorize(
+        credential,
+        credential.authorizations if credential is not None else [],
+        farm_id,
+        today=clock.current_date(),
+    )
+    if reason is not None:
+        raise PcaAuthorityError(reason)
+    return credential
+
+
+def farm_requires_pca_credential(db: Session, farm_id: int) -> bool:
+    """True once this farm has any live PCA authorization on record.
+
+    The escalation rule for claimed PCA authority: on a farm that has been set up
+    with credentialed PCAs, saying "a PCA entered these values" or recording an
+    approving review must be backed by a token. Farms with no credentials keep the
+    existing free-text behaviour, so the demo and every pre-pilot workflow are
+    untouched — enrolling a farm is what turns enforcement on.
+    """
+    today = clock.current_date()
+    return any(
+        pca_authority.authorization_is_active(auth, today)
+        for auth in list_farm_authorizations(db, farm_id)
+    )
+
+
+def ensure_pca_authority(
+    db: Session, farm_id: int, credential: models.PcaCredential | None, *, claim: str
+) -> None:
+    """Enforce that a PCA-authority claim on an enrolled farm is credential-backed."""
+    if not farm_requires_pca_credential(db, farm_id):
+        return
+    if credential is None:
+        raise PcaAuthorityError(
+            pca_authority.DENY_NO_TOKEN,
+            f"{claim} requires an authorized PCA credential on this farm — present "
+            f"it in the {pca_authority.TOKEN_HEADER} header",
+        )
+    reason = pca_authority.authorize(
+        credential, credential.authorizations, farm_id, today=clock.current_date()
+    )
+    if reason is not None:
+        raise PcaAuthorityError(reason)
+
+
+# ---------------------------------------------------------------------------- Blocks
+def list_blocks(db: Session, farm_id: int) -> list[models.Block]:
+    return list(
+        db.scalars(
+            select(models.Block)
+            .where(models.Block.farm_id == farm_id)
+            .order_by(models.Block.name)
+        )
+    )
+
+
+def get_block(db: Session, block_id: int) -> models.Block | None:
+    return db.get(models.Block, block_id)
+
+
+def create_block(db: Session, farm_id: int, data: schemas.BlockCreate) -> models.Block:
+    ensure_demo_real_separation(db, farm_id, data)
+    block = models.Block(farm_id=farm_id, **data.model_dump())
+    db.add(block)
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+def ensure_block_on_farm(db: Session, farm_id: int, block_id: int | None) -> None:
+    """Reject a block reference that does not belong to `farm_id`.
+
+    `farm_id` is the only isolation boundary this system has (there is no tenant
+    model), so a cross-farm block_id is exactly a tenancy violation: it would let one
+    farm's records be counted into another farm's pilot arm and outcomes.
+    """
+    if block_id is None:
+        return
+    block = db.get(models.Block, block_id)
+    if block is None:
+        raise CrossFarmReferenceError(f"block {block_id} does not exist")
+    if block.farm_id != farm_id:
+        raise CrossFarmReferenceError(
+            f"block {block_id} belongs to farm {block.farm_id}, not farm {farm_id} — "
+            f"records can never reference another farm's block"
+        )
+
+
+# ---------------------------------------------------- Pilot observations (append-only)
+def _ensure_supersede_target(db: Session, model, farm_id: int, supersedes_id: int | None):
+    """A correction may only supersede a row on the same farm."""
+    if supersedes_id is None:
+        return
+    prior = db.get(model, supersedes_id)
+    if prior is None:
+        raise CrossFarmReferenceError(f"record {supersedes_id} to supersede does not exist")
+    if prior.farm_id != farm_id:
+        raise CrossFarmReferenceError(
+            f"record {supersedes_id} belongs to another farm and cannot be superseded here"
+        )
+
+
+def create_weather_observation(
+    db: Session, farm_id: int, data: schemas.WeatherObservationCreate
+) -> models.WeatherObservation:
+    """Append one weather reading. Corrections supersede; nothing is ever edited."""
+    ensure_demo_real_separation(db, farm_id, data)
+    ensure_block_on_farm(db, farm_id, data.block_id)
+    _ensure_supersede_target(db, models.WeatherObservation, farm_id, data.supersedes_id)
+    row = models.WeatherObservation(
+        farm_id=farm_id, recorded_at=clock.current_datetime(), **data.model_dump()
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_weather_observations(
+    db: Session, farm_id: int, block_id: int | None = None
+) -> list[models.WeatherObservation]:
+    stmt = select(models.WeatherObservation).where(
+        models.WeatherObservation.farm_id == farm_id
+    )
+    if block_id is not None:
+        stmt = stmt.where(models.WeatherObservation.block_id == block_id)
+    return list(db.scalars(stmt.order_by(models.WeatherObservation.observed_at)))
+
+
+def incidence_pct(units_affected: int, units_inspected: int) -> float | None:
+    """The ONE place incidence is computed — always from a stated denominator."""
+    if not units_inspected:
+        return None
+    return round(100.0 * units_affected / units_inspected, 2)
+
+
+def create_scouting_sample(
+    db: Session, farm_id: int, data: schemas.ScoutingSampleCreate
+) -> models.ScoutingSample:
+    ensure_demo_real_separation(db, farm_id, data)
+    ensure_block_on_farm(db, farm_id, data.block_id)
+    _ensure_supersede_target(db, models.ScoutingSample, farm_id, data.supersedes_id)
+    row = models.ScoutingSample(
+        farm_id=farm_id,
+        recorded_at=clock.current_datetime(),
+        incidence_pct=incidence_pct(data.units_affected, data.units_inspected),
+        **data.model_dump(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_scouting_samples(
+    db: Session, farm_id: int, block_id: int | None = None
+) -> list[models.ScoutingSample]:
+    stmt = select(models.ScoutingSample).where(models.ScoutingSample.farm_id == farm_id)
+    if block_id is not None:
+        stmt = stmt.where(models.ScoutingSample.block_id == block_id)
+    return list(db.scalars(stmt.order_by(models.ScoutingSample.observed_at)))
+
+
+def superseded_ids(rows) -> set[int]:
+    """Ids that some later row replaces — the corrected-away set.
+
+    Mirrors `active_input_values`: the current picture is every row that nothing
+    supersedes, and the replaced rows stay on file rather than being deleted.
+    """
+    return {
+        r.supersedes_id for r in rows if getattr(r, "supersedes_id", None) is not None
+    }
+
+
+def active_rows(rows) -> list:
+    replaced = superseded_ids(rows)
+    return [r for r in rows if r.id not in replaced]
+
+
+# ------------------------------------------------------- Risk input snapshots
+# The pilot's disease target. Single-target by design: the Botrytis deferral
+# hypothesis is what the pilot exists to falsify, and a generalized multi-disease
+# surface would be speculative platform work.
+PILOT_TARGET = "botrytis_fruit_rot"
+
+
+def create_risk_snapshot(
+    db: Session,
+    planned: models.PlannedSpray,
+    *,
+    as_of: datetime | None = None,
+    horizon_hours: int = 72,
+) -> models.RiskInputSnapshot:
+    """Freeze what is knowable right now for this decision's block.
+
+    Note what is NOT passed to `risk_snapshot.build_snapshot`: this function has the
+    planned spray, its review, its outcome, and the whole session in scope, and hands
+    over only the block and the observations. That narrowing is the leakage boundary
+    — see app/risk_snapshot.py.
+    """
+    if planned.block_id is None:
+        raise CrossFarmReferenceError(
+            "this decision is not linked to a block — a risk assessment is always "
+            "about a specific block, and the block is never guessed from `field_block`"
+        )
+    block = get_block(db, planned.block_id)
+    as_of = as_of or clock.current_datetime()
+
+    draft = risk_snapshot.build_snapshot(
+        as_of=as_of,
+        horizon_hours=horizon_hours,
+        target=PILOT_TARGET,
+        block=block,
+        weather_observations=list_weather_observations(db, planned.farm_id),
+        scouting_samples=list_scouting_samples(db, planned.farm_id, planned.block_id),
+    )
+
+    row = models.RiskInputSnapshot(
+        farm_id=planned.farm_id,
+        block_id=planned.block_id,
+        planned_spray_id=planned.id,
+        as_of=as_of,
+        horizon_hours=horizon_hours,
+        target=PILOT_TARGET,
+        snapshot_version=risk_snapshot.SNAPSHOT_VERSION,
+        payload=draft.as_payload(),
+        input_digest=draft.input_digest,
+        excluded=draft.excluded,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_risk_snapshots(db: Session, planned_spray_id: int) -> list[models.RiskInputSnapshot]:
+    return list(
+        db.scalars(
+            select(models.RiskInputSnapshot)
+            .where(models.RiskInputSnapshot.planned_spray_id == planned_spray_id)
+            .order_by(models.RiskInputSnapshot.as_of)
+        )
+    )
+
+
+def latest_risk_snapshot(
+    db: Session, planned_spray_id: int
+) -> models.RiskInputSnapshot | None:
+    snapshots = list_risk_snapshots(db, planned_spray_id)
+    return snapshots[-1] if snapshots else None
+
+
 # ----------------------------------------------------------------------- SprayEvents
 def list_spray_events(db: Session, farm_id: int) -> list[models.SprayEvent]:
     return list(
@@ -101,11 +468,26 @@ def list_spray_events(db: Session, farm_id: int) -> list[models.SprayEvent]:
     )
 
 
+def resolve_treated_area_unit(db: Session, farm_id: int) -> str | None:
+    """The unit a farm's `treated_acres` numbers are actually in.
+
+    Reads `Farm.area_unit` — the farm already declares whether it measures in acres or
+    m2, so the unit is recorded rather than implied by the acre-named column. Returns
+    None when the farm never declared one; that stays honestly unspecified and is
+    never assumed to be acres (see pilot_evidence._sum_treated_area).
+    """
+    farm = db.get(models.Farm, farm_id)
+    return getattr(farm, "area_unit", None) if farm else None
+
+
 def create_spray_event(
     db: Session, farm_id: int, data: schemas.SprayEventCreate
 ) -> models.SprayEvent:
     ensure_demo_real_separation(db, farm_id, data)
+    ensure_block_on_farm(db, farm_id, data.block_id)
     event = models.SprayEvent(farm_id=farm_id, **data.model_dump())
+    if event.treated_acres is not None:
+        event.treated_area_unit = resolve_treated_area_unit(db, farm_id)
     db.add(event)
     db.commit()
     db.refresh(event)
@@ -136,6 +518,7 @@ def create_scout_observation(
     db: Session, farm_id: int, data: schemas.ScoutObservationCreate
 ) -> models.ScoutObservation:
     ensure_demo_real_separation(db, farm_id, data)
+    ensure_block_on_farm(db, farm_id, data.block_id)
     obs = models.ScoutObservation(farm_id=farm_id, **data.model_dump())
     db.add(obs)
     db.commit()
@@ -337,6 +720,7 @@ def create_planned_spray(
     source_reference: str | None = None,
     expected_harvest_date: date | None = None,
     pilot_import_batch_id: int | None = None,
+    pca_credential: models.PcaCredential | None = None,
     commit: bool = True,
 ) -> models.PlannedSpray:
     """Run the pre-spray decision check against current records and persist the snapshot.
@@ -347,6 +731,14 @@ def create_planned_spray(
     "imported_unverified"); imported values can never back a definitive result.
     """
     ensure_demo_real_separation(db, farm.id, data)
+    ensure_block_on_farm(db, farm.id, data.block_id)
+    # `values_source="pca_entered"` maps to pca_verified provenance, which can lift the
+    # decision to `pca_authorized` — i.e. a client string could grant itself PCA
+    # authority. On an enrolled farm that claim must be credential-backed.
+    if data.values_source == "pca_entered":
+        ensure_pca_authority(
+            db, farm.id, pca_credential, claim="claiming PCA-entered values"
+        )
     sprays = list_spray_events(db, farm.id)
     observations = list_scout_observations(db, farm.id)
 
@@ -384,6 +776,8 @@ def create_planned_spray(
         check_risk_level=_SEVERITY_TO_RISK.get(decision.severity, "low"),
         check_text=decision.narrative,
     )
+    if planned.treated_acres is not None:
+        planned.treated_area_unit = getattr(farm, "area_unit", None)
     db.add(planned)
     db.flush()
 
@@ -447,7 +841,11 @@ def _rerun_decision(db: Session, planned: models.PlannedSpray) -> None:
 
 
 def review_planned_spray(
-    db: Session, planned: models.PlannedSpray, data: schemas.PlannedSprayReviewUpdate
+    db: Session,
+    planned: models.PlannedSpray,
+    data: schemas.PlannedSprayReviewUpdate,
+    *,
+    pca_credential: models.PcaCredential | None = None,
 ) -> models.PlannedSpray:
     """Record the PCA/agronomist's review of a pre-spray decision.
 
@@ -457,12 +855,26 @@ def review_planned_spray(
     re-evaluated against the updated values; the pre-review snapshot survives in the
     audit event's `before`.
     """
+    # An approval or edit unlocks applying the spray and marks values pca_verified —
+    # on an enrolled farm that must come from an authorized credential, not a name in
+    # a text field. A rejection is deliberately NOT gated: refusing a spray is always
+    # allowed to be easier than authorizing one.
+    if data.action in decision_status.APPLIED_OUTCOME_UNLOCK_STATUSES:
+        ensure_pca_authority(
+            db, planned.farm_id, pca_credential, claim=f"recording an {data.action} review"
+        )
+
     before = _decision_snapshot(planned)
     before["decision_payload"] = planned.decision_payload
 
     planned.review_status = data.action
     planned.review_comment = data.review_comment
     planned.reviewed_by = data.reviewed_by
+    if pca_credential is not None:
+        planned.reviewed_by_credential_id = pca_credential.id
+        # The credential's own name wins over whatever the client typed: attribution
+        # must match the thing that was actually verified.
+        planned.reviewed_by = pca_credential.display_name
     planned.reviewed_at = clock.current_datetime()
     planned.pca_next_action = data.pca_next_action if data.action == "edited" else None
 
@@ -608,6 +1020,7 @@ def record_planned_spray_outcome(
             rate_amount=None if changed else planned.rate_amount,
             rate_unit=None if changed else planned.rate_unit,
             treated_acres=planned.treated_acres,
+            treated_area_unit=planned.treated_area_unit,
             # PHI/REI were entered for the planned product; they do not carry over to a
             # different product — the changed product's values must be re-entered.
             pre_harvest_interval_days=None if changed else planned.pre_harvest_interval_days,
@@ -831,6 +1244,22 @@ def _existing_duplicate_keys(db: Session, farm_id: int, record_type: str) -> dic
             keys[csv_import.duplicate_key_for_spray_event(
                 None, s.product_name, s.application_date, s.field_block
             )] = label
+    elif record_type == csv_import.RECORD_TYPE_WEATHER:
+        for w in list_weather_observations(db, farm_id):
+            keys[csv_import.duplicate_key_for_weather(w.station_id, w.observed_at)] = (
+                f"weather reading #{w.id} ({w.station_id} at {w.observed_at})"
+            )
+    elif record_type == csv_import.RECORD_TYPE_SCOUTING_SAMPLES:
+        blocks = {b.id: b.name for b in list_blocks(db, farm_id)}
+        for s in list_scouting_samples(db, farm_id):
+            label = f"scouting sample #{s.id} ({s.target} at {s.observed_at})"
+            if s.external_record_id:
+                keys[csv_import.duplicate_key_for_scouting_sample(
+                    s.external_record_id, None, None, None
+                )] = label
+            keys[csv_import.duplicate_key_for_scouting_sample(
+                None, blocks.get(s.block_id), s.target, s.observed_at
+            )] = label
     else:
         for o in list_scout_observations(db, farm_id):
             label = f"scouting observation #{o.id} ({o.visible_issue} on {o.observation_date})"
@@ -842,6 +1271,11 @@ def _existing_duplicate_keys(db: Session, farm_id: int, record_type: str) -> dic
                 None, o.visible_issue, o.observation_date, o.field_block
             )] = label
     return keys
+
+
+def block_names_for_import(db: Session, farm_id: int) -> set[str]:
+    """Lower-cased block names, so the dry run can reject an unknown block itself."""
+    return {(b.name or "").strip().lower() for b in list_blocks(db, farm_id)}
 
 
 def commit_import(
@@ -943,6 +1377,10 @@ def commit_import(
                 rate_amount=values.get("rate_amount"),
                 rate_unit=values.get("rate_unit"),
                 treated_acres=values.get("treated_acres"),
+                treated_area_unit=(
+                    resolve_treated_area_unit(db, farm.id)
+                    if values.get("treated_acres") is not None else None
+                ),
                 cost=values.get("cost"),
                 pre_harvest_interval_days=values.get("pre_harvest_interval_days"),
                 re_entry_interval_hours=values.get("re_entry_interval_hours"),
@@ -959,6 +1397,83 @@ def commit_import(
             db.flush()
             created_ids.append(event.id)
         batch.spray_event_count = len(created_ids)
+    elif record_type == csv_import.RECORD_TYPE_WEATHER:
+        for row in report.importable_rows:
+            values = row.values
+            reading = models.WeatherObservation(
+                farm_id=farm.id,
+                station_id=values["station_id"],
+                station_name=values.get("station_name"),
+                station_distance_km=values.get("station_distance_km"),
+                observed_at=values["observed_at"],
+                recorded_at=clock.current_datetime(),
+                temperature_c=values.get("temperature_c"),
+                relative_humidity_pct=values.get("relative_humidity_pct"),
+                rainfall_mm=values.get("rainfall_mm"),
+                leaf_wetness_minutes=values.get("leaf_wetness_minutes"),
+                # Unstated provenance is recorded as NOT measured: assuming a sensor
+                # reading would overstate the evidence grade of every imported hour.
+                wetness_is_measured=values.get("wetness_is_measured"),
+                quality_flag=values.get("quality_flag"),
+                source_type="imported_unverified",
+                source_reference=(
+                    values.get("source_reference")
+                    or f"{source_filename or entry_source} row {row.row_number}"
+                ),
+                data_source=data_source,
+                data_confidence=data_confidence,
+            )
+            db.add(reading)
+            db.flush()
+            created_ids.append(reading.id)
+        batch.weather_observation_count = len(created_ids)
+    elif record_type == csv_import.RECORD_TYPE_SCOUTING_SAMPLES:
+        blocks_by_name = {
+            (b.name or "").strip().lower(): b.id for b in list_blocks(db, farm.id)
+        }
+        for row in report.importable_rows:
+            values = row.values
+            block_id = blocks_by_name.get((values["block_name"] or "").strip().lower())
+            if block_id is None:
+                # validate_rows already rejects unknown blocks when the caller passes
+                # known_block_names; this is the belt-and-braces for any caller that
+                # does not. A sample is never attached to a guessed block.
+                raise CrossFarmReferenceError(
+                    f"block '{values['block_name']}' does not exist on this farm"
+                )
+            sample = models.ScoutingSample(
+                farm_id=farm.id,
+                block_id=block_id,
+                observed_at=values["observed_at"],
+                recorded_at=clock.current_datetime(),
+                method=values["method"],
+                target=values["target"],
+                units_inspected=values["units_inspected"],
+                units_affected=values["units_affected"],
+                incidence_pct=incidence_pct(
+                    values["units_affected"], values["units_inspected"]
+                ),
+                # A severity index without its scale cannot be compared to anything,
+                # so it is dropped rather than stored as if it were comparable.
+                severity_index=(
+                    values.get("severity_index")
+                    if values.get("severity_scale") else None
+                ),
+                severity_scale=values.get("severity_scale"),
+                scout_name=values.get("scout_name"),
+                notes=values.get("notes"),
+                external_record_id=values.get("external_record_id"),
+                source_type="imported_unverified",
+                source_reference=(
+                    f"{source_filename or entry_source} row {row.row_number}"
+                ),
+                data_source=data_source,
+                data_confidence=data_confidence,
+            )
+            db.add(sample)
+            db.flush()
+            created_ids.append(sample.id)
+        batch.scouting_sample_count = len(created_ids)
     else:
         for row in report.importable_rows:
             values = row.values
@@ -1021,6 +1536,8 @@ def commit_import(
             "planned_spray_count": batch.planned_spray_count,
             "scouting_observation_count": batch.scouting_observation_count,
             "spray_event_count": batch.spray_event_count,
+            "weather_observation_count": batch.weather_observation_count,
+            "scouting_sample_count": batch.scouting_sample_count,
             "imported_at": batch.created_at.isoformat(),
         },
         "created_record_ids": created_ids,
@@ -1040,6 +1557,9 @@ def import_csv(db: Session, farm: models.Farm, req: schemas.CsvImportRequest) ->
         mapping_overrides=req.mapping,
         existing_keys=_existing_duplicate_keys(db, farm.id, req.record_type),
         date_format=req.date_format,
+        # So a sample naming an unknown block fails in the dry run rather than at
+        # commit — a dry run that says "importable" and then fails is worse than none.
+        known_block_names=block_names_for_import(db, farm.id),
     )
     if req.dry_run:
         return {
@@ -1398,7 +1918,7 @@ def set_spray_baseline(
 # see _validate_plan_item — and always trace back to one of these.)
 _FARM_RECORD_MODELS = (
     models.SprayEvent, models.ScoutObservation, models.PlannedSpray,
-    models.SprayBaseline, models.PcaPolicy,
+    models.SprayBaseline, models.PcaPolicy, models.Block,
 )
 
 

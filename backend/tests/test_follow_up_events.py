@@ -12,6 +12,9 @@ def _farm(client):
     return client.post("/farms", json={
         "name": "Follow-up Farm", "country": "US", "crop_type": "strawberry",
         "expected_harvest_date": "2026-09-01", "greenhouse_area": 20.0,
+        # Declared so treated-area totals carry a real unit; without it the evidence
+        # correctly reports the area as unit-unspecified rather than assuming acres.
+        "area_unit": "acres",
     }).json()
 
 
@@ -101,7 +104,8 @@ def test_avoidance_is_estimated_until_follow_up_confirms_it(client):
     )
     ev = _evidence(client, farm["id"])
     assert ev["confirmed"]["applications_confirmed_avoided"] == 1
-    assert ev["confirmed"]["treated_acres_confirmed_avoided"] == 10.0
+    assert ev["confirmed"]["treated_area_confirmed_avoided"] == 10.0
+    assert ev["confirmed"]["treated_area_confirmed_avoided_unit"] == "acres"
     assert ev["confirmed"]["confirmed_gross_spend_avoided"] == 95.0
     assert ev["confirmed"]["confirmed_additional_scouting_cost"] == 30.0
     assert ev["confirmed"]["confirmed_net_financial_result"] == 65.0

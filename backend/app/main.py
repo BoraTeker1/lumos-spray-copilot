@@ -6,12 +6,16 @@ No auth in v1, but handlers are kept stateless so an auth dependency can be adde
 import csv
 import io
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import ai_brief, clock, crud, csv_import, decision_status, extraction, llm, schemas
+from app import (
+    ai_brief, clock, crud, csv_import, decision_status, extraction, llm,
+    pca_authority, schemas,
+)
 from app.analytics import compute_cost_analytics
 from app.database import get_db, init_db
 from app.pilot_evidence import (
@@ -53,6 +57,72 @@ app.add_middleware(
 @app.exception_handler(crud.DemoMixingError)
 def _demo_mixing_handler(request, exc: crud.DemoMixingError):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+# `farm_id` is this system's only isolation boundary (there is no tenant model), so a
+# reference that crosses farms is rejected wherever it is attempted — one handler
+# rather than a per-route check that a new route could forget.
+@app.exception_handler(crud.CrossFarmReferenceError)
+def _cross_farm_handler(request, exc: crud.CrossFarmReferenceError):
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+# A refused PCA-authority claim is 403 everywhere, with the machine-readable reason
+# attached: a PCA being denied needs to know whether their token is unknown, expired,
+# revoked, or simply not granted this farm.
+@app.exception_handler(crud.PcaAuthorityError)
+def _pca_authority_handler(request, exc: crud.PcaAuthorityError):
+    return JSONResponse(
+        status_code=403, content={"detail": str(exc), "reason": exc.reason}
+    )
+
+
+# A database uniqueness violation is a duplicate, not a server fault. The only such
+# constraints are the PCA token digest and the one-original-reading-per-station-hour
+# partial index, so a clear 409 beats a 500 for both.
+@app.exception_handler(IntegrityError)
+def _integrity_handler(request, exc: IntegrityError):
+    detail = "This record conflicts with one that already exists."
+    # SQLite names the COLUMNS in the violation, not the index, so match on those.
+    origin = str(getattr(exc, "orig", exc))
+    if "weather_observations.station_id" in origin and "observed_at" in origin:
+        detail = (
+            "A reading already exists for this station at this timestamp. Duplicating "
+            "an hour would double-count it in a risk window — to correct the existing "
+            "reading, post a new one with `supersedes_id` set to it."
+        )
+    return JSONResponse(status_code=409, content={"detail": detail})
+
+
+def optional_pca_credential(
+    x_lumos_pca_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Resolve the PCA token when one is presented, without requiring it.
+
+    Routes that MAY be credential-gated (creating a check, recording a review) take
+    this and let `crud.ensure_pca_authority` decide whether this farm demands one.
+    Routes that ALWAYS require it (recording a disposition) call
+    `crud.require_pca_for_farm` directly, so the strict path can never degrade into
+    the optional one by accident.
+
+    A token that is PRESENTED but unusable — unknown, revoked, expired, not yet
+    active — is always an error, even on a farm that would not otherwise require one.
+    Silently ignoring it would let a PCA whose token was mistyped or revoked act
+    through the anonymous free-text path while believing they had authority, and
+    would attribute the record to a credential that is no longer valid.
+
+    Credential VALIDITY is checked here because it is global; farm SCOPE is checked
+    by `crud.ensure_pca_authority` / `crud.require_pca_for_farm`, because only they
+    know which farm is being acted on.
+    """
+    if x_lumos_pca_token is None:
+        return None
+    credential = crud.resolve_pca_token(db, x_lumos_pca_token)
+    reason = pca_authority.credential_denial_reason(credential, clock.current_date())
+    if reason is not None:
+        raise crud.PcaAuthorityError(reason)
+    return credential
 
 
 @app.on_event("startup")
@@ -216,6 +286,84 @@ def remove_farm(farm_id: int, db: Session = Depends(get_db)):
     crud.delete_farm(db, farm)
 
 
+# ------------------------------------------------------------------------ Blocks
+@app.get("/farms/{farm_id}/blocks", response_model=list[schemas.Block], tags=["blocks"])
+def get_blocks(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_blocks(db, farm_id)
+
+
+@app.post(
+    "/farms/{farm_id}/blocks",
+    response_model=schemas.Block,
+    status_code=201,
+    tags=["blocks"],
+)
+def post_block(farm_id: int, payload: schemas.BlockCreate, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.create_block(db, farm_id, payload)
+
+
+# --------------------------------------------------------- Pilot observations
+# Append-only inputs to a disease-risk assessment. There is no update or delete: a
+# correction appends a row that supersedes the one it replaces.
+@app.get(
+    "/farms/{farm_id}/weather-observations",
+    response_model=list[schemas.WeatherObservation],
+    tags=["pilot-observations"],
+)
+def get_weather_observations(
+    farm_id: int, block_id: int | None = None, db: Session = Depends(get_db)
+):
+    _require_farm(db, farm_id)
+    return crud.list_weather_observations(db, farm_id, block_id)
+
+
+@app.post(
+    "/farms/{farm_id}/weather-observations",
+    response_model=schemas.WeatherObservation,
+    status_code=201,
+    tags=["pilot-observations"],
+)
+def post_weather_observation(
+    farm_id: int,
+    payload: schemas.WeatherObservationCreate,
+    db: Session = Depends(get_db),
+):
+    """Record one weather reading. Manual/CSV entry only — Lumos has no weather
+    provider integration, and none should be built before the provider and field
+    requirements are known."""
+    _require_farm(db, farm_id)
+    return crud.create_weather_observation(db, farm_id, payload)
+
+
+@app.get(
+    "/farms/{farm_id}/scouting-samples",
+    response_model=list[schemas.ScoutingSample],
+    tags=["pilot-observations"],
+)
+def get_scouting_samples(
+    farm_id: int, block_id: int | None = None, db: Session = Depends(get_db)
+):
+    _require_farm(db, farm_id)
+    return crud.list_scouting_samples(db, farm_id, block_id)
+
+
+@app.post(
+    "/farms/{farm_id}/scouting-samples",
+    response_model=schemas.ScoutingSample,
+    status_code=201,
+    tags=["pilot-observations"],
+)
+def post_scouting_sample(
+    farm_id: int, payload: schemas.ScoutingSampleCreate, db: Session = Depends(get_db)
+):
+    """Record one standardized scouting sample. Incidence is derived from the stated
+    denominator, never accepted as input."""
+    _require_farm(db, farm_id)
+    return crud.create_scouting_sample(db, farm_id, payload)
+
+
 # ------------------------------------------------------------------- Spray events
 @app.get(
     "/farms/{farm_id}/spray-events",
@@ -340,7 +488,10 @@ def get_planned_sprays(farm_id: int, db: Session = Depends(get_db)):
     tags=["planned-sprays"],
 )
 def post_planned_spray(
-    farm_id: int, payload: schemas.PlannedSprayCreate, db: Session = Depends(get_db)
+    farm_id: int,
+    payload: schemas.PlannedSprayCreate,
+    db: Session = Depends(get_db),
+    pca=Depends(optional_pca_credential),
 ):
     """Check an *intended* spray before it happens (the pre-spray decision point).
 
@@ -351,7 +502,40 @@ def post_planned_spray(
     Decision support only — the real-world outcome is recorded separately by the human.
     """
     farm = _require_farm(db, farm_id)
-    return crud.create_planned_spray(db, farm, payload)
+    return crud.create_planned_spray(db, farm, payload, pca_credential=pca)
+
+
+@app.post(
+    "/planned-sprays/{planned_id}/risk-snapshot",
+    response_model=schemas.RiskInputSnapshot,
+    status_code=201,
+    tags=["pilot-risk"],
+)
+def post_risk_snapshot(
+    planned_id: int,
+    payload: schemas.RiskSnapshotCreate,
+    db: Session = Depends(get_db),
+):
+    """Freeze exactly what was knowable at this moment for this decision's block.
+
+    Immutable once written. Observations that were recorded after `as_of` are
+    excluded even when they describe an earlier time — knowing something later is not
+    knowing it then, and an assessment scored on hindsight would be meaningless.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    return crud.create_risk_snapshot(
+        db, planned, as_of=payload.as_of, horizon_hours=payload.horizon_hours
+    )
+
+
+@app.get(
+    "/planned-sprays/{planned_id}/risk-snapshots",
+    response_model=list[schemas.RiskInputSnapshot],
+    tags=["pilot-risk"],
+)
+def get_risk_snapshots(planned_id: int, db: Session = Depends(get_db)):
+    _require_planned_spray(db, planned_id)
+    return crud.list_risk_snapshots(db, planned_id)
 
 
 def _require_planned_spray(db: Session, planned_id: int):
@@ -377,14 +561,19 @@ def get_planned_spray(planned_id: int, db: Session = Depends(get_db)):
     tags=["planned-sprays"],
 )
 def patch_planned_spray_review(
-    planned_id: int, payload: schemas.PlannedSprayReviewUpdate, db: Session = Depends(get_db)
+    planned_id: int,
+    payload: schemas.PlannedSprayReviewUpdate,
+    db: Session = Depends(get_db),
+    pca=Depends(optional_pca_credential),
 ):
     """PCA / agronomist review of a pre-spray decision (approve / edit / reject + comment).
 
     An edit must include the PCA's replacement guidance; a rejection must say why.
+    On a farm with PCA credentials enrolled, an approve/edit requires an authorized
+    token (403 without one); a rejection never does.
     """
     planned = _require_planned_spray(db, planned_id)
-    return crud.review_planned_spray(db, planned, payload)
+    return crud.review_planned_spray(db, planned, payload, pca_credential=pca)
 
 
 @app.patch(
@@ -1021,6 +1210,84 @@ def farm_row_import(
     """
     farm = _require_farm(db, farm_id)
     return crud.import_rows(db, farm, payload)
+
+
+# ------------------------------------------------ INTERNAL: PCA credentials
+# Operator tooling. Issuing a credential is a deliberate out-of-band act: the operator
+# confirms the PCA's licence themselves and hands over the token directly. Lumos
+# verifies nothing against any registry and never claims to.
+@app.post(
+    "/internal/pca-credentials",
+    response_model=schemas.PcaCredentialIssued,
+    status_code=201,
+    tags=["internal"],
+)
+def post_pca_credential(
+    payload: schemas.PcaCredentialCreate, db: Session = Depends(get_db)
+):
+    """Issue a PCA credential. The plaintext token is returned ONCE and never stored."""
+    credential, token = crud.create_pca_credential(db, payload)
+    return schemas.PcaCredentialIssued(
+        **schemas.PcaCredential.model_validate(credential).model_dump(), token=token
+    )
+
+
+@app.get(
+    "/internal/pca-credentials",
+    response_model=list[schemas.PcaCredential],
+    tags=["internal"],
+)
+def get_pca_credentials(db: Session = Depends(get_db)):
+    return crud.list_pca_credentials(db)
+
+
+def _require_credential(db: Session, credential_id: int):
+    credential = crud.get_pca_credential(db, credential_id)
+    if credential is None:
+        raise HTTPException(status_code=404, detail="PCA credential not found")
+    return credential
+
+
+@app.post(
+    "/internal/pca-credentials/{credential_id}/revoke",
+    response_model=schemas.PcaCredential,
+    tags=["internal"],
+)
+def post_revoke_pca_credential(credential_id: int, db: Session = Depends(get_db)):
+    """Revoke a credential. Never deleted — the decisions it signed stay attributable."""
+    return crud.revoke_pca_credential(db, _require_credential(db, credential_id))
+
+
+@app.post(
+    "/internal/pca-credentials/{credential_id}/farm-authorizations",
+    response_model=schemas.PcaFarmAuthorization,
+    status_code=201,
+    tags=["internal"],
+)
+def post_pca_farm_authorization(
+    credential_id: int,
+    payload: schemas.PcaFarmAuthorizationCreate,
+    db: Session = Depends(get_db),
+):
+    """Authorize one credential for one farm.
+
+    Granting the FIRST authorization on a farm turns on credential enforcement there:
+    from then on, claiming PCA-entered values or recording an approve/edit review
+    requires a token.
+    """
+    credential = _require_credential(db, credential_id)
+    _require_farm(db, payload.farm_id)
+    return crud.authorize_pca_for_farm(db, credential, payload)
+
+
+@app.get(
+    "/internal/farms/{farm_id}/pca-authorizations",
+    response_model=list[schemas.PcaFarmAuthorization],
+    tags=["internal"],
+)
+def get_farm_pca_authorizations(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_farm_authorizations(db, farm_id)
 
 
 @app.post("/internal/farms/{farm_id}/pilot-import", status_code=201, tags=["internal"])
