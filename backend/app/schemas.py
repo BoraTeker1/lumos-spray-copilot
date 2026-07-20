@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.procurement_status import FINANCING_OFFER_DISCLAIMER
 
@@ -338,6 +338,49 @@ class DiseaseRiskAssessment(BaseModel):
     calculation: dict | None = None
     is_shadow: bool
     computed_at: datetime
+
+
+PcaDispositionValue = Literal[
+    "follow_baseline", "defer", "rescout", "insufficient_evidence"
+]
+
+
+class PcaDispositionCreate(BaseModel):
+    """The PCA's professional judgement. Rationale is mandatory and non-empty.
+
+    Note what a client cannot supply: the credential (it comes from the token), the
+    snapshot digest (server-read, so the anchor cannot be forged), or the assessment
+    link (server-resolved). A client can state a decision and a reason; everything
+    that makes it evidence is recorded by the server.
+    """
+    disposition: PcaDispositionValue
+    rationale: str = Field(min_length=1)
+    supersedes_id: int | None = None
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_must_say_something(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "a rationale is required — a disposition without a stated reason is "
+                "not usable as pilot evidence"
+            )
+        return v.strip()
+
+
+class PcaDisposition(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    planned_spray_id: int
+    pca_credential_id: int
+    disposition: str
+    rationale: str
+    assessment_id: int | None = None
+    snapshot_digest_at_decision: str
+    decided_at: datetime
+    supersedes_id: int | None = None
+    data_source: str
+    data_confidence: str
 
 
 # --------------------------------------------------------------------- SprayEvent

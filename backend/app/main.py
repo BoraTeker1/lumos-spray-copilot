@@ -568,6 +568,47 @@ def post_risk_assessment(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post(
+    "/planned-sprays/{planned_id}/pca-disposition",
+    response_model=schemas.PcaDisposition,
+    status_code=201,
+    tags=["pilot-risk"],
+)
+def post_pca_disposition(
+    planned_id: int,
+    payload: schemas.PcaDispositionCreate,
+    x_lumos_pca_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Record the licensed PCA's professional judgement about a scheduled application.
+
+    ALWAYS requires an authorized credential — this calls `crud.require_pca_for_farm`
+    directly rather than taking the optional dependency, so the strict path cannot
+    degrade into the permissive one on a farm that happens to have no credentials.
+
+    Recording a disposition changes nothing else about the decision. `defer` in
+    particular does not unlock applied outcomes and does not satisfy a required PCA
+    review — deferring and being cleared to spray are unrelated decisions.
+    """
+    planned = _require_planned_spray(db, planned_id)
+    credential = crud.require_pca_for_farm(db, x_lumos_pca_token, planned.farm_id)
+    try:
+        return crud.create_pca_disposition(db, planned, payload, credential)
+    except crud.SnapshotRequiredError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get(
+    "/planned-sprays/{planned_id}/pca-dispositions",
+    response_model=list[schemas.PcaDisposition],
+    tags=["pilot-risk"],
+)
+def get_pca_dispositions(planned_id: int, db: Session = Depends(get_db)):
+    """The full chain, superseded rows included — a correction never hides what it replaced."""
+    _require_planned_spray(db, planned_id)
+    return crud.list_pca_dispositions(db, planned_id)
+
+
 @app.get(
     "/internal/pilot/assessments",
     response_model=list[schemas.DiseaseRiskAssessment],
@@ -795,8 +836,17 @@ def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
 
 @app.delete("/planned-sprays/{planned_id}", status_code=204, tags=["planned-sprays"])
 def remove_planned_spray(planned_id: int, db: Session = Depends(get_db)):
+    """Remove a decision that has accumulated no evidence — e.g. one just mistyped.
+
+    409 once it carries an outcome, a completed review, follow-ups, a snapshot, an
+    assessment, a disposition, procurement, or any audit history beyond its creation.
+    Pilot evidence is append-only; a corrected decision is recorded, not swapped in.
+    """
     planned = _require_planned_spray(db, planned_id)
-    crud.delete_planned_spray(db, planned)
+    try:
+        crud.delete_planned_spray(db, planned)
+    except crud.DecisionHasEvidenceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # -------------------------------------------------------------- Recommendations

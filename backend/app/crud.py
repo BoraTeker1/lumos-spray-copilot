@@ -561,6 +561,77 @@ def list_shadow_assessments(
     return list(db.scalars(stmt.order_by(models.DiseaseRiskAssessment.computed_at.desc())))
 
 
+# ------------------------------------------------------------------ PcaDispositions
+def create_pca_disposition(
+    db: Session,
+    planned: models.PlannedSpray,
+    data: schemas.PcaDispositionCreate,
+    credential: models.PcaCredential,
+) -> models.PcaDisposition:
+    """Record the PCA's professional judgement. Append-only, attributed, anchored.
+
+    THE ORTHOGONALITY INVARIANT: this function writes exactly one new row and one
+    audit event. It does NOT touch `decision_outcome`, `decision_severity`,
+    `decision_authority`, `review_status`, `review_required` or `outcome` — not as a
+    convenience, not as a side effect. A PCA choosing to defer is a different fact
+    from the engine's verdict, from a completed review, and from the spray actually
+    not happening; a pilot that cannot tell them apart measures nothing.
+
+    In particular `defer` does not unlock applied outcomes and does not satisfy a
+    required review — deferring and being cleared to spray are unrelated decisions.
+    """
+    snapshot = latest_risk_snapshot(db, planned.id)
+    if snapshot is None:
+        raise SnapshotRequiredError(
+            "no risk snapshot exists for this decision — a disposition must be "
+            "anchored to what was knowable when it was made"
+        )
+
+    # Recorded even while blinded: the PCA did not see it, but the join is what lets
+    # the rule be scored against their independent judgement later.
+    assessments = list_disease_risk_assessments(db, planned.id)
+    assessment_id = assessments[-1].id if assessments else None
+
+    row = models.PcaDisposition(
+        planned_spray_id=planned.id,
+        pca_credential_id=credential.id,
+        disposition=data.disposition,
+        rationale=data.rationale,
+        assessment_id=assessment_id,
+        snapshot_digest_at_decision=snapshot.input_digest,
+        supersedes_id=data.supersedes_id,
+    )
+    db.add(row)
+    _add_audit_event(
+        db, planned, "pca_disposition_recorded",
+        actor=pca_authority.attribution(credential).get("display_name"),
+        rationale=data.rationale,
+        after={
+            "disposition": data.disposition,
+            "pca_credential_id": credential.id,
+            "snapshot_digest_at_decision": snapshot.input_digest,
+            "assessment_id": assessment_id,
+            "supersedes_id": data.supersedes_id,
+        },
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_pca_dispositions(
+    db: Session, planned_spray_id: int
+) -> list[models.PcaDisposition]:
+    """The full chain, superseded rows included — corrections never hide what they replace."""
+    return list(
+        db.scalars(
+            select(models.PcaDisposition)
+            .where(models.PcaDisposition.planned_spray_id == planned_spray_id)
+            .order_by(models.PcaDisposition.decided_at)
+        )
+    )
+
+
 # ----------------------------------------------------------------------- SprayEvents
 def list_spray_events(db: Session, farm_id: int) -> list[models.SprayEvent]:
     return list(
@@ -1803,7 +1874,56 @@ def list_ai_judgments(
     return list(db.scalars(stmt))
 
 
+class DecisionHasEvidenceError(Exception):
+    """Raised when deleting a decision would destroy accumulated evidence."""
+
+
+def decision_deletion_blockers(db: Session, planned: models.PlannedSpray) -> list[str]:
+    """Everything that makes this decision undeletable, named.
+
+    `input_values`, `audit_events` and `follow_up_events` cascade delete-orphan, so an
+    unguarded DELETE silently destroys the immutable audit trail — the one record whose
+    entire purpose is to be undestroyable. Snapshots and assessments do not cascade and
+    would be left dangling instead.
+
+    The legitimate use of DELETE is removing a check that was just mistyped, so the
+    guard triggers on evidence accumulated BEYOND creation rather than on existence:
+    a decision that has only its "created" audit event is still deletable.
+    """
+    blockers = []
+    if planned.outcome and planned.outcome != decision_status.OUTCOME_PLANNED:
+        blockers.append(f"a recorded outcome ({planned.outcome})")
+    if planned.review_status in decision_status.RESOLVED_REVIEW_STATUSES:
+        blockers.append(f"a completed PCA review ({planned.review_status})")
+    if list_follow_up_events(db, planned.id):
+        blockers.append("follow-up events")
+    if list_risk_snapshots(db, planned.id):
+        blockers.append("a risk-input snapshot")
+    if list_disease_risk_assessments(db, planned.id):
+        blockers.append("a disease-risk assessment")
+    if list_pca_dispositions(db, planned.id):
+        blockers.append("a PCA disposition")
+    if planned.input_plan_items:
+        blockers.append("linked procurement (input plan items)")
+
+    other_events = [
+        e for e in (planned.audit_events or []) if e.event_type != "created"
+    ]
+    if other_events:
+        kinds = sorted({e.event_type for e in other_events})
+        blockers.append(f"audit history ({', '.join(kinds)})")
+    return blockers
+
+
 def delete_planned_spray(db: Session, planned: models.PlannedSpray) -> None:
+    blockers = decision_deletion_blockers(db, planned)
+    if blockers:
+        raise DecisionHasEvidenceError(
+            "this decision cannot be deleted because it carries "
+            + ", ".join(blockers)
+            + ". Pilot evidence is append-only: record a corrected decision instead "
+            "of removing this one."
+        )
     db.delete(planned)
     db.commit()
 

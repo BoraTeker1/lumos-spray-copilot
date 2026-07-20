@@ -45,6 +45,27 @@ NON_APPLIED_OUTCOMES = ("delayed", "avoided", "inspected_first")
 # deliberately excluded — it is a starting state, not a decision.
 PLANNED_SPRAY_OUTCOMES = APPLIED_OUTCOMES + NON_APPLIED_OUTCOMES
 
+# --- PCA disposition: the professional judgement, orthogonal to everything else ---
+# What the licensed PCA decided to do about a scheduled Botrytis application. This is
+# NOT the deterministic verdict (decision_outcome), NOT the review (review_status), and
+# NOT what actually happened (outcome) — those are three different facts about three
+# different moments, and collapsing any of them would destroy the pilot's evidence.
+#
+# There is deliberately no value for rejecting or overriding a Lumos suggestion: while
+# the pilot is blinded the PCA never sees an assessment, so an override against an
+# unseen number would be meaningless data. Reject-style values are added only when a
+# protocol records `unblinded_at`.
+DISPOSITION_FOLLOW_BASELINE = "follow_baseline"
+DISPOSITION_DEFER = "defer"
+DISPOSITION_RESCOUT = "rescout"
+DISPOSITION_INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+PCA_DISPOSITIONS = (
+    DISPOSITION_FOLLOW_BASELINE,
+    DISPOSITION_DEFER,
+    DISPOSITION_RESCOUT,
+    DISPOSITION_INSUFFICIENT_EVIDENCE,
+)
+
 
 def review_state(planned) -> str:
     """One derived vocabulary for the review situation of a planned spray.

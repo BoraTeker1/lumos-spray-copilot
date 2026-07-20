@@ -402,6 +402,65 @@ class DiseaseRiskAssessment(Base):
     data_confidence: Mapped[str] = mapped_column(String(40), default="computed")
 
 
+class PcaDisposition(Base):
+    """What the licensed PCA decided about a scheduled application. Append-only.
+
+    A first-class, attributed record, deliberately separate from all three of its
+    neighbours: the deterministic verdict (`PlannedSpray.decision_*`), the review
+    (`review_*`), and what actually happened (`outcome`). Those are four different
+    facts about four different moments. Collapsing any pair would make the pilot
+    unable to distinguish "the rule said defer" from "the PCA chose to defer" from
+    "the spray was in fact deferred" — which is the entire measurement.
+
+    Invariants enforced in crud and pinned by tests:
+      * Recording one NEVER writes a decision_* or review_* column.
+      * `defer` does not unlock applied outcomes and does not satisfy a required
+        review. Deferring and being cleared to spray are orthogonal.
+      * It must be anchored to a snapshot digest, so the judgement is always tied to
+        what was knowable at the time.
+      * Corrections append a superseding row. Nothing is ever edited.
+
+    `assessment_id` is recorded even while blinded — the PCA did not see it, but the
+    join is what lets the rule be scored against their independent judgement later.
+    """
+    __tablename__ = "pca_dispositions"
+    __table_args__ = (
+        # One live disposition per decision. PARTIAL (supersedes_id IS NULL) for the
+        # same reason as the weather index: a correction repeats the planned_spray_id
+        # of the row it replaces, and a plain unique index would make the append-only
+        # correction path impossible.
+        Index(
+            "uq_pca_disposition_live_per_decision",
+            "planned_spray_id",
+            unique=True,
+            sqlite_where=text("supersedes_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    planned_spray_id: Mapped[int] = mapped_column(
+        ForeignKey("planned_sprays.id"), nullable=False, index=True
+    )
+    # NOT NULL: an unattributed professional decision is not a professional decision.
+    pca_credential_id: Mapped[int] = mapped_column(
+        ForeignKey("pca_credentials.id"), nullable=False, index=True
+    )
+    disposition: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Mandatory and non-empty (enforced in the schema). A disposition without a stated
+    # reason is unusable as evidence — this is the field the pilot actually learns from.
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    assessment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("disease_risk_assessments.id"), index=True
+    )
+    snapshot_digest_at_decision: Mapped[str] = mapped_column(String(64), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime, default=clock.current_datetime, nullable=False
+    )
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("pca_dispositions.id"))
+    data_source: Mapped[str] = mapped_column(String(40), default="pca_entered")
+    data_confidence: Mapped[str] = mapped_column(String(40), default="pca_reviewed")
+
+
 class PlannedSpray(Base):
     """An *intended* spray checked before it happens — the pre-spray decision point.
 
