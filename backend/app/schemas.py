@@ -383,6 +383,117 @@ class PcaDisposition(BaseModel):
     data_confidence: str
 
 
+# --------------------------------------------------------------- Pilot protocol
+AssignmentMethod = Literal["randomized", "matched", "observational"]
+TrialArm = Literal["control", "intervention"]
+BlockOutcomeType = Literal[
+    "disease_incidence", "rescue_treatment", "yield", "marketable_packout",
+    "cull", "cost", "adverse_event",
+]
+
+
+class PilotProtocolCreate(BaseModel):
+    """A versioned reference to the protocol document — not the protocol itself."""
+    version: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=200)
+    document_reference: str | None = None
+    assignment_method: AssignmentMethod
+    target: str = Field(min_length=1, max_length=80)
+    primary_metric: str = Field(min_length=1, max_length=120)
+    secondary_metrics: list[str] | None = None
+    effective_from: date
+    effective_to: date | None = None
+
+    @model_validator(mode="after")
+    def _effective_range_is_ordered(self):
+        if self.effective_to and self.effective_to < self.effective_from:
+            raise ValueError("effective_to cannot precede effective_from")
+        return self
+
+
+class PilotProtocol(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    version: str
+    name: str
+    document_reference: str | None = None
+    assignment_method: str
+    target: str
+    primary_metric: str
+    secondary_metrics: list | None = None
+    effective_from: date
+    effective_to: date | None = None
+    # The only thing that lifts shadow mode, and a recorded event when it does.
+    unblinded_at: datetime | None = None
+    created_at: datetime
+
+
+class BlockAssignmentCreate(BaseModel):
+    """Randomization happens offline; the seed is recorded so it stays reproducible."""
+    block_id: int
+    arm: TrialArm
+    matched_pair_key: str | None = None
+    assigned_on: date
+    assigned_by: str | None = None
+    assignment_seed: str | None = None
+
+
+class BlockAssignment(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    pilot_protocol_id: int
+    block_id: int
+    arm: str
+    matched_pair_key: str | None = None
+    assigned_on: date
+    assigned_by: str | None = None
+    assignment_seed: str | None = None
+    created_at: datetime
+
+
+class BlockOutcomeObservationCreate(BaseModel):
+    """A measured outcome for one block. A value without a unit is not a measurement."""
+    block_id: int
+    pilot_protocol_id: int | None = None
+    observed_on: date
+    outcome_type: BlockOutcomeType
+    value: float | None = None
+    unit: str | None = None
+    denominator: float | None = Field(default=None, gt=0)
+    method: str | None = None
+    notes: str | None = None
+    source_type: str | None = None
+    supersedes_id: int | None = None
+
+    @model_validator(mode="after")
+    def _value_requires_a_unit(self):
+        if self.value is not None and not (self.unit or "").strip():
+            raise ValueError(
+                "a unit is required whenever a value is given — nothing here converts "
+                "between units, and an unlabelled number is not a measurement"
+            )
+        return self
+
+
+class BlockOutcomeObservation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    block_id: int
+    pilot_protocol_id: int | None = None
+    observed_on: date
+    recorded_at: datetime
+    outcome_type: str
+    value: float | None = None
+    unit: str | None = None
+    denominator: float | None = None
+    method: str | None = None
+    notes: str | None = None
+    source_type: str | None = None
+    supersedes_id: int | None = None
+    created_at: datetime
+
+
 # --------------------------------------------------------------------- SprayEvent
 class SprayEventBase(BaseModel):
     product_name: str

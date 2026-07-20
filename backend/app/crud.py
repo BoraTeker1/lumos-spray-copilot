@@ -461,15 +461,39 @@ class SnapshotRequiredError(Exception):
     """Raised when an assessment is requested for a decision with no snapshot."""
 
 
+def active_pilot_protocol(db: Session, farm_id: int) -> models.PilotProtocol | None:
+    """The protocol version currently in force for this farm, if any."""
+    today = clock.current_date()
+    protocols = list(
+        db.scalars(
+            select(models.PilotProtocol)
+            .where(models.PilotProtocol.farm_id == farm_id)
+            .order_by(models.PilotProtocol.effective_from.desc())
+        )
+    )
+    for protocol in protocols:
+        if protocol.effective_from > today:
+            continue
+        if protocol.effective_to is not None and protocol.effective_to < today:
+            continue
+        return protocol
+    return None
+
+
 def farm_is_unblinded(db: Session, farm_id: int) -> bool:
     """Has this farm's pilot protocol reached its recorded unblinding moment?
 
-    False for now: `PilotProtocol` does not exist yet, so every assessment is shadow.
-    When it lands, this reads `unblinded_at` — a protocol-versioned event with a
-    recorded date, deliberately NOT a config toggle or an environment variable,
-    because when the PCA started seeing risk output is part of the pilot's evidence.
+    Reads `PilotProtocol.unblinded_at` — a protocol-versioned event with a recorded
+    date, deliberately NOT a config toggle or an environment variable, because when
+    the PCA started seeing risk output is itself part of the pilot's evidence.
+
+    No protocol means no unblinding: a farm cannot drift out of shadow mode by having
+    its protocol row deleted or never created.
     """
-    return False
+    protocol = active_pilot_protocol(db, farm_id)
+    if protocol is None or protocol.unblinded_at is None:
+        return False
+    return protocol.unblinded_at <= clock.current_datetime()
 
 
 def create_disease_risk_assessment(
@@ -629,6 +653,95 @@ def list_pca_dispositions(
             .where(models.PcaDisposition.planned_spray_id == planned_spray_id)
             .order_by(models.PcaDisposition.decided_at)
         )
+    )
+
+
+# ---------------------------------------------------------- Pilot protocol + arms
+def create_pilot_protocol(
+    db: Session, farm_id: int, data: schemas.PilotProtocolCreate
+) -> models.PilotProtocol:
+    protocol = models.PilotProtocol(farm_id=farm_id, **data.model_dump())
+    db.add(protocol)
+    db.commit()
+    db.refresh(protocol)
+    return protocol
+
+
+def list_pilot_protocols(db: Session, farm_id: int) -> list[models.PilotProtocol]:
+    return list(
+        db.scalars(
+            select(models.PilotProtocol)
+            .where(models.PilotProtocol.farm_id == farm_id)
+            .order_by(models.PilotProtocol.effective_from.desc())
+        )
+    )
+
+
+def get_pilot_protocol(db: Session, protocol_id: int) -> models.PilotProtocol | None:
+    return db.get(models.PilotProtocol, protocol_id)
+
+
+def create_block_assignment(
+    db: Session, protocol: models.PilotProtocol, data: schemas.BlockAssignmentCreate
+) -> models.BlockAssignment:
+    """Record an offline randomization/matching decision. Never edited, only superseded.
+
+    The block must belong to the protocol's farm — a cross-farm assignment would
+    silently pollute another grower's comparison.
+    """
+    ensure_block_on_farm(db, protocol.farm_id, data.block_id)
+    assignment = models.BlockAssignment(
+        pilot_protocol_id=protocol.id, **data.model_dump()
+    )
+    db.add(assignment)
+    db.commit()
+    db.refresh(assignment)
+    return assignment
+
+
+def list_block_assignments(
+    db: Session, pilot_protocol_id: int
+) -> list[models.BlockAssignment]:
+    return list(
+        db.scalars(
+            select(models.BlockAssignment)
+            .where(models.BlockAssignment.pilot_protocol_id == pilot_protocol_id)
+            .order_by(models.BlockAssignment.assigned_on, models.BlockAssignment.id)
+        )
+    )
+
+
+# ------------------------------------------------------------------ Block outcomes
+def create_block_outcome(
+    db: Session, farm_id: int, data: schemas.BlockOutcomeObservationCreate
+) -> models.BlockOutcomeObservation:
+    """Append one measured block outcome. There is no update and no delete."""
+    ensure_block_on_farm(db, farm_id, data.block_id)
+    if data.pilot_protocol_id is not None:
+        protocol = get_pilot_protocol(db, data.pilot_protocol_id)
+        if protocol is None or protocol.farm_id != farm_id:
+            raise CrossFarmReferenceError(
+                "that pilot protocol belongs to a different farm"
+            )
+    row = models.BlockOutcomeObservation(**data.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_block_outcomes(
+    db: Session, farm_id: int, block_id: int | None = None
+) -> list[models.BlockOutcomeObservation]:
+    stmt = (
+        select(models.BlockOutcomeObservation)
+        .join(models.Block, models.Block.id == models.BlockOutcomeObservation.block_id)
+        .where(models.Block.farm_id == farm_id)
+    )
+    if block_id is not None:
+        stmt = stmt.where(models.BlockOutcomeObservation.block_id == block_id)
+    return list(
+        db.scalars(stmt.order_by(models.BlockOutcomeObservation.observed_on.desc()))
     )
 
 

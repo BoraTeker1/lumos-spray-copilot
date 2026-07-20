@@ -91,6 +91,18 @@ def _integrity_handler(request, exc: IntegrityError):
             "an hour would double-count it in a risk window — to correct the existing "
             "reading, post a new one with `supersedes_id` set to it."
         )
+    elif "pca_dispositions.planned_spray_id" in origin:
+        detail = (
+            "A live PCA disposition already exists for this decision. Dispositions are "
+            "append-only — to change it, post a new one with `supersedes_id` set to the "
+            "one it replaces, so the original judgement stays on the record."
+        )
+    elif "block_assignments.pilot_protocol_id" in origin:
+        detail = (
+            "This block already has an arm under this protocol version. Assignments are "
+            "never changed — moving a block mid-pilot invalidates the comparison — so a "
+            "genuine change means a new protocol version with its own assignments."
+        )
     return JSONResponse(status_code=409, content={"detail": detail})
 
 
@@ -607,6 +619,97 @@ def get_pca_dispositions(planned_id: int, db: Session = Depends(get_db)):
     """The full chain, superseded rows included — a correction never hides what it replaced."""
     _require_planned_spray(db, planned_id)
     return crud.list_pca_dispositions(db, planned_id)
+
+
+# ------------------------------------------------------------- Pilot protocol
+@app.post(
+    "/farms/{farm_id}/pilot-protocols",
+    response_model=schemas.PilotProtocol,
+    status_code=201,
+    tags=["pilot-risk"],
+)
+def post_pilot_protocol(
+    farm_id: int, payload: schemas.PilotProtocolCreate, db: Session = Depends(get_db)
+):
+    """Record which protocol version is in force. The protocol itself is a document."""
+    _require_farm(db, farm_id)
+    return crud.create_pilot_protocol(db, farm_id, payload)
+
+
+@app.get(
+    "/farms/{farm_id}/pilot-protocols",
+    response_model=list[schemas.PilotProtocol],
+    tags=["pilot-risk"],
+)
+def get_pilot_protocols(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_pilot_protocols(db, farm_id)
+
+
+@app.post(
+    "/pilot-protocols/{protocol_id}/assignments",
+    response_model=schemas.BlockAssignment,
+    status_code=201,
+    tags=["pilot-risk"],
+)
+def post_block_assignment(
+    protocol_id: int,
+    payload: schemas.BlockAssignmentCreate,
+    db: Session = Depends(get_db),
+):
+    """Record an offline randomization or matching decision, with its seed.
+
+    409 on a repeat: a block belongs to one arm per protocol version, and changing
+    arms mid-pilot invalidates the comparison. A genuine change is a new version.
+    """
+    protocol = crud.get_pilot_protocol(db, protocol_id)
+    if protocol is None:
+        raise HTTPException(status_code=404, detail="Pilot protocol not found")
+    return crud.create_block_assignment(db, protocol, payload)
+
+
+@app.get(
+    "/pilot-protocols/{protocol_id}/assignments",
+    response_model=list[schemas.BlockAssignment],
+    tags=["pilot-risk"],
+)
+def get_block_assignments(protocol_id: int, db: Session = Depends(get_db)):
+    if crud.get_pilot_protocol(db, protocol_id) is None:
+        raise HTTPException(status_code=404, detail="Pilot protocol not found")
+    return crud.list_block_assignments(db, protocol_id)
+
+
+# ------------------------------------------------------------- Block outcomes
+@app.post(
+    "/farms/{farm_id}/block-outcomes",
+    response_model=schemas.BlockOutcomeObservation,
+    status_code=201,
+    tags=["pilot-risk"],
+)
+def post_block_outcome(
+    farm_id: int,
+    payload: schemas.BlockOutcomeObservationCreate,
+    db: Session = Depends(get_db),
+):
+    """Append a measured block outcome (incidence, packout, cull, cost, ...).
+
+    Per block per harvest, NOT per decision — one harvest outcome is evidence for many
+    decisions and for none in particular. Append-only: no PATCH, no DELETE.
+    """
+    _require_farm(db, farm_id)
+    return crud.create_block_outcome(db, farm_id, payload)
+
+
+@app.get(
+    "/farms/{farm_id}/block-outcomes",
+    response_model=list[schemas.BlockOutcomeObservation],
+    tags=["pilot-risk"],
+)
+def get_block_outcomes(
+    farm_id: int, block_id: int | None = None, db: Session = Depends(get_db)
+):
+    _require_farm(db, farm_id)
+    return crud.list_block_outcomes(db, farm_id, block_id)
 
 
 @app.get(

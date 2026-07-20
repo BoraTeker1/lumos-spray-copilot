@@ -461,6 +461,128 @@ class PcaDisposition(Base):
     data_confidence: Mapped[str] = mapped_column(String(40), default="pca_reviewed")
 
 
+class PilotProtocol(Base):
+    """A versioned reference to the pilot protocol document. Deliberately thin.
+
+    This is NOT a protocol-authoring tool. The protocol is a document that humans
+    agree on; this row records which version was in force, what it declared as its
+    primary metric, and how blocks were assigned — so a result can never be read
+    without knowing the rules it was collected under.
+
+    `assignment_method` is load-bearing for honesty: only `randomized` or `matched`
+    can support a comparison, and `observational` must produce descriptive counts with
+    an explicit "not a controlled comparison" note.
+
+    `unblinded_at` is the ONLY thing that lifts shadow mode. It is a recorded,
+    protocol-versioned event with a date — not a config toggle or an environment
+    variable — because when the PCA started seeing risk output is itself part of the
+    pilot's evidence.
+    """
+    __tablename__ = "pilot_protocols"
+    __table_args__ = (
+        Index(
+            "uq_pilot_protocol_active_version",
+            "farm_id", "version",
+            unique=True,
+            sqlite_where=text("effective_to IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Where the actual protocol lives (doc URL, signed PDF reference, ticket).
+    document_reference: Mapped[str | None] = mapped_column(Text)
+    assignment_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    target: Mapped[str] = mapped_column(String(80), nullable=False)
+    primary_metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    secondary_metrics: Mapped[list | None] = mapped_column(JSON)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    unblinded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    data_source: Mapped[str] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str] = mapped_column(String(40), default="user_provided")
+
+
+class BlockAssignment(Base):
+    """Which arm a block belongs to under one protocol version.
+
+    Randomization is performed offline (a PCA with a spreadsheet and a seed, not a
+    button in this app), and the seed plus method are recorded so the assignment is
+    reproducible and auditable years later.
+
+    An assignment is never edited. Changing arms mid-pilot invalidates the comparison,
+    so a genuine change means a new protocol version with its own assignments.
+    """
+    __tablename__ = "block_assignments"
+    __table_args__ = (
+        Index(
+            "uq_block_assignment_per_protocol",
+            "pilot_protocol_id", "block_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pilot_protocol_id: Mapped[int] = mapped_column(
+        ForeignKey("pilot_protocols.id"), nullable=False, index=True
+    )
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+    arm: Mapped[str] = mapped_column(String(20), nullable=False)
+    matched_pair_key: Mapped[str | None] = mapped_column(String(60), index=True)
+    assigned_on: Mapped[date] = mapped_column(Date, nullable=False)
+    assigned_by: Mapped[str | None] = mapped_column(String(120))
+    assignment_seed: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    data_source: Mapped[str] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str] = mapped_column(String(40), default="user_provided")
+
+
+class BlockOutcomeObservation(Base):
+    """A measured outcome for one block at one time. Append-only.
+
+    A SEPARATE model from DecisionFollowUpEvent, on purpose. Packout, cull and yield
+    are measured per block per harvest — not per decision. One harvest outcome is
+    evidence for many decisions and for none in particular, and
+    DecisionFollowUpEvent.planned_spray_id is non-null, so forcing it there would
+    repeat exactly the modelling error the procurement work already hit and fixed with
+    InputPlanEvent (ENGINEERING_GUIDELINES.md section 5). Both models are kept; they are joined only
+    in reporting.
+
+    `unit` is required whenever `value` is present, and nothing here converts between
+    units — an unlabelled number is not a measurement.
+    """
+    __tablename__ = "block_outcome_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+    pilot_protocol_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pilot_protocols.id"), index=True
+    )
+    observed_on: Mapped[date] = mapped_column(Date, nullable=False)
+    # Dual timestamps, same discipline as the observation models: when it happened and
+    # when it was written down are different facts.
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime, default=clock.current_datetime, nullable=False
+    )
+    outcome_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    value: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    # e.g. berries inspected, trays harvested — the denominator a rate refers to.
+    denominator: Mapped[float | None] = mapped_column(Float)
+    method: Mapped[str | None] = mapped_column(String(80))
+    notes: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str | None] = mapped_column(String(40))
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("block_outcome_observations.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    data_source: Mapped[str] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str] = mapped_column(String(40), default="user_provided")
+
+
 class PlannedSpray(Base):
     """An *intended* spray checked before it happens — the pre-spray decision point.
 

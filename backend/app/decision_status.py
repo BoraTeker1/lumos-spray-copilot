@@ -66,6 +66,33 @@ PCA_DISPOSITIONS = (
     DISPOSITION_INSUFFICIENT_EVIDENCE,
 )
 
+# --- Pilot protocol vocabulary ---------------------------------------------------
+# Only randomized/matched can support a comparison; observational must yield
+# descriptive counts carrying an explicit "not a controlled comparison" note.
+ASSIGNMENT_RANDOMIZED = "randomized"
+ASSIGNMENT_MATCHED = "matched"
+ASSIGNMENT_OBSERVATIONAL = "observational"
+ASSIGNMENT_METHODS = (
+    ASSIGNMENT_RANDOMIZED, ASSIGNMENT_MATCHED, ASSIGNMENT_OBSERVATIONAL,
+)
+COMPARABLE_ASSIGNMENT_METHODS = (ASSIGNMENT_RANDOMIZED, ASSIGNMENT_MATCHED)
+
+ARM_CONTROL = "control"
+ARM_INTERVENTION = "intervention"
+TRIAL_ARMS = (ARM_CONTROL, ARM_INTERVENTION)
+
+# Block-level measured outcomes. Economic ones (yield, packout, cull, cost) are what
+# make or break the business case; the agronomic ones are what make it safe.
+BLOCK_OUTCOME_TYPES = (
+    "disease_incidence",
+    "rescue_treatment",
+    "yield",
+    "marketable_packout",
+    "cull",
+    "cost",
+    "adverse_event",
+)
+
 
 def review_state(planned) -> str:
     """One derived vocabulary for the review situation of a planned spray.
