@@ -337,3 +337,23 @@ def harvest_date_changed_since_check(planned, current_harvest_date) -> bool:
     checked = inputs.get("expected_harvest_date")
     current = current_harvest_date.isoformat() if current_harvest_date else None
     return checked != current
+
+
+def label_record_checked_against(planned) -> int | None:
+    """The label record id this stored decision was evaluated against, if any."""
+    payload = getattr(planned, "decision_payload", None) or {}
+    return (payload.get("inputs_used") or {}).get("label_record_id")
+
+
+def label_reference_stale(planned, superseded_by_record_id) -> bool:
+    """True when the label record this decision cites has since been revised.
+
+    The same honesty rule as the harvest date: a stored decision is never silently
+    recomputed, so when the label moves on the record has to SAY it is out of date.
+    This matters most exactly where it cannot be fixed automatically — a reviewed or
+    applied decision, which `crud.apply_label_values` refuses to rewrite because a PCA
+    already signed it.
+    """
+    if label_record_checked_against(planned) is None:
+        return False
+    return superseded_by_record_id is not None

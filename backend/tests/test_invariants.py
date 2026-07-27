@@ -614,3 +614,31 @@ def test_no_code_path_claims_a_seasonal_or_active_ingredient_reduction():
     ):
         assert key in NOT_CALCULATED
         assert "not calculated" in NOT_CALCULATED[key]
+
+
+def test_critical_input_fields_and_the_rows_actually_written_cannot_drift():
+    """Every field declared compliance-critical really does get a provenance row.
+
+    CRITICAL_INPUT_FIELDS used to be declared and referenced by nothing while
+    _planned_input_rows kept a parallel hardcoded dict — so a field added to the
+    declaration would silently have had no field-level provenance at all.
+    """
+    from app.crud import CRITICAL_INPUT_FIELDS, _planned_input_rows
+
+    class _Planned:
+        product_name = "Switch 62.5 WG"
+        epa_reg_no = "100-953"
+        crop = "strawberry"
+        target_pest_or_disease = "gray mold"
+        rate_amount = 14.0
+        rate_unit = "oz/acre"
+        pre_harvest_interval_days = 0
+        re_entry_interval_hours = 12
+        intended_date = date(2026, 7, 20)
+        active_ingredient = "cyprodinil + fludioxonil"
+        moa_group = "FRAC 9 + 12"
+
+    written = [name for name, _value, _unit in _planned_input_rows(
+        _Planned(), date(2026, 7, 24)
+    )]
+    assert written == list(CRITICAL_INPUT_FIELDS)

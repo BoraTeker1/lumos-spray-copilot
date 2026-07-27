@@ -109,6 +109,9 @@ SPRAY_EVENT_FIELDS: tuple[FieldSpec, ...] = (
                        "sprayed on", "spray date", "date of application")),
     FieldSpec("product_name", "str", required=True,
               aliases=("product", "product name", "trade name", "material")),
+    FieldSpec("epa_reg_no", "str", regulatory=True,
+              aliases=("epa", "epa reg no", "epa registration number", "epa reg",
+                       "registration no", "epa reg. no.")),
     FieldSpec("active_ingredient", "str", regulatory=True,
               aliases=("ai", "active ingredient", "active")),
     FieldSpec("moa_group", "str",
@@ -277,6 +280,10 @@ _TEMPLATE_EXAMPLES = {
         "field_block": "Block 4",
         "application_date": "2026-06-12",
         "product_name": "Captan 80 WDG",
+        # Blank on purpose: a registration number belongs to a specific product label
+        # and is not invented for an example row. The column is still in the header, and
+        # a missing value produces an explicit "unverified" warning on import.
+        "epa_reg_no": "",
         "active_ingredient": "captan",
         "moa_group": "FRAC M04",
         "pesticide_class": "fungicide",

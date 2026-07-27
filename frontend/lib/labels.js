@@ -9,6 +9,7 @@ export const AUTHORITY_SOURCE_LABELS = {
   verified_label: "verified label",
   pca_entered: "PCA-entered",
   grower_entered: "grower-entered",
+  imported_unverified: "imported, unverified",
   heuristic: "heuristic",
 };
 

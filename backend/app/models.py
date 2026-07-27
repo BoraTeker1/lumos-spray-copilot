@@ -2,9 +2,10 @@
 from datetime import date, datetime
 
 from sqlalchemy import (
-    JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, text,
+    JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    select, text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
 from app import clock, decision_status, procurement_status
 from app.database import Base
@@ -110,6 +111,10 @@ class SprayEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # EPA registration number, when known. This is the join key to a product's label
+    # record: without it a past application cannot be tied to a product identity, so
+    # the label's seasonal-count and retreatment-interval checks cannot see it at all.
+    epa_reg_no: Mapped[str | None] = mapped_column(String(60))
     active_ingredient: Mapped[str | None] = mapped_column(String(200))
     # FRAC/IRAC/HRAC mode-of-action group, when known (needed for MoA-rotation checks).
     moa_group: Mapped[str | None] = mapped_column(String(40))
@@ -714,6 +719,24 @@ class PlannedSpray(Base):
         return decision_status.harvest_date_changed_since_check(
             self, self.farm.expected_harvest_date if self.farm else None
         )
+
+    @property
+    def label_reference_stale(self) -> bool:
+        """Has the label record this decision was checked against been revised since?
+
+        The query only runs for a decision that actually cites a label record, so this
+        costs nothing until label data exists for the product in question.
+        """
+        checked = decision_status.label_record_checked_against(self)
+        session = object_session(self)
+        if checked is None or session is None:
+            return False
+        superseding = session.scalar(
+            select(ProductLabelRecord.id).where(
+                ProductLabelRecord.supersedes_label_record_id == checked
+            )
+        )
+        return decision_status.label_reference_stale(self, superseding)
 
     @property
     def follow_up_required(self) -> bool:
@@ -1481,3 +1504,160 @@ class PilotImportBatch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     farm: Mapped["Farm"] = relationship(back_populates="pilot_import_batches")
+
+
+# --------------------------------------------------------------- pesticide labels
+class PesticideProduct(Base):
+    """A registered pesticide product — the identity that label records hang off.
+
+    This is the first time this system knows what a product IS. Until now product
+    identity was free text (`product_name` plus an optional `active_ingredient`,
+    `epa_reg_no` and `moa_group`) duplicated independently across PlannedSpray,
+    SprayEvent, InputPlanItem and two outcome columns, with nothing validating,
+    deduplicating or cross-checking any of it. Four label-dependent checks in
+    `decision_engine` cannot run without a product to look up.
+
+    TWO registration columns, and the distinction is load-bearing:
+      * `epa_reg_no_normalized` — the full number, hyphen structure preserved. The only
+        thing that identifies one label.
+      * `epa_reg_base` — the first two segments, i.e. the registrant's product family.
+        Recorded so a near-miss can be RECOGNIZED, never so it can be matched. `100-1234`
+        and `100-1234-5905` are different labels with different use directions, and
+        applying the wrong one's PHI is the worst thing this feature could do.
+    """
+    __tablename__ = "pesticide_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # As written on the label, for display.
+    epa_reg_no: Mapped[str] = mapped_column(String(60), nullable=False)
+    # Canonical join key (see app/label_data.normalize_epa_reg_no).
+    epa_reg_no_normalized: Mapped[str] = mapped_column(
+        String(60), nullable=False, unique=True, index=True
+    )
+    # First two segments only — for recognizing a related product, never for matching.
+    epa_reg_base: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    registrant: Mapped[str | None] = mapped_column(String(200))
+    active_ingredient: Mapped[str | None] = mapped_column(String(200))
+    # Concentration with its unit in the column name, needed before any active-ingredient
+    # quantity can be computed. Absent means the quantity metric stays not-calculated.
+    active_ingredient_concentration_amount: Mapped[float | None] = mapped_column(Float)
+    active_ingredient_concentration_unit: Mapped[str | None] = mapped_column(String(40))
+    moa_group: Mapped[str | None] = mapped_column(String(40))
+    # Set by a human who has transcribed EVERY registered crop from the label. Until then
+    # the crop/use registration check must not run at all: the absence of a crop record is
+    # not evidence the crop is unregistered, and a false BLOCK on a partial transcription
+    # would destroy a PCA's trust in the feature permanently.
+    registered_crops_transcription_complete: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    label_records: Mapped[list["ProductLabelRecord"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+
+
+class ProductLabelRecord(Base):
+    """One product's label directions for one registered crop. APPEND-ONLY.
+
+    No update and no delete, and no mutable status column, because the supersede chain
+    already expresses both things that happen to a label:
+      * a REVISION is a new row with a later `label_effective_date` superseding the old;
+      * a WITHDRAWAL is a new row with every regulatory value NULL and `withdrawal_reason`
+        set, superseding the old. Resolution then finds no values and the dependent checks
+        correctly go back to reporting that they did not run.
+    A boolean `is_current` would have needed an UPDATE and could disagree with the dates.
+
+    Every regulatory column is nullable because real labels state some values and not
+    others. NULL means THE LABEL IS SILENT. It must never be read as "no limit" — that
+    reading is the difference between a missing check and a fabricated clearance.
+    """
+    __tablename__ = "product_label_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("pesticide_products.id"), nullable=False, index=True
+    )
+    registered_crop: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Canonical form (app/crop_aliases.normalize) so the join does not depend on spelling.
+    registered_crop_normalized: Mapped[str] = mapped_column(String(120), nullable=False)
+    # The specific pest/disease these directions are for, when the label splits by target.
+    target_pest_or_disease: Mapped[str | None] = mapped_column(String(200))
+
+    pre_harvest_interval_days: Mapped[int | None] = mapped_column(Integer)
+    re_entry_interval_hours: Mapped[int | None] = mapped_column(Integer)
+    max_seasonal_rate_amount: Mapped[float | None] = mapped_column(Float)
+    max_seasonal_rate_unit: Mapped[str | None] = mapped_column(String(40))
+    max_applications_per_season: Mapped[int | None] = mapped_column(Integer)
+    min_retreatment_interval_days: Mapped[int | None] = mapped_column(Integer)
+
+    # Which revision of the label this is, and from when. Without both, a reader cannot
+    # tell whether this describes the label in the applicator's hand today.
+    label_version: Mapped[str | None] = mapped_column(String(120))
+    label_effective_date: Mapped[date | None] = mapped_column(Date)
+    # How this record was obtained (app/label_data.LABEL_SOURCE_TIERS). Deliberately a
+    # separate vocabulary from a decision input value's source_type.
+    source_tier: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_document_reference: Mapped[str | None] = mapped_column(String(400))
+    source_section_or_page: Mapped[str | None] = mapped_column(String(200))
+    # Verbatim text of the directions being transcribed — what a PCA checks against.
+    source_snippet: Mapped[str | None] = mapped_column(Text)
+    transcribed_by: Mapped[str | None] = mapped_column(String(120))
+    transcribed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Content address of the transcribed fields, so the loader is idempotent without
+    # ever issuing an UPDATE (unchanged digest = no-op; changed digest = new row).
+    transcription_digest: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Set only on a withdrawal row (all regulatory values NULL).
+    withdrawal_reason: Mapped[str | None] = mapped_column(Text)
+    supersedes_label_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_label_records.id"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    product: Mapped["PesticideProduct"] = relationship(back_populates="label_records")
+    verifications: Mapped[list["ProductLabelVerification"]] = relationship(
+        back_populates="label_record", cascade="all, delete-orphan"
+    )
+
+
+class ProductLabelVerification(Base):
+    """A licensed PCA attesting that one label record matches the primary document.
+
+    APPEND-ONLY; revocation is a timestamp, never a delete, so a decision that relied on
+    this attestation stays attributable after it is withdrawn (same rule as PcaCredential).
+
+    FARM-SCOPED, which is the design decision worth reading twice. A global "this record
+    is verified" flag would have needed a second, weaker authorization path alongside
+    `crud.require_pca_for_farm`, and would let a PCA authorized for one farm silently
+    vouch for every other farm's decisions. Scoping it to a farm means:
+      * the existing single authorization entry point covers it;
+      * `ensure_demo_real_separation` covers it, because it is a farm record — so a demo
+        farm can only ever hold a `simulated` verification, and
+        `label_data.promotable_to_authoritative` refuses to promote from one. Demo
+        decisions therefore can never display a label-grounded verdict, which keeps the
+        demo honest without a single special case in the engine.
+    """
+    __tablename__ = "product_label_verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_label_record_id: Mapped[int] = mapped_column(
+        ForeignKey("product_label_records.id"), nullable=False, index=True
+    )
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    # NOT NULL: an unattributed attestation is not a professional act.
+    verified_by_credential_id: Mapped[int] = mapped_column(
+        ForeignKey("pca_credentials.id"), nullable=False
+    )
+    # Display name resolved from the credential, never a client-supplied string.
+    verified_by: Mapped[str | None] = mapped_column(String(120))
+    verified_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    # What the PCA is attesting to, in their words (e.g. which revision and page).
+    attestation: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    label_record: Mapped["ProductLabelRecord"] = relationship(back_populates="verifications")

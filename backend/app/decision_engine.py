@@ -23,7 +23,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from app import target_aliases
+from app import crop_aliases, label_data, target_aliases
 from app.recommendation_engine import (
     RECENT_WINDOW_DAYS,
     SAME_INGREDIENT_MAX,
@@ -90,24 +90,112 @@ INPUT_SOURCE_TO_AUTHORITY = {
 # Checks this engine deliberately does NOT run, and says so, because they require
 # authoritative pesticide-label data that does not exist in the system. They are
 # reported per decision under `not_evaluated` — never simulated with guesses.
-NOT_EVALUATED_CHECKS = (
-    {
-        "check": "maximum seasonal rate",
-        "reason": "requires authoritative label data — no label database exists",
-    },
-    {
-        "check": "maximum number of applications per season",
-        "reason": "requires authoritative label data — no label database exists",
-    },
-    {
-        "check": "minimum retreatment interval",
-        "reason": "requires authoritative label data — no label database exists",
-    },
-    {
-        "check": "crop/use registration match",
-        "reason": "requires authoritative label data — no label database exists",
-    },
+#
+# Each carries a stable id as well as the human name a PCA reads: a rule that genuinely
+# starts running has to be able to remove itself from the disclosure, and it identifies
+# itself by id, not by matching prose.
+CHECK_MAX_SEASONAL_RATE = "max_seasonal_rate"
+CHECK_MAX_APPLICATIONS = "max_applications_per_season"
+CHECK_RETREATMENT_INTERVAL = "min_retreatment_interval"
+CHECK_CROP_REGISTRATION = "crop_use_registration"
+
+LABEL_DEPENDENT_CHECK_NAMES = {
+    CHECK_MAX_SEASONAL_RATE: "maximum seasonal rate",
+    CHECK_MAX_APPLICATIONS: "maximum number of applications per season",
+    CHECK_RETREATMENT_INTERVAL: "minimum retreatment interval",
+    CHECK_CROP_REGISTRATION: "crop/use registration match",
+}
+
+# Why none of them can run. There is one reason today because exactly one thing is
+# missing, but the reason travels per check so a specific one ("this product has no
+# registration number", "no label record on file for this crop") can replace it for a
+# single check later without touching any caller.
+REASON_NO_LABEL_DATA = "requires authoritative label data — no label database exists"
+
+NOT_EVALUATED_CHECKS = tuple(
+    {"check_id": check_id, "check": name, "reason": REASON_NO_LABEL_DATA}
+    for check_id, name in LABEL_DEPENDENT_CHECK_NAMES.items()
 )
+
+
+def label_checks_not_evaluated(evaluated_check_ids=None, reasons=None) -> list[dict]:
+    """The label-dependent checks that did NOT run for one decision, each with its reason.
+
+    Derived per decision rather than declared once, because a fixed list cannot express
+    the thing that matters: the moment a check can genuinely run it must disappear from
+    this disclosure, and until then it must say why it did not.
+
+    Every check not named in `evaluated_check_ids` is disclosed. That direction is
+    deliberate — a check missing from both the rules and this list would be silently
+    unaccounted for, which reads as "fine" rather than "never looked at".
+
+    `reasons` supplies the specific sentence for a check ("this product has no
+    registration number", "the label states no retreatment interval"). Anything without
+    one falls back to the generic reason, so a new abstention path can never produce a
+    check that is silently absent from both the rules and the disclosure.
+    """
+    evaluated = set(evaluated_check_ids or ())
+    reasons = dict(reasons or {})
+    return [
+        {**entry, "reason": reasons.get(entry["check_id"], entry["reason"])}
+        for entry in NOT_EVALUATED_CHECKS
+        if entry["check_id"] not in evaluated
+    ]
+
+
+@dataclass(frozen=True)
+class LabelContext:
+    """Pre-resolved label data for ONE decision. Built by crud, consumed here.
+
+    The engine stays framework-free, so everything requiring a database — which product
+    a registration number identifies, which label record is live, and whether a licensed
+    PCA has verified it for this farm — is resolved by the caller and handed over as
+    plain values. What the engine does with them (the arithmetic, the reasons, the
+    verdict) stays here and unit-tests alone.
+
+    The default instance is the state the system has been in until now: nothing
+    resolved, every label-dependent check disclosed as not run. That is why every field
+    has a default — an evaluation that is not given label data behaves exactly as before.
+
+    `record` is the live label record for this crop. It is used ONLY when
+    `promotion_blocked_reason` is None: a transcription nobody has verified is on file,
+    not in force, and treating it as authoritative is the failure mode this whole layer
+    exists to prevent.
+    """
+    record: object | None = None
+    # Why no record resolved (no registration number, base-only match, wrong crop...).
+    unresolved_reason: str | None = None
+    # Why a resolved record may not back a check (unverified, missing provenance...).
+    promotion_blocked_reason: str | None = None
+    # Stable citation for the record, e.g. "label:100-1234:strawberry:rev. 2025-03".
+    reference: str | None = None
+    # Every crop registered on this product's PROMOTABLE live records, and why that
+    # list may not be compared against. A partial transcription's silence about a crop
+    # is NOT evidence the crop is unregistered, so `crop_registration_reason` is None
+    # only when a human has confirmed the list is complete — the check that most needs
+    # this guard is also the one that would otherwise emit a false BLOCK.
+    registered_crops: tuple = ()
+    crop_registration_reason: str | None = None
+    # What a human had entered for the fields the label now backs, so a disagreement is
+    # reported rather than silently resolved by whoever wrote last.
+    entered_values: dict = field(default_factory=dict)
+    # The season the per-season limits are counted over, or why it is unknown.
+    season_start: date | None = None
+    season_reason: str | None = None
+
+    @property
+    def usable_record(self):
+        """The record, but only when it may actually back a regulatory check."""
+        if self.record is None or self.promotion_blocked_reason is not None:
+            return None
+        return self.record
+
+    @property
+    def blocking_reason(self) -> str | None:
+        """Why no label check can run at all, or None when one can."""
+        if self.record is None:
+            return self.unresolved_reason or REASON_NO_LABEL_DATA
+        return self.promotion_blocked_reason
 
 # Decision authority levels — how strongly the determining inputs back the verdict.
 # Three honest levels replace the old binary "definitive"/"provisional":
@@ -185,7 +273,8 @@ class PlannedSprayDecision:
     authority_level: str = LEVEL_PROVISIONAL
     authority_basis: str = ""
     # Label-dependent checks that were NOT run (with reasons) — honest, never guessed.
-    not_evaluated: list = field(default_factory=lambda: [dict(c) for c in NOT_EVALUATED_CHECKS])
+    # Defaults to disclosing all four; a label rule that runs narrows this by id.
+    not_evaluated: list = field(default_factory=label_checks_not_evaluated)
 
     @property
     def triggered_rules(self) -> list[DecisionRule]:
@@ -258,6 +347,7 @@ def evaluate_planned_spray(
     pca_policies=None,
     today: date | None = None,
     input_sources: dict | None = None,
+    label_context: "LabelContext | None" = None,
 ) -> PlannedSprayDecision:
     """Check an intended spray before it happens and return one explainable outcome.
 
@@ -277,6 +367,9 @@ def evaluate_planned_spray(
         When present it drives each rule's source authority (a rule is only as strong
         as its weakest input); when absent the legacy record-level `values_source`
         applies. Imported values can never back a definitive result.
+    label_context: pre-resolved, PCA-verified label data for this product and crop
+        (see `LabelContext`). Absent — the normal case — every label-dependent check
+        reports that it did not run and no verdict changes.
     """
     if today is None:
         today = date.today()
@@ -285,6 +378,7 @@ def evaluate_planned_spray(
     scout_observations = list(scout_observations or [])
     pca_policies = list(pca_policies or [])
     input_sources = dict(input_sources or {})
+    label = label_context or LabelContext()
 
     decision = PlannedSprayDecision()
 
@@ -347,6 +441,10 @@ def evaluate_planned_spray(
         "spray_events_on_record": len(spray_events),
         "scouting_observations_on_record": len(scout_observations),
         "recent_window_days": RECENT_WINDOW_DAYS,
+        # Which label record backed this decision, so a later revision can be detected
+        # rather than silently changing what a stored, signed decision means.
+        "label_reference": label.reference,
+        "label_record_id": getattr(label.record, "id", None),
     }
     if input_sources:
         decision.inputs_used["field_sources"] = {
@@ -646,6 +744,333 @@ def evaluate_planned_spray(
             entered_by=values_entered_by,
         ))
 
+    # ---------------------------- Rules L1-L5: label-grounded checks
+    # The four checks that have always reported "not evaluated", plus one that can only
+    # exist once label data does. Each either appends a DecisionRule or records the
+    # SPECIFIC reason it could not run. Nothing here is ever simulated: an absent label
+    # value leaves its check unevaluated rather than assuming "no limit".
+    #
+    # These are the only rules that may carry AUTHORITY_VERIFIED_LABEL, because they are
+    # the only ones reading a value a licensed PCA checked against the primary document.
+    #
+    # Cross-decision counting reads SprayEvent ONLY, never PlannedSpray: an applied
+    # outcome already materializes a linked SprayEvent, so counting both would report
+    # one application twice — as an over-count, i.e. a false BLOCK.
+    label_checks_run: set[str] = set()
+    label_reasons: dict[str, str] = {}
+    label_record = label.usable_record
+    label_block = False
+    label_delay = False
+    label_disagreement = False
+    crop = (getattr(planned, "crop", None) or "").strip()
+
+    def _label_rule(check_id: str | None, **kwargs) -> None:
+        if check_id is not None:
+            label_checks_run.add(check_id)
+        decision.rules.append(DecisionRule(
+            source_authority=AUTHORITY_VERIFIED_LABEL,
+            verification_status="verified",
+            entered_by=label.reference,
+            **kwargs,
+        ))
+
+    # Prior applications of THIS product, identified by an EXACT registration-number
+    # match. A base-registration match is a different label and is never counted.
+    prior_same_product = [
+        s for s in spray_events
+        if getattr(s, "application_date", None) is not None
+        and label_data.match_product_identity(
+            epa_reg_no, getattr(s, "epa_reg_no", None)
+        ) == label_data.MATCH
+    ]
+
+    # --- L1: crop / use registration ------------------------------------------------
+    # The only label check that does not need a record for THIS crop — its whole point
+    # is what happens when there is none.
+    if label.crop_registration_reason is not None:
+        label_reasons[CHECK_CROP_REGISTRATION] = label.crop_registration_reason
+    elif not label.registered_crops:
+        # No verified registered-crop list at all — the generic reason, not a complaint
+        # about the decision's own data.
+        label_reasons[CHECK_CROP_REGISTRATION] = label.blocking_reason
+    elif not crop:
+        label_reasons[CHECK_CROP_REGISTRATION] = (
+            "no crop is recorded on this decision, so it cannot be compared to the "
+            "crops this product is registered for"
+        )
+    else:
+        registered = list(label.registered_crops)
+        verdicts = {c: crop_aliases.match_crops(crop, c) for c in registered}
+        matched = [c for c, v in verdicts.items() if v == crop_aliases.MATCH]
+        ambiguous = [c for c, v in verdicts.items() if v == crop_aliases.AMBIGUOUS]
+        if not matched and ambiguous:
+            # "strawberry" inside "strawberry tree" is not a registration. Refusing to
+            # decide is right in both directions: neither a clearance nor a block.
+            label_reasons[CHECK_CROP_REGISTRATION] = (
+                f"crop {crop!r} only partially matches the registered crop(s) "
+                f"{', '.join(repr(c) for c in ambiguous)} — a related crop is not the "
+                f"same registration, so a human must decide"
+            )
+        else:
+            _label_rule(
+                CHECK_CROP_REGISTRATION,
+                rule_id="label_crop_registration",
+                name="Crop / use registered on the label",
+                triggered=not matched,
+                severity=SEVERITY_CRITICAL if not matched else SEVERITY_NONE,
+                detail=(
+                    f"The verified label for {product} does not list {crop!r} among its "
+                    f"registered crops ({', '.join(sorted(registered))}). Applying a "
+                    f"product to a crop it is not registered for is an off-label use."
+                    if not matched
+                    else f"{crop!r} is a registered crop on the verified label."
+                ),
+                calculation=(
+                    f"decision crop {crop!r} vs registered crops "
+                    f"{sorted(registered)} (exact or explicit alias only)"
+                ),
+                inputs={"crop": crop, "registered_crops": sorted(registered)},
+            )
+            label_block = label_block or not matched
+
+    # --- L2: maximum applications per season ----------------------------------------
+    max_applications = getattr(label_record, "max_applications_per_season", None)
+    if label_record is None:
+        label_reasons[CHECK_MAX_APPLICATIONS] = label.blocking_reason
+    elif max_applications is None:
+        label_reasons[CHECK_MAX_APPLICATIONS] = (
+            "this label states no maximum number of applications per season — a silent "
+            "label is not a limit of 'unlimited', so nothing is compared"
+        )
+    elif label.season_start is None:
+        label_reasons[CHECK_MAX_APPLICATIONS] = (
+            label.season_reason
+            or "no season window is on record for this farm, so applications cannot be "
+               "counted over a season"
+        )
+    else:
+        in_season = [
+            s for s in prior_same_product
+            if label.season_start <= getattr(s, "application_date") <= intended
+        ]
+        # +1 for the application being checked: the question is whether making THIS
+        # application would exceed the label, not whether past ones already did.
+        would_be = len(in_season) + 1
+        exceeded = would_be > max_applications
+        _label_rule(
+            CHECK_MAX_APPLICATIONS,
+            rule_id="label_max_applications",
+            name="Maximum applications per season (label)",
+            triggered=exceeded,
+            severity=SEVERITY_CRITICAL if exceeded else SEVERITY_NONE,
+            detail=(
+                f"This would be application {would_be} of {product} this season; the "
+                f"verified label allows {max_applications}."
+                if exceeded
+                else f"Application {would_be} of a label maximum of {max_applications} "
+                     f"this season."
+            ),
+            calculation=(
+                f"{len(in_season)} recorded application(s) since "
+                f"{label.season_start.isoformat()} + this one = {would_be} vs label "
+                f"maximum {max_applications}"
+            ),
+            inputs={
+                "applications_this_season": len(in_season),
+                "including_this_one": would_be,
+                "label_maximum": max_applications,
+                "season_start": _iso(label.season_start),
+            },
+        )
+        label_block = label_block or exceeded
+
+    # --- L3: minimum retreatment interval -------------------------------------------
+    min_retreatment = getattr(label_record, "min_retreatment_interval_days", None)
+    if label_record is None:
+        label_reasons[CHECK_RETREATMENT_INTERVAL] = label.blocking_reason
+    elif min_retreatment is None:
+        label_reasons[CHECK_RETREATMENT_INTERVAL] = (
+            "this label states no minimum retreatment interval, so there is nothing to "
+            "compare the interval since the last application against"
+        )
+    else:
+        previous = [
+            getattr(s, "application_date") for s in prior_same_product
+            if getattr(s, "application_date") <= intended
+        ]
+        last_applied = max(previous) if previous else None
+        if last_applied is None:
+            _label_rule(
+                CHECK_RETREATMENT_INTERVAL,
+                rule_id="label_retreatment_interval",
+                name="Minimum retreatment interval (label)",
+                triggered=False,
+                severity=SEVERITY_NONE,
+                detail=(
+                    f"No previous application of {product} is on record, so the label's "
+                    f"{min_retreatment}-day retreatment interval does not apply."
+                ),
+                calculation=None,
+                inputs={"label_minimum_days": min_retreatment},
+            )
+        else:
+            gap = (intended - last_applied).days
+            too_soon = gap < min_retreatment
+            _label_rule(
+                CHECK_RETREATMENT_INTERVAL,
+                rule_id="label_retreatment_interval",
+                name="Minimum retreatment interval (label)",
+                triggered=too_soon,
+                severity=SEVERITY_CAUTION if too_soon else SEVERITY_NONE,
+                detail=(
+                    f"{gap} day(s) since the last application of {product} on "
+                    f"{last_applied.isoformat()}; the verified label requires at least "
+                    f"{min_retreatment}. The interval clears on "
+                    f"{(last_applied + timedelta(days=min_retreatment)).isoformat()}."
+                    if too_soon
+                    else f"{gap} day(s) since the last application of {product} — the "
+                         f"label's {min_retreatment}-day minimum is met."
+                ),
+                calculation=(
+                    f"{intended.isoformat()} - {last_applied.isoformat()} = {gap} days "
+                    f"vs label minimum {min_retreatment} days"
+                ),
+                inputs={
+                    "days_since_last_application": gap,
+                    "label_minimum_days": min_retreatment,
+                    "last_application_date": _iso(last_applied),
+                },
+            )
+            label_delay = label_delay or too_soon
+
+    # --- L4: maximum seasonal rate --------------------------------------------------
+    # The only check that needs arithmetic across records in different units. Every
+    # conversion is definitional and cited, or it is refused by name (label_data) — an
+    # invented density would produce a rate comparison that LOOKS like a finding.
+    max_rate = getattr(label_record, "max_seasonal_rate_amount", None)
+    max_rate_unit = getattr(label_record, "max_seasonal_rate_unit", None)
+    if label_record is None:
+        label_reasons[CHECK_MAX_SEASONAL_RATE] = label.blocking_reason
+    elif max_rate is None:
+        label_reasons[CHECK_MAX_SEASONAL_RATE] = (
+            "this label states no maximum seasonal rate, so there is no total to "
+            "compare a season's applications against"
+        )
+    elif label.season_start is None:
+        label_reasons[CHECK_MAX_SEASONAL_RATE] = (
+            label.season_reason
+            or "no season window is on record for this farm, so a seasonal total "
+               "cannot be added up"
+        )
+    elif rate_amount is None:
+        label_reasons[CHECK_MAX_SEASONAL_RATE] = (
+            "no application rate was entered for this planned spray, so it cannot be "
+            "added to the season's total"
+        )
+    else:
+        contributions = [(rate_amount, rate_unit, "this planned application")] + [
+            (
+                getattr(s, "rate_amount", None),
+                getattr(s, "rate_unit", None),
+                f"application on {getattr(s, 'application_date').isoformat()}",
+            )
+            for s in prior_same_product
+            if label.season_start <= getattr(s, "application_date") <= intended
+        ]
+        total = 0.0
+        provenance: list[str] = []
+        refusal = None
+        for amount, unit, what in contributions:
+            if amount is None:
+                refusal = (
+                    f"the {what} has no recorded rate, so the season's total cannot be "
+                    f"added up without silently treating it as zero"
+                )
+                break
+            converted = label_data.convert_rate(amount, unit, max_rate_unit)
+            if isinstance(converted, label_data.Refusal):
+                refusal = f"{converted.reason} ({what})"
+                break
+            total += converted.amount
+            provenance.extend(converted.conversion_provenance)
+        if refusal is not None:
+            label_reasons[CHECK_MAX_SEASONAL_RATE] = refusal
+        else:
+            exceeded = total > max_rate
+            _label_rule(
+                CHECK_MAX_SEASONAL_RATE,
+                rule_id="label_max_seasonal_rate",
+                name="Maximum seasonal rate (label)",
+                triggered=exceeded,
+                severity=SEVERITY_CRITICAL if exceeded else SEVERITY_NONE,
+                detail=(
+                    f"Including this application, {product} would total "
+                    f"{round(total, 4)} {max_rate_unit} this season; the verified label "
+                    f"allows {max_rate} {max_rate_unit}."
+                    if exceeded
+                    else f"Season total including this application: {round(total, 4)} "
+                         f"{max_rate_unit} of a label maximum of {max_rate} "
+                         f"{max_rate_unit}."
+                ),
+                calculation=(
+                    f"sum of {len(contributions)} application rate(s) since "
+                    f"{label.season_start.isoformat()} = {round(total, 4)} "
+                    f"{max_rate_unit} vs label maximum {max_rate} {max_rate_unit}"
+                    + (f"; conversions: {'; '.join(sorted(set(provenance)))}"
+                       if provenance else "")
+                ),
+                inputs={
+                    "season_total": round(total, 4),
+                    "unit": max_rate_unit,
+                    "label_maximum": max_rate,
+                    "applications_counted": len(contributions),
+                    "conversion_provenance": sorted(set(provenance)),
+                },
+            )
+            label_block = label_block or exceeded
+
+    # --- L5: label vs entered value disagreement ------------------------------------
+    # Not one of the four disclosed checks — it can only exist once label data does.
+    # The label value drives the arithmetic above; the disagreement is REPORTED, never
+    # swallowed, because "your label says 21 days and this decision was entered as 3"
+    # is the most useful thing this layer produces.
+    if label_record is not None:
+        disagreements = []
+        for field_name, label_value in (
+            ("pre_harvest_interval_days", getattr(label_record, "pre_harvest_interval_days", None)),
+            ("re_entry_interval_hours", getattr(label_record, "re_entry_interval_hours", None)),
+        ):
+            entered = label.entered_values.get(field_name)
+            if label_value is None or entered is None:
+                continue
+            if entered != label_value:
+                disagreements.append({
+                    "field": field_name,
+                    "entered_value": entered,
+                    "label_value": label_value,
+                })
+        label_disagreement = bool(disagreements)
+        if label_disagreement:
+            _label_rule(
+                None,
+                rule_id="label_value_disagreement",
+                name="Entered value disagrees with the verified label",
+                triggered=True,
+                severity=SEVERITY_CAUTION,
+                detail=(
+                    "The verified label states "
+                    + "; ".join(
+                        f"{d['field'].replace('_', ' ')} = {d['label_value']} "
+                        f"(entered here as {d['entered_value']})"
+                        for d in disagreements
+                    )
+                    + f". The label value is what this decision was checked against. "
+                      f"Source: {label.reference}."
+                ),
+                calculation=None,
+                inputs={"disagreements": disagreements, "label_reference": label.reference},
+            )
+
     # --------------------------------------- Rule 5: linked scouting evidence
     # Exact normalized names or the explicit alias dictionary (app/target_aliases.py)
     # only — the engine NEVER fuzzily infers that two pest/disease names are the same.
@@ -857,11 +1282,14 @@ def evaluate_planned_spray(
     review_triggers = (
         overuse or moa_repeat or bool(missing) or identity_ambiguous
         or rate_incomplete or imported_unverified or target_match_ambiguous
+        # A label that disagrees with what was entered is a question for a human, not
+        # something to resolve by picking a number.
+        or label_disagreement
     )
-    if phi_conflict or rei_harvest_conflict:
+    if phi_conflict or rei_harvest_conflict or label_block:
         decision.outcome = OUTCOME_BLOCK
         decision.severity = SEVERITY_CRITICAL
-    elif prior_rei_active:
+    elif prior_rei_active or label_delay:
         decision.outcome = OUTCOME_DELAY
         decision.severity = SEVERITY_CAUTION
     elif review_triggers:
@@ -939,6 +1367,11 @@ def evaluate_planned_spray(
             "confirm the entered values before relying on it."
         )
 
+    # Every label-dependent check that did not run, each with the reason it did not.
+    # Set from what actually happened above, so a check that starts running disappears
+    # from the disclosure by construction rather than by anyone remembering to.
+    decision.not_evaluated = label_checks_not_evaluated(label_checks_run, label_reasons)
+
     # Confidence reflects input completeness only — never model certainty.
     if not missing:
         decision.confidence = CONFIDENCE_HIGH
@@ -1011,9 +1444,9 @@ def _build_narrative(decision: PlannedSprayDecision, product: str) -> str:
             lines.append(f"- {m}")
     if decision.not_evaluated:
         lines.append("")
-        lines.append("Not evaluated (requires authoritative label data; never guessed):")
+        lines.append("Not evaluated (never guessed — each check states why):")
         for c in decision.not_evaluated:
-            lines.append(f"- {c['check']}")
+            lines.append(f"- {c['check']} — {c['reason']}")
     lines += [
         "",
         "Note: This is cautious decision support, not a prescription or a diagnosis. "

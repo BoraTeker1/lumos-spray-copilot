@@ -46,6 +46,7 @@ def test_every_internal_route_is_gated(client, enforced):
         concrete = path.replace("{credential_id}", "1").replace("{farm_id}", "1")
         concrete = concrete.replace("{plan_id}", "1").replace("{quote_id}", "1")
         concrete = concrete.replace("{order_id}", "1")
+        concrete = concrete.replace("{product_id}", "1")
 
         res = client.get(concrete)
         assert res.status_code == 403, (

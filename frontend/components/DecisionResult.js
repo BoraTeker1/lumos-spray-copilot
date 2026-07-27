@@ -99,6 +99,9 @@ export default function DecisionResult({ planned, compact = false }) {
   const triggered = rules.filter((r) => r.triggered);
   const passed = rules.filter((r) => !r.triggered);
   const missing = payload?.missing_information || [];
+  // Label-dependent checks the engine did NOT run. Surfaced rather than hidden: a check
+  // that never ran must not read as a check that passed.
+  const notEvaluated = payload?.not_evaluated || [];
   // Only verified-label / PCA-entered sources can back a PCA-authorized (or, one day,
   // verified-label grounded) verdict; anything else is provisional and says so.
   const provisional = isProvisionalAuthority(planned.decision_authority);
@@ -130,6 +133,9 @@ export default function DecisionResult({ planned, compact = false }) {
           </Badge>
         )}
         <Badge variant="outline">confidence: {planned.decision_confidence}</Badge>
+        {notEvaluated.length > 0 && (
+          <Badge variant="outline">{notEvaluated.length} not evaluated</Badge>
+        )}
         {/* Server-derived review state — an edited/approved/rejected decision can
             never show "review required" (review_state, not review_required). */}
         {planned.review_state === "pending" && (
@@ -175,6 +181,17 @@ export default function DecisionResult({ planned, compact = false }) {
         </p>
       )}
 
+      {/* Stale-label warning: the label record this decision cites has been revised.
+          Shown separately from the harvest warning because the fix is different — a
+          revised label needs a fresh check against the new directions. */}
+      {planned.label_reference_stale && (
+        <p className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+          The pesticide label this check was run against has since been revised — the
+          calculations below use the label values on record at check time. Re-run the
+          check against the current label before relying on this decision.
+        </p>
+      )}
+
       {/* ------------------------------------------- collapsed audit detail */}
       {payload && (
         <details className="mt-2 text-xs text-gray-600">
@@ -217,6 +234,22 @@ export default function DecisionResult({ planned, compact = false }) {
               <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
                 {missing.map((m, i) => (
                   <li key={i}>{m}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {notEvaluated.length > 0 && (
+            <div className="mt-2 rounded-md bg-white/70 p-2 text-xs text-gray-700">
+              <div className="font-semibold text-gray-800">Not evaluated</div>
+              <p className="mt-0.5 text-[11px] text-gray-600">
+                These checks did not run. Each states why — none was guessed or simulated.
+              </p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                {notEvaluated.map((c) => (
+                  <li key={c.check_id || c.check}>
+                    <span className="font-medium">{c.check}</span> — {c.reason}
+                  </li>
                 ))}
               </ul>
             </div>

@@ -12,10 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import (
-    clock, csv_import, decision_status, disease_risk, models, pca_authority,
-    procurement_status, risk_snapshot, schemas, target_aliases,
+    clock, crop_aliases, csv_import, decision_status, disease_risk, label_data,
+    label_table, models, pca_authority, procurement_status, risk_snapshot, schemas,
+    target_aliases,
 )
-from app.decision_engine import evaluate_planned_spray
+from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
 
 # Maps decision severity onto the legacy low/moderate/elevated risk vocabulary that the
@@ -900,32 +901,34 @@ def _normalized_input(field_name: str, value) -> str | None:
     return str(value).strip() or None
 
 
+# The one critical input that is not a planned-spray attribute: the harvest date is
+# the farm's, so it is passed in rather than read off the object.
+_HARVEST_DATE_FIELD = "expected_harvest_date"
+
+
 def _planned_input_rows(planned_like, harvest_date) -> list[tuple[str, object, str | None]]:
-    """(field_name, raw value, unit) for every critical input that has a value."""
-    rate_unit = getattr(planned_like, "rate_unit", None)
-    values = {
-        "product_name": getattr(planned_like, "product_name", None),
-        "epa_reg_no": getattr(planned_like, "epa_reg_no", None),
-        "crop": getattr(planned_like, "crop", None),
-        "target_pest_or_disease": getattr(planned_like, "target_pest_or_disease", None),
-        "rate_amount": getattr(planned_like, "rate_amount", None),
-        "pre_harvest_interval_days": getattr(planned_like, "pre_harvest_interval_days", None),
-        "re_entry_interval_hours": getattr(planned_like, "re_entry_interval_hours", None),
-        "intended_date": getattr(planned_like, "intended_date", None),
-        "expected_harvest_date": harvest_date,
-        "active_ingredient": getattr(planned_like, "active_ingredient", None),
-        "moa_group": getattr(planned_like, "moa_group", None),
-    }
+    """(field_name, raw value, unit) for every critical input that has a value.
+
+    Driven by CRITICAL_INPUT_FIELDS so the declared set of provenance-tracked fields
+    and the rows actually written cannot drift apart — a field declared critical but
+    never written would silently have no provenance at all.
+    """
     units = {
-        "rate_amount": rate_unit,
+        "rate_amount": getattr(planned_like, "rate_unit", None),
         "pre_harvest_interval_days": "days",
         "re_entry_interval_hours": "hours",
     }
-    return [
-        (name, value, units.get(name))
-        for name, value in values.items()
-        if value is not None and str(value).strip() != ""
-    ]
+    rows = []
+    for name in CRITICAL_INPUT_FIELDS:
+        value = (
+            harvest_date
+            if name == _HARVEST_DATE_FIELD
+            else getattr(planned_like, name, None)
+        )
+        if value is None or str(value).strip() == "":
+            continue
+        rows.append((name, value, units.get(name)))
+    return rows
 
 
 def active_input_values(planned: models.PlannedSpray) -> dict[str, models.DecisionInputValue]:
@@ -1048,6 +1051,7 @@ def create_planned_spray(
         pca_policies=list_pca_policies(db, farm.id),
         today=clock.current_date(),
         input_sources=input_sources,
+        label_context=build_label_context(db, data, farm),
     )
 
     planned = models.PlannedSpray(
@@ -1089,6 +1093,12 @@ def create_planned_spray(
         system_recommendation=decision.outcome,
         after={**_decision_snapshot(planned), "input_source_type": source_type},
     )
+    # Where a PCA-verified label exists, its values supersede what was entered BEFORE
+    # this decision is stored as something anyone might act on — otherwise the PHI
+    # arithmetic would run on the entered value while the label sat beside it
+    # disagreeing. A no-op unless a verified label record covers this product and crop.
+    db.flush()
+    apply_label_values(db, planned, commit=False)
     _log_event(
         db, "check_completed", farm_id=farm.id, planned_spray_id=planned.id,
         entry_source=planned.data_source,
@@ -1116,6 +1126,7 @@ def _rerun_decision(db: Session, planned: models.PlannedSpray) -> None:
         pca_policies=list_pca_policies(db, planned.farm_id),
         today=clock.current_date(),
         input_sources=resolve_input_sources(planned),
+        label_context=build_label_context(db, planned, farm),
     )
     planned.decision_outcome = decision.outcome
     planned.decision_severity = decision.severity
@@ -1657,6 +1668,7 @@ def commit_import(
             event = models.SprayEvent(
                 farm_id=farm.id,
                 product_name=values["product_name"],
+                epa_reg_no=values.get("epa_reg_no"),
                 active_ingredient=values.get("active_ingredient"),
                 moa_group=values.get("moa_group"),
                 pesticide_class=values.get("pesticide_class"),
@@ -2256,6 +2268,11 @@ def set_spray_baseline(
 _FARM_RECORD_MODELS = (
     models.SprayEvent, models.ScoutObservation, models.PlannedSpray,
     models.SprayBaseline, models.PcaPolicy, models.Block,
+    # A label verification is farm-scoped precisely so this guard covers it: a demo farm
+    # can then only ever hold a simulated verification, and
+    # label_data.promotable_to_authoritative refuses to promote from one. That is what
+    # stops a demo decision from ever showing a label-grounded verdict.
+    models.ProductLabelVerification,
 )
 
 
@@ -2941,3 +2958,489 @@ def record_input_applied(
     db.commit()
     db.refresh(event)
     return event
+
+
+# ------------------------------------------------------------- pesticide labels
+# Read + load only. Nothing here writes a DecisionInputValue or touches a decision:
+# applying label values to a decision is a separate, gated step (see the plan's Phase 3),
+# so this layer landing cannot change any existing verdict.
+def list_pesticide_products(db: Session) -> list[models.PesticideProduct]:
+    return list(
+        db.scalars(select(models.PesticideProduct).order_by(models.PesticideProduct.id))
+    )
+
+
+def get_pesticide_product(db: Session, product_id: int) -> models.PesticideProduct | None:
+    return db.get(models.PesticideProduct, product_id)
+
+
+def get_product_by_reg_no(db: Session, epa_reg_no: str | None) -> models.PesticideProduct | None:
+    """Exact registration-number lookup. The ONLY way a product is identified."""
+    normalized = label_data.normalize_epa_reg_no(epa_reg_no)
+    if not normalized:
+        return None
+    return db.scalar(
+        select(models.PesticideProduct).where(
+            models.PesticideProduct.epa_reg_no_normalized == normalized
+        )
+    )
+
+
+def resolve_product_identity(db: Session, epa_reg_no: str | None):
+    """(product, None) on an exact match, else (None, reason).
+
+    A base-registration match is reported as a REASON, never resolved: `100-1234` and
+    `100-1234-5905` are different labels with different use directions, so guessing here
+    would apply the wrong PHI to a real decision.
+    """
+    normalized = label_data.normalize_epa_reg_no(epa_reg_no)
+    if not normalized:
+        return None, "this decision has no EPA registration number, so no label can be matched"
+
+    exact = get_product_by_reg_no(db, normalized)
+    if exact is not None:
+        return exact, None
+
+    base = label_data.epa_reg_base(normalized)
+    if base:
+        related = list(
+            db.scalars(
+                select(models.PesticideProduct).where(
+                    models.PesticideProduct.epa_reg_base == base
+                )
+            )
+        )
+        if related:
+            names = ", ".join(sorted(p.epa_reg_no for p in related))
+            return None, (
+                f"registration number {epa_reg_no!r} matches only the base registration "
+                f"of {names} — a supplemental registration is a different label, so a "
+                f"human must confirm which applies"
+            )
+    return None, f"no label record on file for registration number {epa_reg_no!r}"
+
+
+def label_record_for_decision(db: Session, epa_reg_no: str | None, crop: str | None):
+    """The live label record for a (registration number, crop), or (None, reason)."""
+    product, reason = resolve_product_identity(db, epa_reg_no)
+    if product is None:
+        return None, reason
+    return label_data.resolve_label_record(product.label_records, crop)
+
+
+def list_label_verifications(
+    db: Session, label_record_id: int
+) -> list[models.ProductLabelVerification]:
+    """Every verification on a record, including revoked ones (append-only history)."""
+    return list(
+        db.scalars(
+            select(models.ProductLabelVerification)
+            .where(
+                models.ProductLabelVerification.product_label_record_id == label_record_id
+            )
+            .order_by(models.ProductLabelVerification.id)
+        )
+    )
+
+
+def label_verifications_for_farm(
+    db: Session, label_record_id: int, farm_id: int | None
+) -> list[models.ProductLabelVerification]:
+    """Live (non-revoked) verifications of a record FOR ONE FARM.
+
+    Farm-scoping is the whole point of the verification model: a PCA authorized for one
+    farm must not be able to vouch for another farm's decisions. Passing no farm returns
+    nothing rather than everything — an unscoped query here would silently be the global
+    "this record is verified" flag the design rejected.
+    """
+    if farm_id is None:
+        return []
+    return list(
+        db.scalars(
+            select(models.ProductLabelVerification)
+            .where(
+                models.ProductLabelVerification.product_label_record_id == label_record_id,
+                models.ProductLabelVerification.farm_id == farm_id,
+                models.ProductLabelVerification.revoked_at.is_(None),
+            )
+            .order_by(models.ProductLabelVerification.id)
+        )
+    )
+
+
+def resolve_label_for_decision(
+    db: Session, epa_reg_no: str | None, crop: str | None, farm_id: int | None
+):
+    """(record, unresolved_reason, promotion_blocked_reason) for one farm's decision.
+
+    The single resolution path: the operator diagnostic and the decision writer must not
+    be able to disagree about whether a label applies. Two reasons come back separately
+    because they are different problems — no record found at all, versus a record found
+    that nobody has verified yet — and a PCA fixes them in different ways.
+    """
+    record, unresolved_reason = label_record_for_decision(db, epa_reg_no, crop)
+    if record is None:
+        return None, unresolved_reason, None
+    blocked = label_data.promotable_to_authoritative(
+        record, label_verifications_for_farm(db, record.id, farm_id)
+    )
+    return record, None, blocked
+
+
+def _live_label_record(
+    product: models.PesticideProduct, crop_normalized: str
+) -> models.ProductLabelRecord | None:
+    for record in label_data.active_label_records(product.label_records):
+        if record.registered_crop_normalized == crop_normalized:
+            return record
+    return None
+
+
+# The decision inputs a verified label may supersede. Deliberately short, and
+# deliberately missing three things:
+#   * `product_name` — the grower's trade name for what is in the shed is their own
+#     fact, and a label record is not entitled to rewrite it;
+#   * `crop` — what is planted is the farm's fact, not the label's;
+#   * `epa_reg_no` — it is the join key. A label rewriting the key it was found by
+#     would make the match unfalsifiable.
+LABEL_SUPERSEDABLE_FIELDS = (
+    "pre_harvest_interval_days",
+    "re_entry_interval_hours",
+    "active_ingredient",
+    "moa_group",
+)
+
+_LABEL_FIELD_UNITS = {
+    "pre_harvest_interval_days": "days",
+    "re_entry_interval_hours": "hours",
+}
+
+
+def _label_reference(product, record) -> str:
+    """Stable citation for a label-sourced value: what label, which crop, which revision."""
+    return (
+        f"label:{product.epa_reg_no}:{record.registered_crop_normalized}:"
+        f"{record.label_version or 'unversioned'}"
+    )
+
+
+def _label_field_values(product, record) -> dict:
+    """The label's value for each supersedable field (absent when the label is silent)."""
+    values = {
+        "pre_harvest_interval_days": record.pre_harvest_interval_days,
+        "re_entry_interval_hours": record.re_entry_interval_hours,
+        "active_ingredient": product.active_ingredient,
+        "moa_group": product.moa_group,
+    }
+    return {name: value for name, value in values.items() if value is not None}
+
+
+_LABEL_COMPARABLE_FIELDS = ("pre_harvest_interval_days", "re_entry_interval_hours")
+
+
+def _entered_values_behind_label(planned_like) -> dict:
+    """What a HUMAN entered for each field, looking past any label row on top of it.
+
+    Walks back through the supersede chain rather than trusting the denormalized column,
+    because the writer keeps that column in sync with the latest verified value (the
+    same convention the PCA-review path uses). Without this, applying a label value
+    would erase the very disagreement it should have reported.
+
+    Falls back to the object's own attributes — which is the whole answer at creation
+    time, before any provenance row exists. A field whose chain contains nothing but
+    label values is omitted: there is no human value there to disagree with.
+    """
+    entered: dict = {
+        name: getattr(planned_like, name)
+        for name in _LABEL_COMPARABLE_FIELDS
+        if getattr(planned_like, name, None) is not None
+    }
+    rows = list(getattr(planned_like, "input_values", None) or [])
+    if not rows:
+        return entered
+
+    by_id = {row.id: row for row in rows}
+    for field_name, row in active_input_values(planned_like).items():
+        seen = set()
+        while (
+            row is not None
+            and row.source_type == label_data.SOURCE_AUTHORITATIVE
+            and row.supersedes_input_value_id is not None
+            and row.supersedes_input_value_id not in seen
+        ):
+            seen.add(row.supersedes_input_value_id)
+            row = by_id.get(row.supersedes_input_value_id)
+        if row is None or row.source_type == label_data.SOURCE_AUTHORITATIVE:
+            entered.pop(field_name, None)
+            continue  # nothing but label values in this chain — nobody to disagree with
+        value = row.normalized_value
+        if value is None or field_name not in _LABEL_COMPARABLE_FIELDS:
+            continue
+        try:
+            entered[field_name] = int(value)
+        except ValueError:
+            continue
+    return entered
+
+
+def build_label_context(db: Session, planned_like, farm: models.Farm):
+    """Resolve everything the engine's label-dependent checks need, for one decision.
+
+    All the database-shaped questions — which product a registration number identifies,
+    which record is live, whether a licensed PCA verified it FOR THIS FARM — are
+    answered here so the engine stays framework-free and unit-testable.
+
+    Returns the empty context (every check disclosed as not run) whenever anything is
+    missing, which is the normal state until a label has been transcribed and verified.
+
+    `planned_like` is a stored PlannedSpray or the create schema, so the same resolution
+    runs on the first evaluation as on every later one.
+    """
+    epa_reg_no = getattr(planned_like, "epa_reg_no", None)
+    crop = getattr(planned_like, "crop", None)
+    record, unresolved_reason, blocked = resolve_label_for_decision(
+        db, epa_reg_no, crop, farm.id
+    )
+    product, product_reason = resolve_product_identity(db, epa_reg_no)
+
+    # The registered-crop list may only be compared against when a human has confirmed
+    # it is COMPLETE and at least one record backing it is PCA-verified for this farm.
+    # Otherwise a partial transcription would emit a false "not registered" block.
+    registered_crops: tuple[str, ...] = ()
+    if product is None:
+        crop_registration_reason = product_reason
+    elif not product.registered_crops_transcription_complete:
+        crop_registration_reason = (
+            "the list of crops registered on this product's label has not been "
+            "transcribed in full, so a crop missing from it is not evidence that the "
+            "product is unregistered for that crop"
+        )
+    else:
+        verified = [
+            live for live in label_data.active_label_records(product.label_records)
+            if label_data.promotable_to_authoritative(
+                live, label_verifications_for_farm(db, live.id, farm.id)
+            ) is None
+        ]
+        registered_crops = tuple(live.registered_crop for live in verified)
+        crop_registration_reason = None if verified else (
+            "no label record for this product has been verified by a licensed PCA for "
+            "this farm, so its registered-crop list cannot back a decision"
+        )
+
+    season_start = getattr(farm, "planting_date", None)
+    season_reason = None if season_start is not None else (
+        "no planting date is recorded for this farm, so there is no season window to "
+        "count applications or add up rates over"
+    )
+
+    return LabelContext(
+        record=record,
+        unresolved_reason=unresolved_reason,
+        promotion_blocked_reason=blocked,
+        reference=_label_reference(product, record) if record is not None else None,
+        registered_crops=registered_crops,
+        crop_registration_reason=crop_registration_reason,
+        entered_values=_entered_values_behind_label(planned_like),
+        season_start=season_start,
+        season_reason=season_reason,
+    )
+
+
+def apply_label_values(
+    db: Session, planned: models.PlannedSpray, *, commit: bool = True
+) -> list[str]:
+    """Supersede a decision's entered values with the verified label's. Returns the fields.
+
+    Mirrors the PCA-review supersede path: nothing is edited in place, each value
+    appends a row pointing at the one it replaces, an audit event records the before and
+    after, and the decision is re-run against the result.
+
+    REFUSES on a decision that is no longer open. A label sync must never rewrite what a
+    PCA already signed or what has already been applied in the field — the signature and
+    the record have to keep meaning what they meant at the time. A later label revision
+    on a reviewed decision surfaces as `decision_status.label_reference_stale` instead.
+    """
+    if planned.outcome != "planned" or planned.review_status != "not_reviewed":
+        return []
+
+    record, _, blocked = resolve_label_for_decision(
+        db, planned.epa_reg_no, planned.crop, planned.farm_id
+    )
+    if record is None or blocked is not None:
+        return []
+    product = get_pesticide_product(db, record.product_id)
+    if product is None:  # pragma: no cover - FK guarantees this
+        return []
+
+    reference = _label_reference(product, record)
+    current = active_input_values(planned)
+    now = clock.current_datetime()
+    applied: list[str] = []
+
+    for field_name, label_value in _label_field_values(product, record).items():
+        if field_name not in LABEL_SUPERSEDABLE_FIELDS:
+            continue
+        prior = current.get(field_name)
+        # Already carrying THIS label's value from THIS record: appending an identical
+        # row on every re-sync would turn an audit trail into noise.
+        if (
+            prior is not None
+            and prior.source_type == label_data.SOURCE_AUTHORITATIVE
+            and prior.source_reference == reference
+        ):
+            continue
+        before_value = getattr(planned, field_name, None)
+        db.add(models.DecisionInputValue(
+            planned_spray_id=planned.id,
+            field_name=field_name,
+            raw_value=str(label_value),
+            normalized_value=_normalized_input(field_name, label_value),
+            unit=_LABEL_FIELD_UNITS.get(field_name),
+            source_type=label_data.SOURCE_AUTHORITATIVE,
+            source_reference=reference,
+            confidence="label_verified",
+            verified_by=reference,
+            verified_at=now,
+            effective_date=record.label_effective_date,
+            supersedes_input_value_id=prior.id if prior else None,
+        ))
+        # Denormalized display copy follows the latest verified value, exactly as it
+        # does after a PCA edit. The human's original value stays readable in the
+        # superseded row and in the audit event below.
+        setattr(planned, field_name, label_value)
+        applied.append(field_name)
+        _add_audit_event(
+            db, planned, "input_value_superseded",
+            actor=reference,
+            rationale="verified pesticide label",
+            after={"field": field_name, "from": before_value, "to": label_value},
+        )
+
+    if not applied:
+        return []
+
+    _add_audit_event(
+        db, planned, "label_values_applied",
+        actor=reference,
+        rationale="verified pesticide label",
+        after={
+            "fields": applied,
+            "label_reference": reference,
+            "label_record_id": record.id,
+            "label_effective_date": (
+                record.label_effective_date.isoformat()
+                if record.label_effective_date else None
+            ),
+        },
+    )
+    db.flush()  # assign input-value ids before re-resolving
+    _rerun_decision(db, planned)
+    if commit:
+        db.commit()
+        db.refresh(planned)
+    return applied
+
+
+def sync_transcribed_labels(db: Session) -> schemas.LabelSyncResult:
+    """Load `app/label_table.TRANSCRIBED_LABEL_USES` into the append-only record table.
+
+    Idempotent WITHOUT an UPDATE, which is the whole design: each entry is content-
+    addressed (`label_data.transcription_digest`), so an unchanged digest is a no-op and a
+    changed digest appends a row superseding the previous one. Re-running after editing a
+    transcription therefore leaves the original readable, which is what makes a corrected
+    label value auditable rather than silently rewritten.
+
+    Existing product metadata is never overwritten. If a later transcription disagrees
+    about a product's active ingredient, that disagreement is REPORTED in `notes` — a
+    silent overwrite would resolve a factual conflict by whoever synced last.
+    """
+    entries = label_table.TRANSCRIBED_LABEL_USES
+    result = {
+        "transcribed_entries": len(entries),
+        "products_created": 0,
+        "records_created": 0,
+        "records_superseded": 0,
+        "unchanged": 0,
+    }
+    notes: list[str] = []
+    now = clock.current_datetime()
+
+    for entry in entries:
+        normalized = label_data.normalize_epa_reg_no(entry.epa_reg_no)
+        product = get_product_by_reg_no(db, normalized)
+        if product is None:
+            product = models.PesticideProduct(
+                epa_reg_no=entry.epa_reg_no,
+                epa_reg_no_normalized=normalized,
+                epa_reg_base=label_data.epa_reg_base(normalized),
+                product_name=entry.product_name,
+                registrant=entry.registrant,
+                active_ingredient=entry.active_ingredient,
+                active_ingredient_concentration_amount=(
+                    entry.active_ingredient_concentration_amount
+                ),
+                active_ingredient_concentration_unit=(
+                    entry.active_ingredient_concentration_unit
+                ),
+                moa_group=entry.moa_group,
+            )
+            db.add(product)
+            db.flush()
+            result["products_created"] += 1
+        else:
+            for field_name in (
+                "active_ingredient", "moa_group", "registrant",
+                "active_ingredient_concentration_amount",
+                "active_ingredient_concentration_unit",
+            ):
+                new_value = getattr(entry, field_name)
+                current = getattr(product, field_name)
+                if new_value is None:
+                    continue
+                if current is None:
+                    setattr(product, field_name, new_value)
+                elif current != new_value:
+                    notes.append(
+                        f"{entry.epa_reg_no}: transcription says {field_name}="
+                        f"{new_value!r} but the stored product says {current!r} — kept "
+                        f"the stored value; resolve this against the label"
+                    )
+
+        crop_normalized = crop_aliases.normalize(entry.registered_crop)
+        digest = label_data.transcription_digest(entry.as_values())
+        existing = _live_label_record(product, crop_normalized)
+        if existing is not None and existing.transcription_digest == digest:
+            result["unchanged"] += 1
+            continue
+
+        db.add(models.ProductLabelRecord(
+            product_id=product.id,
+            registered_crop=entry.registered_crop,
+            registered_crop_normalized=crop_normalized,
+            target_pest_or_disease=entry.target_pest_or_disease,
+            pre_harvest_interval_days=entry.pre_harvest_interval_days,
+            re_entry_interval_hours=entry.re_entry_interval_hours,
+            max_seasonal_rate_amount=entry.max_seasonal_rate_amount,
+            max_seasonal_rate_unit=entry.max_seasonal_rate_unit,
+            max_applications_per_season=entry.max_applications_per_season,
+            min_retreatment_interval_days=entry.min_retreatment_interval_days,
+            label_version=entry.label_version,
+            label_effective_date=entry.label_effective_date,
+            # A transcription is UNVERIFIED however careful the transcriber was. It
+            # becomes label-verified only through an attributed PCA act (Phase 4).
+            source_tier=label_data.TIER_TRANSCRIBED,
+            source_document_reference=entry.source_document_reference,
+            source_section_or_page=entry.source_section_or_page,
+            source_snippet=entry.source_snippet,
+            transcribed_by=entry.transcribed_by,
+            transcribed_at=now,
+            transcription_digest=digest,
+            supersedes_label_record_id=existing.id if existing is not None else None,
+        ))
+        if existing is not None:
+            result["records_superseded"] += 1
+        result["records_created"] += 1
+
+    db.commit()
+    return schemas.LabelSyncResult(**result, notes=notes)

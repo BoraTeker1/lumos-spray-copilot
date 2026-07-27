@@ -339,3 +339,36 @@ def test_date_format_flows_through_the_endpoint(client):
     assert result["batch"]["spray_event_count"] == 1
     (event,) = client.get(f"/farms/{farm['id']}/spray-events").json()
     assert event["application_date"] == "2026-04-07"
+
+
+def test_spray_event_import_maps_the_epa_registration_number(client):
+    """The label join key has to survive a historical spray import.
+
+    Without it a past application cannot be tied to a product identity, so the
+    label-dependent seasonal-count and retreatment-interval checks cannot see it.
+    """
+    report = csv_import.parse_csv(
+        "spray_events",
+        "Product,Date,EPA Reg No\nCaptan 80 WDG,2026-06-12,100-953",
+    )
+    (row,) = report.rows
+    assert row.importable
+    assert row.values["epa_reg_no"] == "100-953"
+
+    farm = _farm(client)
+    _import(
+        client, farm["id"],
+        "Product,Date,EPA Registration Number\nCaptan 80 WDG,2026-06-12,100-953",
+        record_type="spray_events", dry_run=False,
+    )
+    (event,) = client.get(f"/farms/{farm['id']}/spray-events").json()
+    assert event["epa_reg_no"] == "100-953"
+
+
+def test_spray_event_template_carries_the_epa_column_with_no_invented_value():
+    """The column is discoverable, but the example row never asserts a real reg number."""
+    lines = csv_import.template_csv("spray_events").splitlines()
+    header = lines[0].split(",")
+    assert "epa_reg_no" in header
+    example = lines[1].split(",")
+    assert example[header.index("epa_reg_no")] == ""

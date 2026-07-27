@@ -20,6 +20,15 @@ InputSourceType = Literal[
     "demo", "user_entered", "imported_unverified", "pca_verified",
     "authoritative_provider",
 ]
+# How a stored label record was obtained. A SEPARATE vocabulary from InputSourceType on
+# purpose: one says how a label record came to exist, the other how a decision's input
+# value was sourced. Only pca_verified_transcription and registrant_provider_feed map to
+# "authoritative_provider" (see label_data.LABEL_TIER_TO_INPUT_SOURCE) — a human typing
+# from a PDF is unverified until a licensed PCA attests to it against the document.
+LabelSourceTier = Literal[
+    "transcribed_unverified", "ai_extracted_unverified",
+    "pca_verified_transcription", "registrant_provider_feed",
+]
 # Append-only follow-up timeline event types (never a single mutable outcome record).
 FollowUpEventType = Literal[
     "scouting_observation", "actual_application", "rescue_application",
@@ -497,6 +506,8 @@ class BlockOutcomeObservation(BaseModel):
 # --------------------------------------------------------------------- SprayEvent
 class SprayEventBase(BaseModel):
     product_name: str
+    # Join key to a product's label record (see models.SprayEvent.epa_reg_no).
+    epa_reg_no: str | None = None
     active_ingredient: str | None = None
     moa_group: str | None = None
     pesticide_class: str | None = None
@@ -664,6 +675,14 @@ class PlannedSprayReviewUpdate(BaseModel):
     pca_next_action: str | None = None
     # Structured field edits (all optional; each appends a pca_verified input value).
     proposed_product_name: str | None = None
+    # Product-identity and matching keys. A PCA correcting a mis-entered registration
+    # number, crop, MoA group or target is correcting the join keys the label and
+    # scouting checks run on, so these need the same superseding provenance trail as a
+    # corrected PHI — not a silent edit.
+    proposed_epa_reg_no: str | None = None
+    proposed_crop: str | None = None
+    proposed_moa_group: str | None = None
+    proposed_target_pest_or_disease: str | None = None
     proposed_active_ingredient: str | None = None
     proposed_rate_amount: float | None = Field(default=None, gt=0)
     proposed_rate_unit: str | None = None
@@ -677,6 +696,10 @@ class PlannedSprayReviewUpdate(BaseModel):
         """Map of planned-spray field -> proposed value (only the ones provided)."""
         mapping = {
             "product_name": self.proposed_product_name,
+            "epa_reg_no": self.proposed_epa_reg_no,
+            "crop": self.proposed_crop,
+            "moa_group": self.proposed_moa_group,
+            "target_pest_or_disease": self.proposed_target_pest_or_disease,
             "active_ingredient": self.proposed_active_ingredient,
             "rate_amount": self.proposed_rate_amount,
             "rate_unit": self.proposed_rate_unit,
@@ -741,13 +764,23 @@ class PlannedSprayDecisionRule(BaseModel):
 
 
 class PlannedSprayDecision(BaseModel):
-    """The explainable pre-spray decision snapshot."""
+    """The explainable pre-spray decision snapshot.
+
+    Not currently used as a response model — the decision reaches clients through the
+    untyped `PlannedSpray.decision_payload` dict. It still declares every key the engine
+    emits, because wiring this up while it was missing `not_evaluated` or the authority
+    fields would silently strip the label-gap disclosure out of the API.
+    """
     outcome: str
     severity: str
     confidence: str
+    authority_level: str
+    authority_basis: str = ""
     rules: list[PlannedSprayDecisionRule] = Field(default_factory=list)
     inputs_used: dict = Field(default_factory=dict)
     missing_information: list[str] = Field(default_factory=list)
+    # Label-dependent checks that did NOT run, each with its own reason.
+    not_evaluated: list[dict] = Field(default_factory=list)
     required_next_action: str
     review_required: bool
     disclaimer: str
@@ -817,6 +850,9 @@ class PlannedSpray(BaseModel):
     open_conflict: bool = False
     # True when the farm's harvest date was edited after this check ran (stale snapshot).
     harvest_date_changed_since_check: bool = False
+    # True when the label record this decision cites has since been revised. A stored
+    # decision is never silently recomputed, so it has to say when its source moved on.
+    label_reference_stale: bool = False
     # Follow-up gating: outcomes other than a clean as-planned application require a
     # follow-up event timeline before anything about them can be called "confirmed".
     follow_up_required: bool = False
@@ -1508,3 +1544,108 @@ class PurchaseOrderDetail(PurchaseOrder):
 
 
 InputPlanDetail.model_rebuild()
+
+
+# ------------------------------------------------------------- pesticide labels
+# Read models only in this phase. There is deliberately no client-facing schema that
+# can set `source_tier="pca_verified_transcription"` or write a verification: promotion
+# to label-verified happens through an attributed PCA act (Phase 4), never a request field.
+class ProductLabelVerification(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    product_label_record_id: int
+    farm_id: int
+    verified_by_credential_id: int
+    verified_by: str | None = None
+    verified_at: datetime
+    attestation: str
+    revoked_at: datetime | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+
+
+class ProductLabelRecord(BaseModel):
+    """One label's directions for one registered crop (append-only).
+
+    Every regulatory field may be null because a real label states some and not others.
+    Null means the label is SILENT on that value — never that there is no limit.
+    """
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    product_id: int
+    registered_crop: str
+    registered_crop_normalized: str
+    target_pest_or_disease: str | None = None
+    pre_harvest_interval_days: int | None = None
+    re_entry_interval_hours: int | None = None
+    max_seasonal_rate_amount: float | None = None
+    max_seasonal_rate_unit: str | None = None
+    max_applications_per_season: int | None = None
+    min_retreatment_interval_days: int | None = None
+    label_version: str | None = None
+    label_effective_date: date | None = None
+    source_tier: LabelSourceTier
+    source_document_reference: str | None = None
+    source_section_or_page: str | None = None
+    source_snippet: str | None = None
+    transcribed_by: str | None = None
+    transcribed_at: datetime | None = None
+    transcription_digest: str | None = None
+    withdrawal_reason: str | None = None
+    supersedes_label_record_id: int | None = None
+    created_at: datetime
+    verifications: list[ProductLabelVerification] = Field(default_factory=list)
+
+
+class PesticideProduct(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    epa_reg_no: str
+    epa_reg_no_normalized: str
+    epa_reg_base: str
+    product_name: str
+    registrant: str | None = None
+    active_ingredient: str | None = None
+    active_ingredient_concentration_amount: float | None = None
+    active_ingredient_concentration_unit: str | None = None
+    moa_group: str | None = None
+    registered_crops_transcription_complete: bool
+    notes: str | None = None
+    created_at: datetime
+    label_records: list[ProductLabelRecord] = Field(default_factory=list)
+
+
+class LabelSyncResult(BaseModel):
+    """What `crud.sync_transcribed_labels` did. Idempotent: re-running changes nothing.
+
+    `unchanged` is the interesting number on a second run — a loader that reported
+    "created" every time would be issuing UPDATEs against an append-only table.
+    """
+    transcribed_entries: int
+    products_created: int
+    records_created: int
+    records_superseded: int
+    unchanged: int
+    notes: list[str] = Field(default_factory=list)
+
+
+class LabelResolution(BaseModel):
+    """What a given (registration number, crop) resolves to today, and why not, if not.
+
+    A diagnostic, deliberately shaped around the REASONS rather than the values: the
+    question an operator actually has is "why is this decision still saying the label
+    check did not run", and every unresolved case here answers it with the same sentence
+    the decision record shows. `promotable` false with a resolved record is the normal
+    state for a fresh transcription — it means the values exist but no licensed PCA has
+    verified them against the primary document for this farm yet.
+    """
+    epa_reg_no: str | None = None
+    crop: str | None = None
+    farm_id: int | None = None
+    product: PesticideProduct | None = None
+    label_record: ProductLabelRecord | None = None
+    # Why no record resolved. None when one did.
+    unresolved_reason: str | None = None
+    # Whether the resolved record may back a decision as label-verified, and why not.
+    promotable: bool = False
+    promotion_blocked_reason: str | None = None

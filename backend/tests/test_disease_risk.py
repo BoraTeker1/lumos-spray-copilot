@@ -111,6 +111,10 @@ def test_botrytis_v1_abstains_because_thresholds_were_never_supplied():
     assert model.is_ready() is False
     assert model.thresholds is None
     assert model.citation is None
+    # The source's own scope is absent too, and is required before the rule can run.
+    assert model.source_crop is None
+    assert model.source_region is None
+    assert model.source_validation_conditions is None
 
     result = disease_risk.assess(_payload())
     assert result.abstained is True
@@ -125,6 +129,50 @@ def test_an_unready_model_can_never_be_evaluated():
     model = disease_risk.RISK_MODELS["botrytis_wetness_v1"]
     with pytest.raises(NotImplementedError):
         model.evaluate(_payload())
+
+
+def _transcribed_model():
+    """A structurally complete transcription. The `thresholds` value is a placeholder,
+    NOT a threshold: these tests assert that provenance is required and deliberately
+    assert nothing whatsoever about any coefficient."""
+
+    class _Transcribed(disease_risk.BotrytisWetnessV1):
+        thresholds = {"placeholder": True}
+        citation = "Author (Year), Publication"
+        source_crop = "strawberry"
+        source_region = "the source's stated region"
+        source_validation_conditions = "the source's stated validation conditions"
+
+    return _Transcribed
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["thresholds", "citation", "source_crop", "source_region",
+     "source_validation_conditions"],
+)
+def test_a_threshold_table_without_its_full_provenance_is_not_ready(missing):
+    """Coefficients alone must never make the rule live.
+
+    A transcriber who pastes the table and forgets the citation would otherwise ship an
+    uncited rule inside a cited, versioned module a PCA is entitled to trust — and no
+    test of the arithmetic could catch it, because such tests check the arithmetic
+    *against* the constants rather than the constants themselves.
+    """
+    model = _transcribed_model()
+    setattr(model, missing, None)
+    assert model().is_ready() is False
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_whitespace_is_not_a_citation(blank):
+    model = _transcribed_model()
+    model.citation = blank
+    assert model().is_ready() is False
+
+
+def test_the_gate_opens_only_with_the_table_and_all_of_its_provenance():
+    assert _transcribed_model()().is_ready() is True
 
 
 def test_unknown_model_version_abstains():

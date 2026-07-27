@@ -363,12 +363,43 @@ export default function DecisionRecordPage({ params }) {
                 </p>
               )}
 
+              {planned.label_reference_stale && (
+                <p className="mt-1.5 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                  The pesticide label this check was run against has since been revised —
+                  the calculations in this record use the label values on record at check
+                  time. Re-run the check against the current label before relying on this
+                  decision.
+                </p>
+              )}
+
               {(payload.missing_information || []).length > 0 && (
                 <div className="mt-3">
                   <h3 className="text-xs font-semibold text-gray-900">Missing information</h3>
                   <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-700">
                     {payload.missing_information.map((m, i) => (
                       <li key={i}>{m}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Checks that did NOT run, and why. Part of the printed record on
+                  purpose: an auditor reading this needs to know what was never
+                  examined, not just what passed. */}
+              {(payload.not_evaluated || []).length > 0 && (
+                <div className="mt-3">
+                  <h3 className="text-xs font-semibold text-gray-900">
+                    Not evaluated ({payload.not_evaluated.length})
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-gray-600">
+                    These checks did not run. Each states why — none was guessed or
+                    simulated.
+                  </p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-700">
+                    {payload.not_evaluated.map((c) => (
+                      <li key={c.check_id || c.check}>
+                        <span className="font-medium">{c.check}</span> — {c.reason}
+                      </li>
                     ))}
                   </ul>
                 </div>

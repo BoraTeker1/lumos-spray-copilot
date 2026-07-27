@@ -609,3 +609,59 @@ def test_label_dependent_checks_are_disclosed_not_simulated():
     # No rule pretends to have run these.
     rule_ids = {r["rule_id"] for r in payload["rules"]}
     assert "max_seasonal_rate" not in rule_ids
+
+
+# ------------------------------------------- the label-gap disclosure is computed
+def test_every_label_dependent_check_is_disclosed_with_a_stable_id_and_a_reason():
+    """The four checks carry an id as well as prose, so a rule can retire its own entry.
+
+    Matching on the human name would make the disclosure impossible to narrow safely —
+    a reworded check would silently stop being retired, or retire the wrong one.
+    """
+    from app import decision_engine as de
+
+    d = evaluate_planned_spray(
+        farm(harvest_offset_days=30), planned(),
+        [], [obs("botrytis", days_ago=3)], today=TODAY,
+    )
+    entries = d.as_payload()["not_evaluated"]
+    assert {e["check_id"] for e in entries} == {
+        de.CHECK_MAX_SEASONAL_RATE,
+        de.CHECK_MAX_APPLICATIONS,
+        de.CHECK_RETREATMENT_INTERVAL,
+        de.CHECK_CROP_REGISTRATION,
+    }
+    assert all(e["check"] and e["reason"] for e in entries)
+    # The reason travels per check, so the narrative can print each one.
+    assert de.REASON_NO_LABEL_DATA in d.narrative
+    assert de.LABEL_DEPENDENT_CHECK_NAMES[de.CHECK_RETREATMENT_INTERVAL] in d.narrative
+
+
+def test_a_check_that_runs_drops_out_of_the_disclosure():
+    """The whole point of computing the list: a check that runs must stop being listed."""
+    from app import decision_engine as de
+
+    all_four = de.label_checks_not_evaluated()
+    assert len(all_four) == 4
+
+    narrowed = de.label_checks_not_evaluated({de.CHECK_RETREATMENT_INTERVAL})
+    assert de.CHECK_RETREATMENT_INTERVAL not in {e["check_id"] for e in narrowed}
+    assert len(narrowed) == 3
+
+    assert de.label_checks_not_evaluated(set(de.LABEL_DEPENDENT_CHECK_NAMES)) == []
+
+
+def test_an_unknown_check_id_never_silently_retires_a_real_check():
+    """Fail-safe direction: only an exact id match removes a disclosure."""
+    from app import decision_engine as de
+
+    assert len(de.label_checks_not_evaluated({"max_seasonal_rate_v2"})) == 4
+
+
+def test_the_disclosure_is_a_copy_so_one_decision_cannot_mutate_another():
+    from app import decision_engine as de
+
+    first = de.label_checks_not_evaluated()
+    first[0]["reason"] = "tampered"
+    assert de.label_checks_not_evaluated()[0]["reason"] == de.REASON_NO_LABEL_DATA
+    assert de.NOT_EVALUATED_CHECKS[0]["reason"] == de.REASON_NO_LABEL_DATA

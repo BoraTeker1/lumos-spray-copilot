@@ -130,3 +130,45 @@ def test_imported_values_never_silently_verified(client):
         "imported_unverified", "pca_verified"
     ]
     assert phi_rows[0]["verified_by"] is None  # untouched, only superseded
+
+
+def test_pca_can_correct_the_product_identity_and_matching_keys(client):
+    """A PCA correcting the join keys gets the same supersede trail as a corrected PHI.
+
+    `epa_reg_no`, `crop`, `moa_group` and `target_pest_or_disease` are what the label
+    and scouting checks match on. Letting a reviewer fix them silently would leave the
+    keys a decision was matched on with no provenance at all.
+    """
+    farm = _farm(client)
+    p = _planned(client, farm["id"], epa_reg_no="", moa_group="")
+
+    resp = client.patch(f"/planned-sprays/{p['id']}/review", json={
+        "action": "edited",
+        "reviewed_by": "Jane PCA",
+        "pca_next_action": "Product identity corrected from the recommendation sheet.",
+        "proposed_epa_reg_no": "100-953",
+        "proposed_crop": "strawberry",
+        "proposed_moa_group": "FRAC 9 + 12",
+        "proposed_target_pest_or_disease": "botrytis fruit rot",
+    })
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["epa_reg_no"] == "100-953"
+    assert updated["moa_group"] == "FRAC 9 + 12"
+
+    chain = client.get(f"/planned-sprays/{p['id']}/input-values").json()
+    for field in ("epa_reg_no", "crop", "moa_group", "target_pest_or_disease"):
+        verified = [
+            v for v in chain
+            if v["field_name"] == field and v["source_type"] == "pca_verified"
+        ]
+        assert verified, f"{field} has no pca_verified row"
+        assert verified[-1]["verified_by"] == "Jane PCA"
+        assert verified[-1]["verified_at"] is not None
+
+    # The correction is in the immutable audit history, one event per field.
+    events = client.get(f"/planned-sprays/{p['id']}/audit-events").json()
+    superseded = [e for e in events if e["event_type"] == "input_value_superseded"]
+    assert {e["after"]["field"] for e in superseded} >= {
+        "epa_reg_no", "crop", "moa_group", "target_pest_or_disease"
+    }

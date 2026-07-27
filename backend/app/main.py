@@ -1515,6 +1515,86 @@ def get_farm_pca_authorizations(farm_id: int, db: Session = Depends(get_db)):
     return crud.list_farm_authorizations(db, farm_id)
 
 
+# ------------------------------------------------ INTERNAL: pesticide labels
+# Read + load only. Nothing here writes a decision input value or changes a verdict —
+# applying label values to a decision is a separate, gated step. These routes sit under
+# /internal so app/operator_key.py's path-prefix middleware covers them by construction.
+@app.get(
+    "/internal/labels/products",
+    response_model=list[schemas.PesticideProduct],
+    tags=["internal"],
+)
+def get_pesticide_products(db: Session = Depends(get_db)):
+    """Every product in the label library, with its append-only label records."""
+    return crud.list_pesticide_products(db)
+
+
+@app.get(
+    "/internal/labels/products/{product_id}",
+    response_model=schemas.PesticideProduct,
+    tags=["internal"],
+)
+def get_pesticide_product(product_id: int, db: Session = Depends(get_db)):
+    product = crud.get_pesticide_product(db, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Pesticide product not found")
+    return product
+
+
+@app.post(
+    "/internal/labels/sync",
+    response_model=schemas.LabelSyncResult,
+    tags=["internal"],
+)
+def post_label_sync(db: Session = Depends(get_db)):
+    """Load `app/label_table.TRANSCRIBED_LABEL_USES` into the append-only record table.
+
+    Deliberately an explicit operator act, not something startup or seeding does: seeded
+    label data would make demo decisions look label-grounded, which is a fabricated
+    regulatory claim. Safe to re-run — unchanged entries are no-ops and a changed
+    transcription appends a superseding row rather than overwriting the original.
+
+    Returns `transcribed_entries: 0` until a value has been transcribed from a primary
+    label document with its citation. That is the intended state, not a failure.
+    """
+    return crud.sync_transcribed_labels(db)
+
+
+@app.get(
+    "/internal/labels/resolution",
+    response_model=schemas.LabelResolution,
+    tags=["internal"],
+)
+def get_label_resolution(
+    epa_reg_no: str | None = None,
+    crop: str | None = None,
+    farm_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """What a (registration number, crop, farm) resolves to today — and why not, if not.
+
+    The diagnostic behind "why does this decision still say the label check did not
+    run". It calls the same `crud.resolve_label_for_decision` the decision path uses, so
+    the answer here cannot drift from the answer on a decision record.
+    """
+    if farm_id is not None:
+        _require_farm(db, farm_id)
+    record, unresolved_reason, blocked = crud.resolve_label_for_decision(
+        db, epa_reg_no, crop, farm_id
+    )
+    product, _ = crud.resolve_product_identity(db, epa_reg_no)
+    return schemas.LabelResolution(
+        epa_reg_no=epa_reg_no,
+        crop=crop,
+        farm_id=farm_id,
+        product=product,
+        label_record=record,
+        unresolved_reason=unresolved_reason,
+        promotable=record is not None and blocked is None,
+        promotion_blocked_reason=blocked,
+    )
+
+
 @app.post("/internal/farms/{farm_id}/pilot-import", status_code=201, tags=["internal"])
 def pilot_import(
     farm_id: int, payload: schemas.PilotImport, db: Session = Depends(get_db)

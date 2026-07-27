@@ -297,6 +297,14 @@ class RiskModel:
     family: str = ""
     version: str = ""
     citation: str | None = None
+    # What the cited source actually validated, recorded verbatim from that source.
+    # A threshold table is not interpretable without them: the same coefficients
+    # validated on Florida plasticulture strawberries are not a Central Coast rule,
+    # and `local_validation_status` cannot be stated honestly if the source's own
+    # scope was never written down. Required by is_ready() for that reason.
+    source_crop: str | None = None
+    source_region: str | None = None
+    source_validation_conditions: str | None = None
 
     def is_ready(self) -> bool:
         """False until the published thresholds have been transcribed."""
@@ -315,19 +323,36 @@ class BotrytisWetnessV1(RiskModel):
     they are not being recalled or approximated: `thresholds` stays None, `is_ready()`
     stays False, and every assessment abstains with `thresholds_not_supplied`.
 
-    To supply them: set `thresholds` to the transcribed table and `citation` to the
-    primary source (author, year, publication), record the source's crop, region and
-    validation conditions verbatim alongside, and implement `evaluate`. Nothing else
-    in the pipeline changes.
+    To supply them: set `thresholds` to the transcribed table, `citation` to the primary
+    source (author, year, publication), and `source_crop` / `source_region` /
+    `source_validation_conditions` to that source's own stated scope verbatim; then
+    implement `evaluate`. is_ready() requires ALL of them. Nothing else in the pipeline
+    changes.
     """
 
     family = "botrytis_wetness"
     version = "botrytis_wetness_v1"
     citation = None
     thresholds = None
+    source_crop = None
+    source_region = None
+    source_validation_conditions = None
 
     def is_ready(self) -> bool:
-        return self.thresholds is not None
+        # The coefficients alone are NOT enough. A transcriber who supplies the table
+        # and forgets the citation would ship an uncited rule inside a versioned module
+        # a PCA is entitled to trust — the exact failure this module's docstring exists
+        # to prevent, and one no test of the arithmetic can catch. Every provenance
+        # field is load-bearing for reading the output, so every one is required.
+        return all(
+            (
+                self.thresholds is not None,
+                (self.citation or "").strip(),
+                (self.source_crop or "").strip(),
+                (self.source_region or "").strip(),
+                (self.source_validation_conditions or "").strip(),
+            )
+        )
 
     def evaluate(self, payload: dict) -> tuple[float, str, dict]:
         raise NotImplementedError(
