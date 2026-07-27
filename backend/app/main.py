@@ -13,8 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import (
-    ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction, llm,
-    operator_key, pca_authority, schemas,
+    ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction,
+    label_extraction, llm, operator_key, pca_authority, schemas,
 )
 from app.analytics import compute_cost_analytics
 from app.database import SessionLocal, get_db, init_db
@@ -1593,6 +1593,127 @@ def get_label_resolution(
         promotable=record is not None and blocked is None,
         promotion_blocked_reason=blocked,
     )
+
+
+@app.post("/internal/labels/extract", tags=["internal"])
+async def post_label_extraction(
+    text: str | None = Form(None),
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """AI extraction of draft label uses from a label PDF, photo, or pasted text.
+
+    REAL AI (Claude structured outputs; deterministic mock without an API key), and
+    the most carefully fenced call in the system because its output is a regulatory
+    value: the model copies only what the label literally states, never converts
+    units, emits one row per (crop, use) block with a verbatim snippet, and abstains
+    when the document is not a label.
+
+    This endpoint NEVER WRITES a label record. It returns draft rows for a human to
+    correct and commit via POST /internal/labels/records — where they land as
+    `ai_extracted_unverified` and still cannot back any decision until a licensed
+    PCA verifies them for a farm.
+    """
+    file_bytes = None
+    media_type = None
+    if file is not None:
+        media_type = (file.content_type or "").lower()
+        allowed = (
+            label_extraction.ALLOWED_DOCUMENT_TYPES + label_extraction.ALLOWED_IMAGE_TYPES
+        )
+        if media_type not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{media_type}'. Use a PDF or an image "
+                f"(JPEG/PNG/WebP/GIF), or paste the label text instead.",
+            )
+        file_bytes = await file.read()
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Empty file upload.")
+        if len(file_bytes) > label_extraction.MAX_DOCUMENT_BYTES:
+            raise HTTPException(status_code=400, detail="File too large (max 10 MB).")
+    if file_bytes is None and not (text or "").strip():
+        raise HTTPException(
+            status_code=422, detail="Provide a label file or pasted text to extract from."
+        )
+
+    blocks = label_extraction.build_content_blocks(text, file_bytes, media_type)
+    service = llm.default_llm_service
+    try:
+        result, model_id = service.parse(
+            label_extraction.build_system_prompt(), blocks,
+            label_extraction.LabelExtraction,
+        )
+    except llm.LlmError as exc:  # refusal, truncation, transport — never a 500
+        raise HTTPException(
+            status_code=502, detail=f"AI label extraction failed: {exc}"
+        ) from exc
+
+    judgment = crud.log_ai_judgment(
+        db,
+        kind="label_extraction",
+        model_id=model_id,
+        prompt_version=label_extraction.PROMPT_VERSION,
+        input_digest=label_extraction.input_digest(text, file_bytes),
+        output={"rows": len(result.rows), "abstained": result.abstained,
+                "caveats": result.caveats},
+        confidence="none" if result.abstained else result.overall_confidence,
+        abstained=result.abstained,
+        abstain_reason=result.abstain_reason,
+        is_mock=service.is_mock,
+    )
+    return {
+        "judgment_id": judgment.id,
+        "extraction": label_extraction.extraction_payload(
+            result, model_id, service.is_mock
+        ),
+    }
+
+
+@app.post(
+    "/internal/labels/records",
+    response_model=schemas.ProductLabelRecord,
+    status_code=201,
+    tags=["internal"],
+)
+def post_label_record(
+    payload: schemas.ProductLabelRecordCreate, db: Session = Depends(get_db)
+):
+    """Commit ONE human-reviewed label use as an `ai_extracted_unverified` record.
+
+    Append-only: a row for a (product, crop) that already has a live record
+    supersedes it rather than replacing it. The tier is server-set — no request
+    field can declare a row verified, and the record still cannot back a decision
+    until a licensed PCA attests to it for a farm.
+    """
+    return crud.create_label_record(db, payload)
+
+
+@app.post(
+    "/farms/{farm_id}/label-verifications",
+    response_model=schemas.ProductLabelVerification,
+    status_code=201,
+    tags=["labels"],
+)
+def post_label_verification(
+    farm_id: int,
+    payload: schemas.ProductLabelVerificationCreate,
+    db: Session = Depends(get_db),
+    x_lumos_pca_token: str | None = Header(default=None),
+):
+    """A licensed PCA attests that a stored label record matches the primary document.
+
+    The act that makes a label value usable, so it goes through
+    `crud.require_pca_for_farm` — the strict path, not the optional one — and is
+    attributed from the credential rather than any client-supplied name. NOT under
+    /internal: this is a professional act by the farm's PCA, not operator tooling.
+    """
+    farm = _require_farm(db, farm_id)
+    credential = crud.require_pca_for_farm(db, x_lumos_pca_token, farm_id)
+    try:
+        return crud.create_label_verification(db, farm, payload, credential)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/internal/farms/{farm_id}/pilot-import", status_code=201, tags=["internal"])

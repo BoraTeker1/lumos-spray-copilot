@@ -1629,6 +1629,79 @@ class LabelSyncResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class ProductLabelRecordCreate(BaseModel):
+    """One human-reviewed label use, committed from an AI extraction.
+
+    There is deliberately NO `source_tier` field. The server sets
+    `ai_extracted_unverified` — a client cannot declare its own row verified, which
+    is the same rule that keeps `authoritative_provider` unreachable from a request.
+
+    Every regulatory value is optional and every one means "the label is silent"
+    when omitted. `source_snippet` and `source_document_reference` are required
+    because a value nobody can trace back to a document cannot later be promoted:
+    `label_data.promotable_to_authoritative` would refuse it anyway, so accepting a
+    row without them would only store something permanently unusable.
+    """
+    epa_reg_no: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
+    registrant: str | None = None
+    registered_crop: str = Field(min_length=1)
+    target_pest_or_disease: str | None = None
+
+    pre_harvest_interval_days: int | None = Field(default=None, ge=0)
+    re_entry_interval_hours: int | None = Field(default=None, ge=0)
+    max_seasonal_rate_amount: float | None = Field(default=None, gt=0)
+    max_seasonal_rate_unit: str | None = None
+    max_applications_per_season: int | None = Field(default=None, ge=0)
+    min_retreatment_interval_days: int | None = Field(default=None, ge=0)
+
+    active_ingredient: str | None = None
+    active_ingredient_concentration_amount: float | None = Field(default=None, gt=0)
+    active_ingredient_concentration_unit: str | None = None
+    moa_group: str | None = None
+
+    label_version: str = Field(min_length=1)
+    label_effective_date: date
+    source_document_reference: str = Field(min_length=1)
+    source_section_or_page: str | None = None
+    source_snippet: str = Field(min_length=1)
+    reviewed_by: str = Field(min_length=1)
+    # The AI judgment this row was reviewed from, when it came from an extraction.
+    ai_judgment_id: int | None = None
+
+    @model_validator(mode="after")
+    def _require_a_regulatory_value(self):
+        if not any(
+            getattr(self, name) is not None
+            for name in (
+                "pre_harvest_interval_days", "re_entry_interval_hours",
+                "max_seasonal_rate_amount", "max_applications_per_season",
+                "min_retreatment_interval_days",
+            )
+        ):
+            raise ValueError(
+                "a label record that states no regulatory value has nothing to "
+                "contribute to a decision — omit the row instead"
+            )
+        if (self.max_seasonal_rate_amount is None) != (self.max_seasonal_rate_unit is None):
+            raise ValueError(
+                "max_seasonal_rate_amount and max_seasonal_rate_unit must be given "
+                "together — a rate without its unit cannot be compared to anything"
+            )
+        return self
+
+
+class ProductLabelVerificationCreate(BaseModel):
+    """A licensed PCA attesting that one stored label record matches the document.
+
+    `verified_by` is absent on purpose: the attribution comes from the presented
+    credential, never from a client-supplied name. An attestation is required and
+    must be substantive — "ok" is not a professional act anyone can audit.
+    """
+    product_label_record_id: int
+    attestation: str = Field(min_length=10)
+
+
 class LabelResolution(BaseModel):
     """What a given (registration number, crop) resolves to today, and why not, if not.
 

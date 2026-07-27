@@ -3342,6 +3342,111 @@ def apply_label_values(
     return applied
 
 
+def create_label_record(
+    db: Session, data: schemas.ProductLabelRecordCreate
+) -> models.ProductLabelRecord:
+    """Commit ONE human-reviewed label use as an `ai_extracted_unverified` record.
+
+    The tier is set here, never by the caller: a row that a model proposed and a
+    human corrected is unverified no matter how careful the correction was, and it
+    stays unusable until a licensed PCA attests to it for a specific farm.
+
+    Append-only, exactly like the transcription loader: a row for a (product, crop)
+    that already has a live record SUPERSEDES it rather than editing it, so the
+    value a decision relied on last month is still readable.
+    """
+    normalized = label_data.normalize_epa_reg_no(data.epa_reg_no)
+    product = get_product_by_reg_no(db, normalized)
+    if product is None:
+        product = models.PesticideProduct(
+            epa_reg_no=data.epa_reg_no,
+            epa_reg_no_normalized=normalized,
+            epa_reg_base=label_data.epa_reg_base(normalized),
+            product_name=data.product_name,
+            registrant=data.registrant,
+            active_ingredient=data.active_ingredient,
+            active_ingredient_concentration_amount=(
+                data.active_ingredient_concentration_amount
+            ),
+            active_ingredient_concentration_unit=(
+                data.active_ingredient_concentration_unit
+            ),
+            moa_group=data.moa_group,
+        )
+        db.add(product)
+        db.flush()
+
+    crop_normalized = crop_aliases.normalize(data.registered_crop)
+    existing = _live_label_record(product, crop_normalized)
+    record = models.ProductLabelRecord(
+        product_id=product.id,
+        registered_crop=data.registered_crop,
+        registered_crop_normalized=crop_normalized,
+        target_pest_or_disease=data.target_pest_or_disease,
+        pre_harvest_interval_days=data.pre_harvest_interval_days,
+        re_entry_interval_hours=data.re_entry_interval_hours,
+        max_seasonal_rate_amount=data.max_seasonal_rate_amount,
+        max_seasonal_rate_unit=data.max_seasonal_rate_unit,
+        max_applications_per_season=data.max_applications_per_season,
+        min_retreatment_interval_days=data.min_retreatment_interval_days,
+        label_version=data.label_version,
+        label_effective_date=data.label_effective_date,
+        # Server-set. A model proposed these values and a human corrected them;
+        # that is not verification, and no request field can say otherwise.
+        source_tier=label_data.TIER_AI_EXTRACTED,
+        source_document_reference=data.source_document_reference,
+        source_section_or_page=data.source_section_or_page,
+        source_snippet=data.source_snippet,
+        transcribed_by=data.reviewed_by,
+        transcribed_at=clock.current_datetime(),
+        supersedes_label_record_id=existing.id if existing is not None else None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def create_label_verification(
+    db: Session,
+    farm: models.Farm,
+    data: schemas.ProductLabelVerificationCreate,
+    credential: models.PcaCredential,
+) -> models.ProductLabelVerification:
+    """Record a PCA's attestation that a label record matches the primary document.
+
+    This is the act that makes a stored value usable — everything else in the label
+    layer is on-file, not in-force. So it is credential-gated at the route, attributed
+    from the CREDENTIAL rather than a client string, farm-scoped, and append-only.
+
+    Demo separation applies by construction: the verification is a farm record, so
+    `ensure_demo_real_separation` gives a demo farm a simulated verification, and
+    `label_data.promotable_to_authoritative` refuses to promote from one.
+    """
+    record = db.get(models.ProductLabelRecord, data.product_label_record_id)
+    if record is None:
+        raise ValueError("label record not found")
+
+    verification = models.ProductLabelVerification(
+        product_label_record_id=record.id,
+        farm_id=farm.id,
+        verified_by_credential_id=credential.id,
+        # The credential's own name wins over anything a client could send:
+        # attribution must match the thing that was actually verified.
+        verified_by=credential.display_name,
+        attestation=data.attestation,
+        # Explicit rather than relying on the column default, which does not apply
+        # until flush — the mixing guard below reads these before the row exists.
+        data_source="manual_entry",
+        data_confidence="user_provided",
+    )
+    ensure_demo_real_separation(db, farm.id, verification)
+    db.add(verification)
+    db.commit()
+    db.refresh(verification)
+    return verification
+
+
 def sync_transcribed_labels(db: Session) -> schemas.LabelSyncResult:
     """Load `app/label_table.TRANSCRIBED_LABEL_USES` into the append-only record table.
 

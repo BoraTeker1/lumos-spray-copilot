@@ -164,6 +164,58 @@ export const api = {
     request(`/planned-sprays/${plannedId}/ai-brief`, { method: "POST" }),
   getAiCalibration: () => request("/internal/ai-calibration"),
 
+  // ------------------------------------------------------------ label library
+  listPesticideProducts: () =>
+    request("/internal/labels/products", { headers: operatorHeaders() }),
+  syncTranscribedLabels: () =>
+    request("/internal/labels/sync", {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
+  // "Why does this decision still say the label check did not run?" — same
+  // resolution the decision path uses, so the answers cannot disagree.
+  resolveLabel: ({ epaRegNo, crop, farmId } = {}) =>
+    request(
+      `/internal/labels/resolution${qs({
+        epa_reg_no: epaRegNo,
+        crop,
+        farm_id: farmId,
+      })}`,
+      { headers: operatorHeaders() }
+    ),
+  // AI label extraction. NEVER writes — returns draft rows for a human to correct.
+  // Multipart, so it bypasses the JSON helper (same shape as extractDocument).
+  extractLabel: async ({ text, file }) => {
+    const body = new FormData();
+    if (text) body.append("text", text);
+    if (file) body.append("file", file);
+    const res = await fetch(`${BASE_URL}/internal/labels/extract`, {
+      method: "POST",
+      cache: "no-store",
+      headers: operatorHeaders(),
+      body, // browser sets the multipart boundary; do NOT set Content-Type
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
+  // Commit ONE reviewed row. Lands as ai_extracted_unverified — never verified.
+  createLabelRecord: (data) =>
+    request("/internal/labels/records", {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  // The act that makes a label value usable. Requires the farm's PCA token.
+  createLabelVerification: (farmId, data) =>
+    request(`/farms/${farmId}/label-verifications`, {
+      method: "POST",
+      headers: pcaHeaders(),
+      body: JSON.stringify(data),
+    }),
+
   // Anonymized evidence export (JSON; CSV via exportUrl)
   getEvidenceExport: (farmId) => request(`/farms/${farmId}/evidence-export`),
 

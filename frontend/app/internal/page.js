@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
+import LabelLibraryCard from "@/components/LabelLibraryCard";
 import PilotOperatorCard from "@/components/PilotOperatorCard";
 import { api } from "@/lib/api";
 
@@ -222,6 +223,17 @@ export default function InternalToolsPage() {
           absent from the PCA-facing decision payload, not merely hidden in their UI.
         </p>
         <PilotOperatorCard farmId={farmId} />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">Pesticide label library</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Extract label directions with AI, correct every value against the document,
+          and commit them as UNVERIFIED. A committed value is on file, not in force:
+          only a licensed PCA verifying it for a specific farm lets a decision rely on
+          it. Nothing here shortens that chain.
+        </p>
+        <LabelLibraryCard farmId={farmId} />
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
