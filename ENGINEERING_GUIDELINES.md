@@ -80,7 +80,12 @@ Do **NOT** build any of the following unless the user explicitly instructs it in
 - guaranteed pesticide-reduction claims
 - more crop or geography expansion beyond the current wedge
 - unnecessary dashboards / vanity UI
-- a pesticide-label / PHI / REI / MRL **database** — only after buyer validation confirms it's needed
+- ~~a pesticide-label / PHI / REI / MRL **database**~~ — **guardrail partially lifted
+  (2026-07-27)**: a label **capability layer** is now built (product identity + append-only
+  label records + per-farm PCA verification, see §5). Still NOT allowed: **MRL data** (an MRL
+  is destination-market law, not label law, and needs a different source — §14's "no MRL
+  database" stays true), bulk-importing a third-party label dataset, or any label value that
+  is not transcribed from a primary document with its citation
 
 LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — also gated, not default.
 
@@ -89,6 +94,52 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 ## 5. Product Features Already Built
 
 Backend + frontend both implement:
+
+- **Label capability layer, Phases 0–3 (2026-07-27, commit `cba6e2a`)** — product identity
+  and verified label records, so the four label-dependent checks can finally run. Plan:
+  `~/.claude/plans/snoopy-hugging-pinwheel.md`. **The abstention gates are SATISFIED, never
+  deleted** — no structural constraint is weakened, no disclaimer removed, and a pesticide
+  recommendation stays inexpressible.
+  - **`app/label_data.py` (framework-free)** — three rules govern everything: a label value
+    is usable only when **attributable** (`promotable_to_authoritative` returns the REASON a
+    record cannot back a decision, not a boolean); product identity is **exact or ambiguous**
+    (`100-1234` and `100-1234-5905` are DIFFERENT labels — a base match goes to a human);
+    a conversion is **cited or refused** (`RATE_CONVERSIONS` is definitional only, each with
+    its citation; mass↔volume is deliberately absent because it needs a per-product density,
+    so `convert_rate` returns a `Refusal` naming the unit).
+  - **`app/label_table.py` ships EMPTY** (`TRANSCRIBED_LABEL_USES = ()`), exactly as
+    `BotrytisWetnessV1.thresholds` does and for the same reason: a plausible PHI is
+    indistinguishable from a correct one to every writable test, and it lands in a record a
+    PCA is entitled to trust. `TranscribedLabelUse` is frozen/kw-only with no provenance
+    defaults, so an uncited row raises at import. **Never loaded by `seed.run()`/`init_db()`**
+    — `python -m app.label_sync` or `POST /internal/labels/sync` only.
+  - **Three tables:** `PesticideProduct` (identity; unique `epa_reg_no_normalized`, plus
+    `epa_reg_base` recorded so a near-miss is RECOGNIZED, never matched),
+    `ProductLabelRecord` (**append-only**; a revision and a withdrawal are both just
+    superseding rows — a withdrawal has every regulatory value NULL, so resolution yields
+    nothing and the checks correctly return to `not_evaluated`; NULL means THE LABEL IS
+    SILENT, never "no limit"), `ProductLabelVerification` (**farm-scoped** so
+    `require_pca_for_farm` and `ensure_demo_real_separation` both cover it by construction —
+    a demo farm can only hold a `simulated` verification, which never promotes, so demo
+    decisions can never look label-grounded with zero special cases in the engine).
+  - **Five engine rules** (`label_crop_registration`, `label_max_applications`,
+    `label_retreatment_interval`, `label_max_seasonal_rate`, `label_value_disagreement`).
+    Crop registration blocks ONLY when `registered_crops_transcription_complete` AND a
+    verified record backs it — a partial transcription's silence is not evidence a crop is
+    unregistered, and a false BLOCK there would end a PCA's trust permanently. Seasonal
+    counting reads **`SprayEvent` only** (an applied outcome already materializes one) and
+    matches products on EXACT reg no.
+  - **`not_evaluated` is computed per decision**, each check carrying a stable `check_id` and
+    its OWN reason; a rule that runs retires its entry by id, never by matching prose.
+  - **`crud.apply_label_values`** mirrors the PCA-review supersede path and REFUSES once a
+    decision is reviewed or applied — a label sync must never rewrite what a PCA signed.
+    `_entered_values_behind_label` walks BACK through the supersede chain past label rows, so
+    applying a label value cannot erase the disagreement it should have reported. A later
+    revision surfaces as `decision_status.label_reference_stale` instead of a silent recompute.
+  - **591 tests.** `tests/test_label_authority.py` is the invariant file — including that an
+    **APPROVE is still never `verified_label_grounded`**: `repeated_active_ingredient`
+    (heuristic) and `prior_rei_overlap` (grower-entered) keep every approve provisional, so
+    **merging or deleting either silently creates a no-human-review approve**.
 
 - **Botrytis Deferral Shadow Pilot V1 (2026-07-20)** — the current focus. Full contract in
   **`BOTRYTIS_PILOT.md`**; read that before touching any of it. One falsifiable hypothesis:
@@ -391,6 +442,13 @@ Backend + frontend both implement:
     required_next_action, review_required, narrative, `as_payload()` for the JSON column).
     Outcome precedence: block > delay > pca_review_required > inspect_first > approve.
     `PLANNED_SPRAY_DISCLAIMER` lives here now.
+  - `app/label_data.py` — pesticide-label vocabulary + arithmetic (pure, stdlib only):
+    `normalize_epa_reg_no` / `match_product_identity` (match / **ambiguous** / none),
+    `RATE_UNIT_ALIASES` + `RATE_CONVERSIONS` (definitional + cited) → `convert_rate` returns
+    `Converted | Refusal`, `resolve_label_record`, `promotable_to_authoritative` (returns the
+    REASON), `LABEL_TIER_TO_INPUT_SOURCE`. `app/crop_aliases.py` is its curated crop-name
+    sibling (same MATCH/AMBIGUOUS/NO_MATCH vocabulary as `target_aliases`, never fuzzy).
+    `app/label_table.py` is the EMPTY transcription source; `app/label_sync.py` loads it.
   - `app/analytics.py` — `compute_cost_analytics`.
   - `app/reduction.py` — `compute_reduction` (pure, framework-free). Baseline methods +
     `CALENDAR_PROGRAMS`, `is_headline_safe` gate, honest caveats. Consumed by `pilot_evidence`.
@@ -410,7 +468,9 @@ Backend + frontend both implement:
   `WeatherObservation`, `ScoutingSample`, `RiskInputSnapshot` (immutable),
   `DiseaseRiskAssessment` (append-only, shadow), `PcaDisposition` (append-only, attributed),
   `PilotProtocol`, `BlockAssignment`, `BlockOutcomeObservation` (append-only),
-  `PcaCredential` + `PcaFarmAuthorization`. Sprays/scouting carry `data_source` +
+  `PcaCredential` + `PcaFarmAuthorization`. Label layer (§5): `PesticideProduct`,
+  `ProductLabelRecord` (append-only, supersede chain), `ProductLabelVerification`
+  (append-only, farm-scoped, revoked never deleted). Sprays/scouting carry `data_source` +
   `data_confidence` + `pilot_import_batch_id`; `SprayBaseline` carries the same provenance (one
   per farm, latest wins). `PlannedSpray` snapshots the decision (`decision_*`,
   `decision_payload` JSON, legacy `check_*`), the PCA review (`review_*`, `pca_next_action`),
@@ -435,6 +495,10 @@ Backend + frontend both implement:
   - Pilot: `/pilot-evidence`, `/pilot-case-study`, `/audit-packet`,
     `POST /pilot/farms`, `GET/POST /pilot-feedback`
   - Internal: `POST /internal/farms/{id}/pilot-import` (concierge import — operator tooling)
+  - Labels: `GET /internal/labels/products[/{id}]`, `POST /internal/labels/sync`,
+    `GET /internal/labels/resolution?epa_reg_no=&crop=&farm_id=` (the "why does this decision
+    still say the check did not run" diagnostic — calls the same
+    `crud.resolve_label_for_decision` the decision path uses, so the two cannot drift)
   - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
     `/export/pilot-feedback.csv`
   - `GET /health`; interactive docs at `/docs`.
@@ -510,6 +574,12 @@ cd backend && source .venv/bin/activate && python -m app.seed
 #   edit app/models.py -> alembic revision --autogenerate -m "..." -> review the
 #   script (env.py enables SQLite batch mode) -> alembic upgrade head
 
+# Load transcribed pesticide labels (app/label_table.py) into the DB. EXPLICIT on
+# purpose — never run by seeding or startup, because seeded label data would make demo
+# decisions look label-grounded. Safe to re-run; a changed transcription appends a
+# superseding row. Reports 0 entries until someone transcribes one with its citation.
+cd backend && source .venv/bin/activate && python -m app.label_sync
+
 # Run backend:  uvicorn app.main:app --reload   (http://localhost:8000, docs at /docs)
 
 # Frontend build / lint (from frontend/)
@@ -521,7 +591,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **507 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **591 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
@@ -659,8 +729,16 @@ The ask:
 
 - **No real validation yet.**
 - Engine is **rule-based, not real AI** — easy to dismiss as "just a spreadsheet."
-- **No pesticide-label / PHI / REI / MRL reference database** — PHI/REI come from user-entered
-  per-spray values, not an authoritative source.
+- **The label table is EMPTY, so in practice PHI/REI still come from user-entered per-spray
+  values.** As of 2026-07-27 the label layer exists (§5) but holds no data: nothing has been
+  transcribed from a primary document and no PCA has verified anything, so every
+  label-dependent check still reports that it did not run — now with a specific reason
+  instead of "no label database exists". **Until a real transcription with a real per-farm
+  PCA verification exists, do not claim Lumos checks against label data at all.** Coverage on
+  a first pilot is governed by whether the PCA's recommendation sheets carry EPA registration
+  numbers — a data-entry question, not a code one.
+- **No MRL reference data** — an MRL is destination-market law, not label law; the label layer
+  does not and will not supply it.
 - **Incumbents** may already cover parts (FieldView-style platforms, PCA software, ag ERPs).
 - **Data-entry burden** — someone has to log sprays/scouting; unclear who, in practice.
 - **Unclear buyer** and **low willingness-to-pay** from individual growers.
