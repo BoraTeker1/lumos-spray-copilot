@@ -603,17 +603,98 @@ def test_treated_area_never_assumes_acres_when_unit_is_missing():
     assert "unspecified" in note
 
 
-def test_no_code_path_claims_a_seasonal_or_active_ingredient_reduction():
-    """Three different metrics that must never be read as one another."""
-    from app.pilot_evidence import NOT_CALCULATED
+def test_no_code_path_claims_a_seasonal_or_risk_weighted_reduction():
+    """Two metrics that stay not-calculated NO MATTER WHAT the record set contains.
 
-    for key in (
-        "active_ingredient_quantity_avoided",
+    Label coverage unlocks an active-ingredient quantity (see the XOR test below).
+    It unlocks neither a season total — which needs a full-season denominator this
+    record set does not have — nor a risk weighting, which needs an authoritative
+    source. Computing either would be a claim, not a measurement.
+    """
+    from app.pilot_evidence import (
+        NOT_CALCULATED,
+        PERMANENTLY_NOT_CALCULATED,
+        not_calculated_block,
+    )
+
+    assert set(PERMANENTLY_NOT_CALCULATED) == {
         "risk_weighted_pesticide_reduction",
         "seasonal_pesticide_use_reduction",
-    ):
+    }
+    for key in PERMANENTLY_NOT_CALCULATED:
         assert key in NOT_CALCULATED
         assert "not calculated" in NOT_CALCULATED[key]
+        # Present with NO record set, and present with a fully-computed one.
+        assert key in not_calculated_block()
+        assert key in not_calculated_block({
+            "active_ingredient_quantity_avoided": {"amount": 1.0, "unit": "lb"},
+        })
+
+
+def test_the_ai_quantity_is_either_disclosed_or_computed_never_both_nor_neither():
+    """The XOR that replaces the old unconditional assertion.
+
+    A reader must always be able to find out what the active-ingredient quantity is:
+    either a number backed by cited conversions, or a sentence saying why there
+    isn't one. A state where it is in neither block would read as "nothing to say".
+    """
+    from app.pilot_evidence import not_calculated_block
+
+    computed_confirmed = {
+        "active_ingredient_quantity_avoided": {
+            "amount": 12.5, "unit": "lb", "conversion_provenance": ["definition: ..."],
+        },
+        "active_ingredient_quantity_avoided_reason": None,
+    }
+    refused_confirmed = {
+        "active_ingredient_quantity_avoided": None,
+        "active_ingredient_quantity_avoided_reason": "no rate recorded",
+    }
+
+    computed_block = not_calculated_block(computed_confirmed)
+    refused_block = not_calculated_block(refused_confirmed)
+
+    # Computed: absent from the disclosure, present in confirmed with provenance.
+    assert "active_ingredient_quantity_avoided" not in computed_block
+    assert computed_confirmed["active_ingredient_quantity_avoided"][
+        "conversion_provenance"
+    ]
+    # Refused: present in the disclosure, carrying the SPECIFIC reason.
+    assert "active_ingredient_quantity_avoided" in refused_block
+    assert "no rate recorded" in refused_block["active_ingredient_quantity_avoided"]
+    assert refused_confirmed["active_ingredient_quantity_avoided"] is None
+
+
+def test_a_mixed_unit_contributing_record_forces_the_not_calculated_branch():
+    """One unconvertible application keeps the WHOLE metric uncomputed.
+
+    A partial total is the dangerous failure here: it looks like a complete number
+    and understates what was avoided.
+    """
+    from types import SimpleNamespace
+
+    from app.pilot_evidence import _ai_quantity_avoided, not_calculated_block
+
+    convertible = SimpleNamespace(
+        epa_reg_no="100-1234", rate_amount=2.0, rate_unit="lb/acre",
+        treated_acres=10.0, treated_area_unit="acres", intended_date="2026-07-01",
+    )
+    unconvertible = SimpleNamespace(
+        epa_reg_no="100-1234", rate_amount=2.0, rate_unit="fl oz/acre",
+        treated_acres=10.0, treated_area_unit="acres", intended_date="2026-07-02",
+    )
+    concentrations = {"100-1234": (50.0, "%")}
+
+    alone, reason = _ai_quantity_avoided([convertible], concentrations)
+    assert alone is not None and reason is None
+
+    mixed, reason = _ai_quantity_avoided([convertible, unconvertible], concentrations)
+    assert mixed is None
+    assert "density" in reason  # a % concentration cannot pair with a volume rate
+    assert "active_ingredient_quantity_avoided" in not_calculated_block({
+        "active_ingredient_quantity_avoided": None,
+        "active_ingredient_quantity_avoided_reason": reason,
+    })
 
 
 def test_critical_input_fields_and_the_rows_actually_written_cannot_drift():

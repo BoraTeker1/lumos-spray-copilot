@@ -483,3 +483,84 @@ def test_the_rules_that_keep_an_approve_provisional_still_exist(client, rule_id)
     decision = _planned(client, farm["id"])
 
     assert rule_id in _rules(decision)
+
+
+# --------------------------------------------------- conditional honesty copy
+def test_the_disclaimer_is_the_exact_original_sentence_without_label_coverage(client):
+    """Zero disclaimers are deleted by the label layer. This is the proof."""
+    from app.decision_engine import PLANNED_SPRAY_DISCLAIMER, planned_spray_disclaimer
+
+    assert planned_spray_disclaimer(None) == PLANNED_SPRAY_DISCLAIMER
+    assert planned_spray_disclaimer("") == PLANNED_SPRAY_DISCLAIMER
+
+    farm = _farm(client)
+    decision = _planned(client, farm["id"])
+    assert decision["decision_payload"]["disclaimer"] == PLANNED_SPRAY_DISCLAIMER
+
+
+def test_a_label_grounded_decision_names_its_source_and_still_states_the_limits(client):
+    farm = _farm(client)
+    _verified_label(client, farm["id"])
+
+    decision = _planned(client, farm["id"], pre_harvest_interval_days=21)
+
+    disclaimer = decision["decision_payload"]["disclaimer"]
+    assert "verified against the label document" in disclaimer
+    assert REG_NO in disclaimer
+    # It must still say what is NOT label-backed — a verified PHI does not make the
+    # rotation and scouting heuristics label requirements.
+    assert "heuristics" in disclaimer
+
+
+def test_the_compliance_basis_text_degrades_to_todays_wording(client):
+    from app.main import COMPLIANCE_BASIS_TEXT_UNVERIFIED, COMPLIANCE_BASIS_UNVERIFIED
+
+    farm = _farm(client)
+    body = client.get(f"/farms/{farm['id']}/compliance").json()
+
+    assert body["basis"] == COMPLIANCE_BASIS_UNVERIFIED
+    assert body["basis_text"] == COMPLIANCE_BASIS_TEXT_UNVERIFIED
+
+
+def test_the_compliance_basis_text_says_partially_when_coverage_is_partial(client):
+    """"Partially" is accuracy, not hedging — one verified label among many products."""
+    farm = _farm(client)
+    _verified_label(client, farm["id"])
+
+    body = client.get(f"/farms/{farm['id']}/compliance").json()
+
+    assert body["basis"] == "partially label-verified"
+    assert "1 product(s)" in body["basis_text"]
+    assert "still comes from user-entered values" in body["basis_text"]
+
+
+# ------------------------------------------- active-ingredient quantity avoided
+def test_the_quantity_stays_not_calculated_without_a_verified_concentration(client):
+    farm = _farm(client)
+    body = client.get(f"/farms/{farm['id']}/decision-evidence").json()
+
+    assert "active_ingredient_quantity_avoided" in body["not_calculated"]
+    assert body["confirmed"]["active_ingredient_quantity_avoided"] is None
+
+
+def test_an_unverified_concentration_does_not_unlock_the_quantity(client):
+    """On file is not in force — for the metric exactly as for the decision."""
+    from app import crud
+    from app.database import SessionLocal
+
+    farm = _farm(client)
+    with SessionLocal() as db:
+        import app.label_table as table
+        original = table.TRANSCRIBED_LABEL_USES
+        table.TRANSCRIBED_LABEL_USES = (
+            _use(active_ingredient_concentration_amount=50.0,
+                 active_ingredient_concentration_unit="%"),
+        )
+        try:
+            crud.sync_transcribed_labels(db)
+        finally:
+            table.TRANSCRIBED_LABEL_USES = original
+        assert crud.ai_concentrations_for_farm(db, farm["id"]) == {}
+
+    body = client.get(f"/farms/{farm['id']}/decision-evidence").json()
+    assert "active_ingredient_quantity_avoided" in body["not_calculated"]

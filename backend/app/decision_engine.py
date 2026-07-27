@@ -222,6 +222,29 @@ PLANNED_SPRAY_DISCLAIMER = (
     "against the current pesticide label."
 )
 
+# The same sentence for a decision whose values DID come from a verified label. It
+# still says what was not checked, because a verified PHI does not make the rotation
+# and scouting heuristics label-grounded, and it still names the label so a reader
+# can go and look. Nothing is deleted here — the honest default above stays the
+# default, and this replaces it only for decisions that genuinely earned it.
+LABEL_GROUNDED_DISCLAIMER = (
+    "PHI and REI values come from {reference}, verified against the label document by "
+    "a licensed PCA for this farm. Other checks (resistance rotation, scouting "
+    "evidence) remain heuristics, not label requirements."
+)
+
+
+def planned_spray_disclaimer(label_reference: str | None = None) -> str:
+    """The disclaimer for one decision — conditional on what actually backed it.
+
+    Kept as a function beside the constant rather than replacing it: every caller
+    without label coverage gets the byte-identical original sentence, so no existing
+    surface changes wording until a real verified label is behind the numbers.
+    """
+    if not label_reference:
+        return PLANNED_SPRAY_DISCLAIMER
+    return LABEL_GROUNDED_DISCLAIMER.format(reference=label_reference)
+
 # Farmer/PCA-facing next actions, one per outcome.
 NEXT_ACTIONS = {
     OUTCOME_BLOCK: (
@@ -1366,6 +1389,12 @@ def evaluate_planned_spray(
             "No conflicts found from entered records — provisional result; have your PCA "
             "confirm the entered values before relying on it."
         )
+
+    # The disclaimer follows what actually backed this decision: the label reference
+    # when PHI/REI came from a verified label, the honest default otherwise.
+    decision.disclaimer = planned_spray_disclaimer(
+        label.reference if label_record is not None else None
+    )
 
     # Every label-dependent check that did not run, each with the reason it did not.
     # Set from what actually happened above, so a check that starts running disappears

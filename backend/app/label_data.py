@@ -251,6 +251,150 @@ def convert_rate(amount: float | None, from_unit: str | None, to_unit: str | Non
     return Converted(float(amount) * conversion.factor, target, (conversion.citation,))
 
 
+# --------------------------------------------------- active-ingredient quantity
+# What a rate is a rate OF. Multiplying a product amount by a concentration is only
+# definitional when the two share a basis: a percentage is percent BY WEIGHT, so it
+# pairs with a mass rate and nothing else; "lb/gal" pairs with a volume rate. Pairing
+# across bases needs a per-product density, which is exactly the factor this module
+# refuses to invent (see RATE_CONVERSIONS).
+RATE_UNIT_BASIS = {
+    "oz/acre": "mass", "lb/acre": "mass",
+    "fl oz/acre": "volume", "pt/acre": "volume", "qt/acre": "volume",
+    "gal/acre": "volume",
+    "g/ha": "mass", "kg/ha": "mass",
+    "l/ha": "volume", "ml/ha": "volume",
+}
+
+# The area unit each rate is expressed per. A rate per acre needs an area in acres:
+# converting the farm's recorded area would be the same silent error
+# `pilot_evidence._sum_treated_area` refuses to make, so this refuses too.
+RATE_UNIT_AREA = {
+    unit: ("acres" if unit.endswith("/acre") else "ha") for unit in RATE_UNIT_BASIS
+}
+
+CONCENTRATION_UNIT_ALIASES: dict[str, tuple[str, ...]] = {
+    "%": ("percent", "pct", "% w/w", "w/w %", "%w/w"),
+    "lb/gal": ("lbs/gal", "pound/gallon", "pounds/gallon", "lb/gallon"),
+    "g/l": ("grams/liter", "g/liter", "gram/litre", "grams/litre", "g/litre"),
+}
+
+_CONCENTRATION_ALIAS_TO_CANONICAL: dict[str, str] = {}
+for _canonical, _aliases in CONCENTRATION_UNIT_ALIASES.items():
+    _CONCENTRATION_ALIAS_TO_CANONICAL[_canonical] = _canonical
+    for _a in _aliases:
+        _CONCENTRATION_ALIAS_TO_CANONICAL[_a] = _canonical
+
+# (concentration unit) -> (required rate basis, the rate unit the product amount must
+# be converted to, the resulting active-ingredient unit, citation for the pairing).
+_CONCENTRATION_RULES = {
+    "%": ("mass", None, None, "definition: % w/w is mass of active per mass of product"),
+    "lb/gal": (
+        "volume", "gal/acre", "lb",
+        "definition: lb/gal is mass of active per US gallon of product",
+    ),
+    "g/l": (
+        "volume", "l/ha", "g",
+        "definition: g/L is mass of active per litre of product",
+    ),
+}
+
+
+def canonical_concentration_unit(value: str | None) -> str | None:
+    """The canonical concentration unit for a known spelling, else None."""
+    if not value:
+        return None
+    text = re.sub(r"\s+", "", str(value).strip().lower())
+    return _CONCENTRATION_ALIAS_TO_CANONICAL.get(text)
+
+
+@dataclass(frozen=True)
+class Quantity:
+    """An active-ingredient mass and every citation used to arrive at it."""
+    amount: float
+    unit: str
+    conversion_provenance: tuple[str, ...]
+
+
+def ai_quantity(
+    rate_amount: float | None,
+    rate_unit: str | None,
+    treated_area: float | None,
+    area_unit: str | None,
+    concentration_amount: float | None,
+    concentration_unit: str | None,
+):
+    """Active-ingredient mass for ONE application, or a Refusal saying why not.
+
+    Returns Quantity | Refusal. Every input is required, and every step is either a
+    definitional conversion carrying its citation or a refusal — there is no path
+    that produces a number from an assumption.
+
+    This is the metric `pilot_evidence.NOT_CALCULATED` has always disclosed as
+    impossible. It becomes possible only for a product whose label concentration is
+    on file, and only when the rate, area and concentration bases line up. When they
+    do not, the caller must keep disclosing it as not calculated rather than
+    reporting a partial total — a "quantity avoided" missing some applications reads
+    as a smaller number, not as an incomplete one.
+    """
+    if rate_amount is None or float(rate_amount) <= 0:
+        return Refusal("no application rate recorded")
+    if treated_area is None or float(treated_area) <= 0:
+        return Refusal("no treated area recorded")
+    if concentration_amount is None or float(concentration_amount) <= 0:
+        return Refusal("no active-ingredient concentration on file for this product")
+
+    source_rate_unit = canonical_rate_unit(rate_unit)
+    if source_rate_unit is None:
+        return Refusal(
+            f"rate unit {rate_unit!r} is not in the canonical unit vocabulary"
+        )
+    concentration = canonical_concentration_unit(concentration_unit)
+    if concentration is None:
+        return Refusal(
+            f"concentration unit {concentration_unit!r} is not one of "
+            f"{', '.join(sorted(CONCENTRATION_UNIT_ALIASES))}"
+        )
+
+    required_basis, target_rate_unit, ai_unit, citation = _CONCENTRATION_RULES[
+        concentration
+    ]
+    if RATE_UNIT_BASIS[source_rate_unit] != required_basis:
+        return Refusal(
+            f"a {concentration!r} concentration is per {required_basis} of product, "
+            f"but the rate is in {source_rate_unit!r} — pairing them would need a "
+            f"per-product density this system has no source for"
+        )
+
+    expected_area_unit = RATE_UNIT_AREA[source_rate_unit]
+    if (area_unit or "").strip().lower() != expected_area_unit:
+        return Refusal(
+            f"the rate is per {expected_area_unit} but the treated area is recorded "
+            f"in {area_unit or 'an unspecified unit'} — areas are never converted"
+        )
+
+    provenance: list[str] = []
+    amount = float(rate_amount)
+    unit = source_rate_unit
+    if target_rate_unit is not None and source_rate_unit != target_rate_unit:
+        converted = convert_rate(amount, source_rate_unit, target_rate_unit)
+        if isinstance(converted, Refusal):
+            return converted
+        amount, unit = converted.amount, converted.unit
+        provenance.extend(converted.conversion_provenance)
+
+    product_amount = amount * float(treated_area)
+    if concentration == "%":
+        # Percent by weight: the active's unit is the product's own mass unit.
+        active = product_amount * float(concentration_amount) / 100.0
+        result_unit = unit.split("/")[0]
+    else:
+        active = product_amount * float(concentration_amount)
+        result_unit = ai_unit
+    provenance.append(citation)
+
+    return Quantity(round(active, 4), result_unit, tuple(dict.fromkeys(provenance)))
+
+
 # ------------------------------------------------------- transcription addressing
 def transcription_digest(values: dict) -> str:
     """Content address of one transcribed label use.

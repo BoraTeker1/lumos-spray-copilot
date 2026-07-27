@@ -3342,6 +3342,33 @@ def apply_label_values(
     return applied
 
 
+def ai_concentrations_for_farm(db: Session, farm_id: int) -> dict:
+    """{normalized EPA reg no: (concentration amount, unit)} for PROMOTABLE labels.
+
+    Scoped to labels a licensed PCA has verified FOR THIS FARM, for the same reason
+    every other label read is: an unverified transcription is on file, not in force,
+    and a quantity computed from one would be a number nobody attested to.
+
+    A product with no concentration transcribed is simply absent, which makes the
+    active-ingredient metric refuse rather than silently omit that application.
+    """
+    concentrations: dict[str, tuple[float, str]] = {}
+    for product in list_pesticide_products(db):
+        amount = product.active_ingredient_concentration_amount
+        unit = product.active_ingredient_concentration_unit
+        if amount is None or not unit:
+            continue
+        promotable = any(
+            label_data.promotable_to_authoritative(
+                record, label_verifications_for_farm(db, record.id, farm_id)
+            ) is None
+            for record in label_data.active_label_records(product.label_records)
+        )
+        if promotable:
+            concentrations[product.epa_reg_no_normalized] = (float(amount), unit)
+    return concentrations
+
+
 def create_label_record(
     db: Session, data: schemas.ProductLabelRecordCreate
 ) -> models.ProductLabelRecord:

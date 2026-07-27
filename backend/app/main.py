@@ -966,6 +966,10 @@ def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
         planned,
         advisor_label=_advisor_label(farm),
         follow_ups_by_id=crud.list_farm_follow_up_events(db, farm_id),
+        # Empty until a label with a transcribed concentration is PCA-verified for
+        # this farm, which is what keeps the active-ingredient quantity honestly
+        # not-calculated rather than partially totalled.
+        ai_concentrations=crud.ai_concentrations_for_farm(db, farm_id),
     )
 
 
@@ -1086,8 +1090,65 @@ def farm_compliance(farm_id: int, db: Session = Depends(get_db)):
         "advisor_label": _advisor_label(farm),
         # Honest framing for the UI: these signals come from user-entered PHI/REI values,
         # not from a verified pesticide-label database.
-        "basis": "user-entered values, not label-verified",
+        "basis": _compliance_basis(db, farm_id),
+        # One server-owned sentence for every surface that describes where these
+        # signals come from. Previously four components each hardcoded their own
+        # wording, so the honest framing could drift apart — and could not become
+        # conditional at all. Nothing is deleted: with no verified label coverage
+        # this is the exact sentence those components already showed.
+        "basis_text": _compliance_basis_text(db, farm_id),
     }
+
+
+# The pre-label wording, kept verbatim. Every surface showed some version of this
+# sentence; now they all show THIS one, and it stays the answer until a licensed PCA
+# has verified a label for the farm.
+COMPLIANCE_BASIS_UNVERIFIED = "user-entered values, not label-verified"
+COMPLIANCE_BASIS_TEXT_UNVERIFIED = (
+    "These signals come from PHI/REI values entered by the user, not from verified "
+    "label data. Confirm them against the product label and a licensed PCA."
+)
+
+
+def _verified_label_count(db: Session, farm_id: int) -> int:
+    """How many products have a label record verified for this farm by a PCA."""
+    return sum(
+        1
+        for product in crud.list_pesticide_products(db)
+        if any(
+            crud.resolve_label_for_decision(
+                db, product.epa_reg_no, record.registered_crop, farm_id
+            )[2] is None
+            for record in product.label_records
+        )
+    )
+
+
+def _compliance_basis(db: Session, farm_id: int) -> str:
+    """Short machine-ish label for where the compliance signals came from."""
+    return (
+        "partially label-verified"
+        if _verified_label_count(db, farm_id)
+        else COMPLIANCE_BASIS_UNVERIFIED
+    )
+
+
+def _compliance_basis_text(db: Session, farm_id: int) -> str:
+    """The sentence every compliance surface renders. Degrades to today's wording.
+
+    "Partially" is not hedging — it is the accurate word. A farm can have one
+    verified label and five products without one, and a sentence claiming the
+    snapshot is label-verified would be false for most of what it shows.
+    """
+    verified = _verified_label_count(db, farm_id)
+    if not verified:
+        return COMPLIANCE_BASIS_TEXT_UNVERIFIED
+    return (
+        f"PHI/REI values for {verified} product(s) come from a pesticide label "
+        f"verified for this farm by a licensed PCA; everything else on this card "
+        f"still comes from user-entered values. Confirm those against the product "
+        f"label and a licensed PCA."
+    )
 
 
 def _advisor_label(farm) -> str:
@@ -2033,6 +2094,7 @@ def _farm_evidence_export(db: Session, farm_id: int) -> dict:
         crud.list_farm_input_values(db, farm_id),
         advisor_label=_advisor_label(farm),
         today=clock.current_date(),
+        ai_concentrations=crud.ai_concentrations_for_farm(db, farm_id),
         input_plans=crud.list_input_plans(db, farm_id),
     )
 

@@ -3,8 +3,9 @@ import { Badge } from "@/components/ui/badge";
 import { REVIEW_STATE_TONES, tone } from "@/lib/tones";
 
 // One compliance signal row: green pill when OK, amber pill when at risk. The
-// wording stays cautious ("May be active", not "violation") — these signals
-// come from user-entered values, not verified label data.
+// wording stays cautious ("May be active", not "violation") — the signals may
+// come from user-entered values or from a PCA-verified label, and the card says
+// which via the server-owned `basis_text` below rather than assuming either.
 function Row({ label, danger, okText = "OK", warnText = "Review" }) {
   return (
     <div className="flex items-center justify-between gap-2 border-b border-gray-100 py-1.5 last:border-0">
@@ -72,6 +73,13 @@ export default function ComplianceCard({ data }) {
           {data.recommendation_review_status}
         </Badge>
       </div>
+      {/* Server-owned basis sentence. Four surfaces used to hardcode their own
+          wording, which could drift apart and could never become conditional.
+          The fallback is the pre-label wording, byte-for-byte. */}
+      <p className="mt-2 border-t border-gray-100 pt-2 text-[11px] leading-snug text-gray-500">
+        {data.basis_text ||
+          "These signals come from PHI/REI values entered by the user, not from verified label data. Confirm them against the product label and a licensed PCA."}
+      </p>
     </div>
   );
 }

@@ -335,7 +335,10 @@ function FarmDetail({ farmId }) {
               <SectionCard
                 title="Pre-spray risk snapshot"
                 icon={<ClipboardCheck />}
-                description="From user-entered PHI/REI values — not label-verified."
+                description={
+                  compliance?.basis_text ||
+                  "From user-entered PHI/REI values — not label-verified."
+                }
               >
                 <ComplianceCard data={compliance} />
               </SectionCard>

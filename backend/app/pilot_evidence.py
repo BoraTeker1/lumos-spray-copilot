@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app import decision_status, procurement_status
+from app import decision_status, label_data, procurement_status
 from app.recommendation_engine import RECENT_WINDOW_DAYS, generate_recommendation
 
 # Recommendation statuses that represent a recorded advisor decision (an audit trail entry).
@@ -201,7 +201,80 @@ def _sum_treated_area(records) -> tuple[float | None, str | None, str | None]:
     return round(total, 2), unit, None
 
 
-def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict, dict, dict]:
+def _ai_quantity_avoided(records, concentrations: dict | None):
+    """Active-ingredient mass across avoided applications, or (None, reason).
+
+    ALL-OR-NOTHING on purpose. A partial total reads as a smaller number, not as an
+    incomplete one: if three of five avoided applications can be converted, reporting
+    their sum understates what was avoided while looking like a complete figure. So
+    one refusal anywhere keeps the whole metric not-calculated, and the reason names
+    the first record that could not be converted.
+
+    `concentrations` maps a normalized EPA registration number to
+    (amount, unit) from the product's label record. A product with no concentration
+    on file simply refuses — this metric is unavailable until the label layer has
+    the data, which is exactly the state it has always disclosed.
+    """
+    contributing = list(records or [])
+    if not contributing:
+        return None, "no follow-up-confirmed avoided applications to total"
+    if not concentrations:
+        return None, (
+            "no active-ingredient concentration is on file for any product in this "
+            "record set — a label record carrying one is required"
+        )
+
+    total = 0.0
+    unit = None
+    provenance: list[str] = []
+    for record in contributing:
+        reg_no = label_data.normalize_epa_reg_no(getattr(record, "epa_reg_no", None))
+        concentration = concentrations.get(reg_no) if reg_no else None
+        if concentration is None:
+            return None, (
+                f"no active-ingredient concentration on file for the product in the "
+                f"{getattr(record, 'intended_date', 'undated')} decision"
+            )
+        result = label_data.ai_quantity(
+            getattr(record, "rate_amount", None),
+            getattr(record, "rate_unit", None),
+            getattr(record, "treated_acres", None),
+            getattr(record, "treated_area_unit", None),
+            concentration[0],
+            concentration[1],
+        )
+        if isinstance(result, label_data.Refusal):
+            return None, (
+                f"{result.reason} (the {getattr(record, 'intended_date', 'undated')} "
+                f"decision)"
+            )
+        if unit is not None and result.unit != unit:
+            return None, (
+                f"the contributing applications resolve to different active-ingredient "
+                f"units ({unit}, {result.unit}) and are never converted"
+            )
+        unit = result.unit
+        total += result.amount
+        provenance.extend(result.conversion_provenance)
+
+    return {
+        "amount": round(total, 4),
+        "unit": unit,
+        "applications_counted": len(contributing),
+        "conversion_provenance": sorted(set(provenance)),
+        "basis": (
+            "Active-ingredient mass that follow-up-confirmed avoided applications "
+            "would have applied, from each product's label concentration and the "
+            "entered rate and treated area. Every conversion is definitional and "
+            "cited. This is quantity NOT APPLIED on those decisions — it is not a "
+            "season total and not a measured environmental outcome."
+        ),
+    }, None
+
+
+def _confirmed_and_estimated(
+    real_planned, follow_ups_by_id: dict, ai_concentrations: dict | None = None
+) -> tuple[dict, dict, dict]:
     """(confirmed, estimated, follow_up_stats) metric blocks from non-demo decisions.
 
     Confirmed figures come ONLY from follow-up-backed summaries; estimated figures are
@@ -246,8 +319,17 @@ def _confirmed_and_estimated(real_planned, follow_ups_by_id: dict) -> tuple[dict
         if s["rejected_or_downgraded"]:
             rejected += 1
 
+    ai_quantity, ai_quantity_reason = _ai_quantity_avoided(
+        confirmed_avoided, ai_concentrations
+    )
+
     confirmed = {
         "applications_confirmed_avoided": len(confirmed_avoided),
+        # Present ONLY when every contributing application converted from cited,
+        # definitional factors. Otherwise it stays in `not_calculated` with the
+        # reason — never a partial total, which would read as a smaller one.
+        "active_ingredient_quantity_avoided": ai_quantity,
+        "active_ingredient_quantity_avoided_reason": ai_quantity_reason,
         # Area carries its unit. None means the records disagreed and were NOT added up.
         "treated_area_confirmed_avoided": avoided_area,
         "treated_area_confirmed_avoided_unit": avoided_area_unit,
@@ -329,8 +411,39 @@ NOT_CALCULATED = {
     ),
 }
 
+# The two metrics that stay not-calculated NO MATTER WHAT this record set contains.
+# Label coverage unlocks a quantity; it unlocks neither a season total (which needs a
+# full-season denominator) nor a risk weighting (which needs an authoritative source).
+# Anything computed for these would be a claim, not a measurement.
+PERMANENTLY_NOT_CALCULATED = (
+    "risk_weighted_pesticide_reduction",
+    "seasonal_pesticide_use_reduction",
+)
 
-def _scope_metrics(records, follow_ups_by_id: dict, advisor_label: str) -> dict:
+
+def not_calculated_block(confirmed: dict | None = None) -> dict:
+    """`NOT_CALCULATED`, minus the one metric this record set can now actually compute.
+
+    The disclosure narrows by EVIDENCE, never by configuration: the active-ingredient
+    quantity leaves the block only when every contributing application was converted
+    from cited, definitional factors, and it carries the specific refusal until then.
+    The other two never leave — see PERMANENTLY_NOT_CALCULATED.
+    """
+    block = dict(NOT_CALCULATED)
+    confirmed = confirmed or {}
+    if confirmed.get("active_ingredient_quantity_avoided"):
+        block.pop("active_ingredient_quantity_avoided", None)
+        return block
+    reason = confirmed.get("active_ingredient_quantity_avoided_reason")
+    if reason:
+        block["active_ingredient_quantity_avoided"] = f"not calculated — {reason}"
+    return block
+
+
+def _scope_metrics(
+    records, follow_ups_by_id: dict, advisor_label: str,
+    ai_concentrations: dict | None = None,
+) -> dict:
     """The decision-workflow metric block for ONE provenance scope (real OR demo).
 
     Same shape either way so the two scopes are comparable but never combined:
@@ -369,7 +482,7 @@ def _scope_metrics(records, follow_ups_by_id: dict, advisor_label: str) -> dict:
     )
 
     confirmed, estimated, follow_up_stats = _confirmed_and_estimated(
-        records, follow_ups_by_id or {}
+        records, follow_ups_by_id or {}, ai_concentrations
     )
 
     return {
@@ -389,7 +502,10 @@ def _scope_metrics(records, follow_ups_by_id: dict, advisor_label: str) -> dict:
 
 
 def build_decision_evidence(
-    planned_sprays, advisor_label: str = "agronomist", follow_ups_by_id: dict | None = None
+    planned_sprays,
+    advisor_label: str = "agronomist",
+    follow_ups_by_id: dict | None = None,
+    ai_concentrations: dict | None = None,
 ) -> dict:
     """Aggregate the pre-spray decision workflow into pilot metrics (honest by design).
 
@@ -403,7 +519,9 @@ def build_decision_evidence(
     """
     all_planned = list(planned_sprays or [])
     real = _real_planned(planned_sprays)
-    real_metrics = _scope_metrics(real, follow_ups_by_id or {}, advisor_label)
+    real_metrics = _scope_metrics(
+        real, follow_ups_by_id or {}, advisor_label, ai_concentrations
+    )
     outcomes = real_metrics["outcomes"]
 
     # Reconciliation for demo farms: seeded decisions are visible in the queue but
@@ -436,7 +554,7 @@ def build_decision_evidence(
     return {
         # Top-level keys are the REAL scope (unchanged contract).
         **real_metrics,
-        "not_calculated": dict(NOT_CALCULATED),
+        "not_calculated": not_calculated_block(real_metrics.get("confirmed")),
         "demo_decisions_checked": len(demo),
         "demo_outcomes": demo_outcomes,
         # Full simulated-scope block for demo farms — same shape as the real
@@ -1122,6 +1240,7 @@ def build_evidence_export(
     input_values_by_id: dict,
     advisor_label: str = "agronomist",
     today: date | None = None,
+    ai_concentrations: dict | None = None,
     input_plans=None,
 ) -> dict:
     """Anonymized evidence export for one farm's REAL (non-demo) decisions.
@@ -1141,7 +1260,7 @@ def build_evidence_export(
     ]
 
     confirmed, estimated, follow_up_stats = _confirmed_and_estimated(
-        real, follow_ups_by_id
+        real, follow_ups_by_id, ai_concentrations
     )
 
     # Data-completeness statement (computed, not asserted).
@@ -1188,7 +1307,7 @@ def build_evidence_export(
         "methodology": EVIDENCE_EXPORT_METHODOLOGY,
         "confirmed": confirmed,
         "estimated": estimated,
-        "not_calculated": dict(NOT_CALCULATED),
+        "not_calculated": not_calculated_block(confirmed),
         "decisions": rows,
         "input_orders": build_procurement_export(input_plans, today),
         "limitations": list(EVIDENCE_EXPORT_LIMITATIONS),

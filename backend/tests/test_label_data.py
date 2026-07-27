@@ -251,6 +251,83 @@ def test_only_verified_tiers_map_to_the_authoritative_input_source():
     assert authoritative == {label_data.TIER_PCA_VERIFIED, label_data.TIER_PROVIDER_FEED}
 
 
+# ------------------------------------------------- active-ingredient quantity
+def test_a_percent_concentration_pairs_with_a_mass_rate():
+    """2 lb/acre over 10 acres at 50% w/w = 10 lb of active ingredient."""
+    result = label_data.ai_quantity(2.0, "lb/acre", 10.0, "acres", 50.0, "%")
+
+    assert isinstance(result, label_data.Quantity)
+    assert result.amount == pytest.approx(10.0)
+    assert result.unit == "lb"
+    assert any("% w/w" in c for c in result.conversion_provenance)
+
+
+def test_a_percent_concentration_refuses_a_volume_rate():
+    """Percent is BY WEIGHT. Pairing it with a volume needs a per-product density."""
+    result = label_data.ai_quantity(2.0, "fl oz/acre", 10.0, "acres", 50.0, "%")
+
+    assert isinstance(result, label_data.Refusal)
+    assert "density" in result.reason
+
+
+def test_a_mass_per_volume_concentration_pairs_with_a_volume_rate():
+    """1 pt/acre over 8 acres at 4 lb/gal: 1 pt = 1/8 gal, so 1 lb/acre → 8 lb."""
+    result = label_data.ai_quantity(1.0, "pt/acre", 8.0, "acres", 4.0, "lb/gal")
+
+    assert isinstance(result, label_data.Quantity)
+    assert result.amount == pytest.approx(4.0)
+    assert result.unit == "lb"
+    # Both the volume conversion and the concentration pairing are cited.
+    assert len(result.conversion_provenance) == 2
+
+
+def test_an_area_in_the_wrong_unit_is_refused_never_converted():
+    """Same discipline as `_sum_treated_area`: areas are never converted."""
+    result = label_data.ai_quantity(2.0, "lb/acre", 10.0, "m2", 50.0, "%")
+
+    assert isinstance(result, label_data.Refusal)
+    assert "never converted" in result.reason
+
+
+@pytest.mark.parametrize("missing,expected", [
+    ({"rate_amount": None}, "no application rate"),
+    ({"treated_area": None}, "no treated area"),
+    ({"concentration_amount": None}, "no active-ingredient concentration"),
+])
+def test_every_missing_input_refuses_by_name(missing, expected):
+    kwargs = {
+        "rate_amount": 2.0, "rate_unit": "lb/acre", "treated_area": 10.0,
+        "area_unit": "acres", "concentration_amount": 50.0, "concentration_unit": "%",
+    }
+    kwargs.update(missing)
+
+    result = label_data.ai_quantity(**kwargs)
+
+    assert isinstance(result, label_data.Refusal)
+    assert expected in result.reason
+
+
+def test_an_unknown_concentration_unit_is_refused_and_lists_the_known_ones():
+    result = label_data.ai_quantity(2.0, "lb/acre", 10.0, "acres", 50.0, "parts/million")
+
+    assert isinstance(result, label_data.Refusal)
+    assert "parts/million" in result.reason
+
+
+def test_concentration_unit_spellings_are_curated_not_pattern_matched():
+    assert label_data.canonical_concentration_unit("percent") == "%"
+    assert label_data.canonical_concentration_unit(" LB/GAL ") == "lb/gal"
+    assert label_data.canonical_concentration_unit("g / L") == "g/l"
+    assert label_data.canonical_concentration_unit("oz per drum") is None
+
+
+def test_every_rate_unit_declares_a_basis_and_an_area():
+    """A rate unit missing from either table would silently skip the pairing check."""
+    for unit in label_data.RATE_UNIT_ALIASES:
+        assert unit in label_data.RATE_UNIT_BASIS, unit
+        assert unit in label_data.RATE_UNIT_AREA, unit
+
+
 # ------------------------------------------------------------------- addressing
 def test_the_transcription_digest_ignores_key_order_but_not_values():
     a = label_data.transcription_digest({"phi": 3, "crop": "strawberry"})
