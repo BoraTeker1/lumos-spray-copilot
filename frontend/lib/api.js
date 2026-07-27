@@ -174,7 +174,14 @@ export const api = {
     }),
   // "Why does this decision still say the label check did not run?" — same
   // resolution the decision path uses, so the answers cannot disagree.
+  // Grower-facing, farm-scoped: no operator key. Tells the person entering a spray
+  // whether a verified label supplies PHI/REI or whether they still have to type them.
   resolveLabel: ({ epaRegNo, crop, farmId } = {}) =>
+    request(
+      `/farms/${farmId}/label-resolution${qs({ epa_reg_no: epaRegNo, crop })}`
+    ),
+  // Operator view of the same resolution, not scoped to a farm.
+  resolveLabelInternal: ({ epaRegNo, crop, farmId } = {}) =>
     request(
       `/internal/labels/resolution${qs({
         epa_reg_no: epaRegNo,

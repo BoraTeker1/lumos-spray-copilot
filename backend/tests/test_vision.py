@@ -5,6 +5,7 @@ No network/API key: the default service falls back to MockVisionService, so thes
 from datetime import date
 
 import pytest
+from pydantic import ValidationError
 
 from app.vision import (
     MockVisionService,
@@ -139,3 +140,94 @@ def test_suggested_observation_can_be_saved_as_scouting_note(client):
     created = client.post(f"/farms/{fid}/scout-observations", json=res["suggested_observation"])
     assert created.status_code == 201
     assert created.json()["data_source"] == "photo_ai"
+
+
+# ------------------------------------------- structured outputs + instrumentation
+def test_the_finding_schema_bounds_severity_and_has_no_action_field():
+    """The schema is what makes "spray X" inexpressible — the prompt only reinforces it."""
+    from app.vision import PhotoFinding
+
+    fields = set(PhotoFinding.model_fields)
+    assert fields == {
+        "detected_issue", "suggested_severity", "confidence", "observations", "caveats",
+    }
+    # No product, rate, action, or recommendation field exists to put a spray in.
+    for forbidden in ("product", "rate", "action", "recommendation", "treatment"):
+        assert not any(forbidden in f for f in fields)
+
+    # Severity is bounded by the schema, not only clamped afterwards.
+    with pytest.raises(ValidationError):
+        PhotoFinding(suggested_severity=9)
+    with pytest.raises(ValidationError):
+        PhotoFinding(suggested_severity=0)
+    with pytest.raises(ValidationError):
+        PhotoFinding(confidence="certain")
+
+
+def test_the_clamps_still_run_as_defence_in_depth():
+    """Structured outputs make a bad value unlikely, not impossible — and this value
+    can reach the decision engine once a human confirms the drafted note."""
+    from app.vision import build_analysis_result
+
+    result = build_analysis_result(
+        {"detected_issue": "botrytis", "suggested_severity": 99, "confidence": "certain"}
+    )
+
+    assert result["suggested_severity"] == 5
+    assert result["confidence"] == "low"
+
+
+def test_the_input_digest_covers_the_image_and_the_concern():
+    from app.vision import photo_input_digest
+
+    a = photo_input_digest(b"image-bytes", "brown lesions")
+    assert a == photo_input_digest(b"image-bytes", "brown lesions")
+    assert a != photo_input_digest(b"other-bytes", "brown lesions")
+    assert a != photo_input_digest(b"image-bytes", "different concern")
+
+
+def test_photo_analysis_writes_an_ai_judgment(client):
+    """This was the only AI call with no judgment row — and the only one whose
+    output can reach the decision engine."""
+    from app.database import SessionLocal
+    from app import models, vision
+
+    farm = client.post("/farms", json={
+        "name": "Photo Farm", "country": "US", "crop_type": "strawberry",
+    }).json()
+
+    res = client.post(
+        f"/farms/{farm['id']}/photo-analysis",
+        files={"file": ("leaf.png", b"fake-png-bytes", "image/png")},
+    )
+    assert res.status_code == 200, res.text
+
+    with SessionLocal() as db:
+        judgments = db.query(models.AiJudgment).filter(
+            models.AiJudgment.kind == "photo_analysis"
+        ).all()
+        assert len(judgments) == 1
+        j = judgments[0]
+        assert j.prompt_version == vision.PROMPT_VERSION
+        assert j.input_digest
+        assert j.is_mock is True
+        assert j.farm_id == farm["id"]
+        # Never fabricated: the logged output mirrors what the model actually returned.
+        assert "detected_issue" in (j.output or {})
+
+
+def test_the_photo_judgment_appears_in_calibration(client):
+    farm = client.post("/farms", json={
+        "name": "Calib Farm", "country": "US", "crop_type": "strawberry",
+    }).json()
+    client.post(
+        f"/farms/{farm['id']}/photo-analysis",
+        files={"file": ("leaf.png", b"fake-png-bytes", "image/png")},
+    )
+
+    body = client.get("/internal/ai-calibration").json()
+
+    assert "photo_analysis" in body["by_kind"]
+    assert body["by_kind"]["photo_analysis"]["judgments"] == 1
+    # Volume and abstention only — never an invented accuracy rate.
+    assert body["by_kind"]["photo_analysis"]["accuracy"] is None

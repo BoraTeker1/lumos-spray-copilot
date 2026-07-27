@@ -79,7 +79,12 @@ export function useFarmContext() {
 // context's farm list, so a form on one of them returns {} and the backend's
 // mixing guard answers with its explanatory 409 instead.
 export function useDemoTag(farmId) {
+  return demoProvenance(useFarm(farmId));
+}
+
+// The farm record itself, when the caller needs a field off it (e.g. crop_type to
+// resolve a pesticide label). Returns undefined until the provider has loaded.
+export function useFarm(farmId) {
   const { farms } = useFarmContext();
-  const farm = farms.find((f) => f.id === Number(farmId));
-  return demoProvenance(farm);
+  return farms.find((f) => f.id === Number(farmId));
 }

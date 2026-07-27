@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import (
     ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction,
-    label_extraction, llm, operator_key, pca_authority, schemas,
+    label_extraction, llm, operator_key, pca_authority, schemas, vision,
 )
 from app.analytics import compute_cost_analytics
 from app.database import SessionLocal, get_db, init_db
@@ -25,6 +25,7 @@ from app.pilot_evidence import (
     build_instrumentation_summary,
     build_pilot_case_study,
     build_pilot_evidence,
+    summarize_decisions_for_report,
 )
 from app.recommendation_engine import generate_recommendation
 from app.reduction import compute_reduction
@@ -511,7 +512,34 @@ async def analyze_field_photo(
     except Exception as exc:  # surface model/transport failures cleanly, never 500-crash the demo
         raise HTTPException(status_code=502, detail=f"Photo analysis failed: {exc}") from exc
 
-    return build_analysis_result(finding, today=clock.current_date())
+    result = build_analysis_result(finding, today=clock.current_date())
+    # Logged like every other AI call. This path was the only unlogged one, and it is
+    # the only one whose output can reach the decision engine (a human-confirmed
+    # scouting severity feeds the engine's scouting rule) — exactly the path that most
+    # needs to be auditable and calibratable later.
+    crud.log_ai_judgment(
+        db,
+        kind="photo_analysis",
+        model_id=finding.get("model") or "unknown",
+        prompt_version=vision.PROMPT_VERSION,
+        input_digest=vision.photo_input_digest(image_bytes, concern),
+        output={
+            "detected_issue": finding.get("detected_issue"),
+            "suggested_severity": finding.get("suggested_severity"),
+            "caveats": finding.get("caveats") or [],
+        },
+        confidence=result["confidence"],
+        # The model abstains by declining to name an issue — there is no separate
+        # abstention flag on this schema, so absence of a finding IS the abstention.
+        abstained=finding.get("detected_issue") is None,
+        abstain_reason=(
+            "the model did not identify a specific issue in this photo"
+            if finding.get("detected_issue") is None else None
+        ),
+        is_mock=bool(finding.get("is_mock")),
+        farm_id=farm.id,
+    )
+    return result
 
 
 # --------------------------------------------------------------- Planned sprays
@@ -1173,7 +1201,10 @@ def weekly_report(farm_id: int, db: Session = Depends(get_db)):
     ).signals
 
     text = _build_weekly_report_text(
-        farm, len(sprays), len(observations), latest_rec, analytics, weather, signals
+        farm, len(sprays), len(observations), latest_rec, analytics, weather, signals,
+        decision_summary=summarize_decisions_for_report(
+            crud.list_planned_sprays(db, farm_id), today=clock.current_date()
+        ),
     )
     return {"text": text}
 
@@ -1211,8 +1242,49 @@ def _compliance_flag_lines(signals: dict) -> list[str]:
     return out
 
 
+def _decision_report_lines(summary: dict) -> list[str]:
+    """The 'spray decisions' block for the weekly report and the audit packet.
+
+    This block is the product. It was missing from both artifacts entirely — the
+    grower's WhatsApp message and the auditor's packet were built only from the legacy
+    farm-wide recommendation, so neither mentioned a single pre-spray decision.
+
+    Honesty rules applied here, not left to the caller:
+      * a simulated scope is LABELLED, never silently counted as real;
+      * a decision still awaiting review is marked, because an unreviewed verdict is
+        not guidance — the same rule the recommendation block below already follows;
+      * counts describe what was documented, never what was prevented or saved.
+    """
+    if not summary["checked"]:
+        return []
+
+    heading = "This week's spray decisions"
+    if summary["is_simulated"]:
+        heading += " (SIMULATED demo records — not real usage)"
+
+    lines = ["", f"{heading}: {summary['checked']} checked"]
+    for d in summary["decisions"]:
+        when = d["intended_date"].isoformat() if d["intended_date"] else "date not set"
+        lines.append(f"  • {d['product_name']} ({when}) — {d['verdict_text']}")
+        if d["reason"]:
+            lines.append(f"      {d['reason']}")
+        if d["needs_review"]:
+            lines.append("      Awaiting review — not yet guidance.")
+        elif d["outcome_text"]:
+            lines.append(f"      Recorded outcome: {d['outcome_text']}.")
+
+    tally = [f"{summary['conflicts_caught']} conflict(s) caught before application"]
+    if summary["not_applied"]:
+        tally.append(f"{summary['not_applied']} application(s) recorded as not applied")
+    if summary["awaiting_review"]:
+        tally.append(f"{summary['awaiting_review']} awaiting review")
+    lines.append(f"  {' · '.join(tally)}.")
+    return lines
+
+
 def _build_weekly_report_text(
-    farm, spray_count, observation_count, latest_rec, analytics, weather, signals
+    farm, spray_count, observation_count, latest_rec, analytics, weather, signals,
+    decision_summary: dict | None = None,
 ) -> str:
     advisor = _advisor_label(farm)              # "PCA / agronomist" (US) or "agronomist"
     advisor_cap = advisor[:1].upper() + advisor[1:]   # capitalise first letter, keep "PCA"
@@ -1232,6 +1304,11 @@ def _build_weekly_report_text(
         f"Sprays this cycle: {spray_count}  |  Last 30 days: {analytics['sprays_last_30_days']}",
         f"Scouting notes on record: {observation_count}",
     ]
+
+    # The decision workflow — the thing the product actually does — goes here, before
+    # the farm-wide weekly recommendation.
+    if decision_summary:
+        lines += _decision_report_lines(decision_summary)
 
     if latest_rec is None:
         lines += [
@@ -1750,6 +1827,44 @@ def post_label_record(
     return crud.create_label_record(db, payload)
 
 
+@app.get(
+    "/farms/{farm_id}/label-resolution",
+    response_model=schemas.LabelResolution,
+    tags=["labels"],
+)
+def get_farm_label_resolution(
+    farm_id: int,
+    epa_reg_no: str | None = None,
+    crop: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """What a (registration number, crop) resolves to for THIS farm — grower-facing.
+
+    The same resolution as `/internal/labels/resolution`, scoped to one farm and
+    outside the operator gate, because the person entering a spray needs the answer:
+    it tells them whether to type PHI/REI or whether the verified label already
+    supplies them. Read-only; it writes nothing and changes no decision.
+
+    Not a data leak in the operator sense — it returns only what a decision on this
+    farm would already show on its record, and it cannot be used to promote anything.
+    """
+    farm = _require_farm(db, farm_id)
+    record, unresolved_reason, blocked = crud.resolve_label_for_decision(
+        db, epa_reg_no, crop or farm.crop_type, farm.id
+    )
+    product, _ = crud.resolve_product_identity(db, epa_reg_no)
+    return schemas.LabelResolution(
+        epa_reg_no=epa_reg_no,
+        crop=crop or farm.crop_type,
+        farm_id=farm.id,
+        product=product,
+        label_record=record,
+        unresolved_reason=unresolved_reason,
+        promotable=record is not None and blocked is None,
+        promotion_blocked_reason=blocked,
+    )
+
+
 @app.post(
     "/farms/{farm_id}/label-verifications",
     response_model=schemas.ProductLabelVerification,
@@ -1850,13 +1965,28 @@ def farm_audit_packet(farm_id: int, db: Session = Depends(get_db)):
     result = generate_recommendation(farm, sprays, observations, today=clock.current_date())
     batches = crud.list_pilot_import_batches(db, farm_id)
     latest_rec = recs[0] if recs else None
+    # The pre-spray decision trail — the audit-relevant part of this product, and
+    # absent from this packet until now.
+    decisions = summarize_decisions_for_report(
+        crud.list_planned_sprays(db, farm_id), today=clock.current_date()
+    )
     report_text = _build_weekly_report_text(
-        farm, len(sprays), len(observations), latest_rec, analytics, weather, result.signals
+        farm, len(sprays), len(observations), latest_rec, analytics, weather,
+        result.signals, decision_summary=decisions,
     )
 
     return {
         "generated_at": clock.current_datetime().isoformat() + "Z",
         "advisor_label": _advisor_label(farm),
+        # Structured decision trail. `scope` says whether these are real or simulated
+        # records; an auditor must never have to infer that.
+        "spray_decisions": {
+            **decisions,
+            "decisions": [
+                {**d, "intended_date": _iso(d["intended_date"])}
+                for d in decisions["decisions"]
+            ],
+        },
         "farm_profile": {
             "id": farm.id,
             "name": farm.name,

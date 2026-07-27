@@ -564,3 +564,68 @@ def test_an_unverified_concentration_does_not_unlock_the_quantity(client):
 
     body = client.get(f"/farms/{farm['id']}/decision-evidence").json()
     assert "active_ingredient_quantity_avoided" in body["not_calculated"]
+
+
+# ------------------------------------------- grower-facing label resolution
+def test_the_grower_route_needs_no_operator_key(client, monkeypatch):
+    """The person entering a spray must be able to ask whether a label covers it.
+
+    `/internal/labels/resolution` sits behind the operator gate, which a grower does
+    not have — so the same answer is available farm-scoped and ungated.
+    """
+    from app import operator_key
+
+    monkeypatch.setenv(operator_key.ENV_VAR, "test-operator-secret")
+    farm = _farm(client)
+
+    # The operator route is gated...
+    gated = client.get("/internal/labels/resolution", params={"epa_reg_no": REG_NO})
+    assert gated.status_code == 403
+    # ...the grower route is not.
+    res = client.get(f"/farms/{farm['id']}/label-resolution", params={"epa_reg_no": REG_NO})
+    assert res.status_code == 200
+
+
+def test_the_grower_route_defaults_the_crop_to_the_farms(client):
+    """A grower should not have to restate what they grow."""
+    farm = _farm(client)
+
+    body = client.get(
+        f"/farms/{farm['id']}/label-resolution", params={"epa_reg_no": REG_NO}
+    ).json()
+
+    assert body["crop"] == "strawberry"
+    assert body["farm_id"] == farm["id"]
+
+
+def test_the_grower_route_reports_the_same_three_states(client):
+    farm = _farm(client)
+
+    # 1. Nothing on file.
+    body = client.get(
+        f"/farms/{farm['id']}/label-resolution", params={"epa_reg_no": REG_NO}
+    ).json()
+    assert body["promotable"] is False
+    assert REG_NO in body["unresolved_reason"]
+
+    # 2. On file but unverified — the state that matters most to get right.
+    _verified_label(client, farm["id"])
+    with SessionLocal() as db:
+        for v in db.query(models.ProductLabelVerification).all():
+            db.delete(v)
+        db.commit()
+    body = client.get(
+        f"/farms/{farm['id']}/label-resolution", params={"epa_reg_no": REG_NO}
+    ).json()
+    assert body["promotable"] is False
+    assert "no licensed PCA has verified" in body["promotion_blocked_reason"]
+
+
+def test_the_grower_route_is_read_only(client):
+    """It answers a question; it must never create or promote anything."""
+    from app.main import app
+
+    routes = [r for r in app.routes if "label-resolution" in getattr(r, "path", "")]
+    assert routes
+    for route in routes:
+        assert set(getattr(route, "methods", set())) == {"GET"}

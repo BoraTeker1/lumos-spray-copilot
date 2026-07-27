@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { FileText, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { useDemoTag } from "@/lib/farm-context";
+import { useDemoTag, useFarm } from "@/lib/farm-context";
 import { formatCost } from "@/lib/format";
 import { RECORDED_OUTCOME_LABELS, REVIEW_STATE_LABELS } from "@/lib/labels";
 import { RECORDED_OUTCOME_TONES, REVIEW_STATE_TONES, tone } from "@/lib/tones";
@@ -22,6 +22,7 @@ import {
 
 const EMPTY = {
   product_name: "",
+  epa_reg_no: "",
   active_ingredient: "",
   target_pest_or_disease: "",
   intended_date: "",
@@ -36,6 +37,39 @@ const EMPTY = {
 const DISCLAIMER =
   "PHI and REI checks use values entered by the user and are not independently " +
   "verified against the current pesticide label.";
+
+// Renders what a label lookup found, in the label layer's own words. Three states,
+// and the distinction between the last two is the whole point of the layer:
+//   * promotable  — a PCA verified this label for THIS farm; PHI/REI come from it
+//   * on file     — a record exists but nobody verified it; it cannot back a check
+//   * nothing     — no record matches this registration number
+// The values are shown read-only and are NEVER written into the grower's inputs:
+// they are the label's fact, not the grower's, and the input-provenance chain
+// records that difference. The backend supersedes them at check time.
+function LabelResolutionNote({ resolution }) {
+  if (!resolution) return null;
+
+  if (resolution.promotable && resolution.label_record) {
+    const r = resolution.label_record;
+    return (
+      <p className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[11px] leading-snug text-emerald-900">
+        <span className="font-medium">Verified label found.</span> PHI and REI will come
+        from it — you don&apos;t need to type them.
+        {r.pre_harvest_interval_days != null && ` PHI ${r.pre_harvest_interval_days} days.`}
+        {r.re_entry_interval_hours != null && ` REI ${r.re_entry_interval_hours} hours.`}
+      </p>
+    );
+  }
+
+  const reason = resolution.promotion_blocked_reason || resolution.unresolved_reason;
+  if (!reason) return null;
+  return (
+    <p className="rounded-md border border-gray-200 bg-gray-50 p-2 text-[11px] leading-snug text-gray-600">
+      <span className="font-medium">No verified label for this product yet</span> — {reason}{" "}
+      Enter PHI and REI below from the product label.
+    </p>
+  );
+}
 
 // The five recordable outcomes, in display order (labels live in lib/labels.js).
 const RECORDABLE_OUTCOMES = [
@@ -381,13 +415,37 @@ export default function PreSpraySheet({ farmId, onChanged }) {
   // On a demo farm, records created here are saved as simulated demo data — the
   // backend refuses to mix real and demo records on one farm.
   const demoTag = useDemoTag(farmId);
+  // The farm's crop decides WHICH label use applies — a label's directions differ
+  // per registered crop, so a lookup without it cannot resolve a record.
+  const farm = useFarm(farmId);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [lastCheck, setLastCheck] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [labelResolution, setLabelResolution] = useState(null);
   // Instrumentation: did this open-session produce a completed check?
   const completedThisSession = useRef(false);
+
+  // Look the product up in the label library when the grower leaves the field.
+  // Read-only and advisory: it changes nothing about the submitted values — the
+  // backend applies verified label values itself at check time, and reports any
+  // disagreement with what was typed. A failed lookup is silent; a label the
+  // system does not have is a normal state, not an error worth interrupting for.
+  async function lookUpLabel() {
+    const epaRegNo = form.epa_reg_no.trim();
+    if (!epaRegNo) {
+      setLabelResolution(null);
+      return;
+    }
+    try {
+      setLabelResolution(
+        await api.resolveLabel({ epaRegNo, crop: farm?.crop_type, farmId })
+      );
+    } catch {
+      setLabelResolution(null);
+    }
+  }
 
   const refreshLastCheck = useCallback(async () => {
     if (!lastCheck) return;
@@ -443,6 +501,7 @@ export default function PreSpraySheet({ farmId, onChanged }) {
       completedThisSession.current = true;
       setLastCheck(created);
       setForm(EMPTY);
+      setLabelResolution(null);
       onChanged && (await onChanged());
     } catch (err) {
       setError(err.message);
@@ -490,6 +549,16 @@ export default function PreSpraySheet({ farmId, onChanged }) {
             value={form.product_name}
             onChange={(e) => update("product_name", e.target.value)}
           />
+          {/* The join key to the label library. Without it no label check can run,
+              which is why it sits here rather than behind the collapsed section. */}
+          <input
+            className={inputCls}
+            placeholder="EPA Reg. No. (unlocks label checks)"
+            value={form.epa_reg_no}
+            onChange={(e) => update("epa_reg_no", e.target.value)}
+            onBlur={lookUpLabel}
+          />
+          <LabelResolutionNote resolution={labelResolution} />
           <label className="block text-xs text-gray-500">
             Intended date *
             <input

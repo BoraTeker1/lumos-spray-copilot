@@ -22,13 +22,21 @@ Honesty rules (ENGINEERING_GUIDELINES.md §9–§10)
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 from abc import ABC, abstractmethod
 from datetime import date
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 # Multimodal model used for photo analysis (latest Claude, per project guidance).
 VISION_MODEL = "claude-opus-4-8"
+
+# Version of the photo-analysis contract, logged with every judgment so a later
+# prompt change is distinguishable from a model change during calibration.
+PROMPT_VERSION = "photo-analysis-v1"
 
 # Image guards (keep uploads small and obviously-images).
 ALLOWED_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
@@ -42,6 +50,42 @@ PHOTO_DISCLAIMER = (
     "disease and never tells you to spray. Confirm with in-field scouting and a licensed "
     "PCA / agronomist before acting."
 )
+
+
+class PhotoFinding(BaseModel):
+    """The structured output the model must return for one field photo.
+
+    Typed rather than JSON-scraped from free text (which is what this path did
+    before). Two things follow from the schema itself:
+
+      * `suggested_severity` is bounded 1-5 by the schema, so an out-of-range value
+        cannot be returned at all rather than being silently clamped afterwards;
+      * there is no product, rate, or action field, so "spray X" has nowhere to land.
+        The prompt also forbids it — but the schema is what makes it inexpressible.
+
+    `_clamp_severity` / `_normalise_confidence` still run on the way out. Structured
+    outputs make a malformed value unlikely, not impossible, and this value can reach
+    the decision engine once a human confirms the drafted scouting note.
+    """
+    detected_issue: str | None = Field(
+        default=None, description="What appears to be visible, in plain words. Null if unclear."
+    )
+    suggested_severity: int | None = Field(
+        default=None, ge=1, le=5, description="Apparent severity on a 1-5 scale, or null."
+    )
+    confidence: Literal["low", "medium", "high"] = "low"
+    observations: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
+def photo_input_digest(image_bytes: bytes, context: str | None = None) -> str:
+    """sha256 over the exact analysis inputs (reproducibility / audit)."""
+    h = hashlib.sha256()
+    h.update(PROMPT_VERSION.encode())
+    h.update(image_bytes or b"")
+    if context:
+        h.update(context.encode())
+    return h.hexdigest()
 
 
 def _clamp_severity(value) -> int | None:
@@ -115,12 +159,20 @@ _SYSTEM_PROMPT = (
     "You are an agronomy scouting assistant looking at a single field photo of a specialty "
     "crop (e.g. strawberry or greenhouse tomato). Describe ONLY what is visible. You are "
     "decision support, not a diagnosis, and you must NEVER tell anyone to spray or name a "
-    "pesticide. If you are unsure, say so and use low confidence. Respond with a single JSON "
-    "object and nothing else, with keys: detected_issue (short phrase or null), "
-    "suggested_severity (integer 1-5 or null, where 1=trace and 5=severe), confidence "
-    "(\"low\"|\"medium\"|\"high\"), observations (array of short factual strings about what is "
-    "visible), caveats (array of short strings about what could make this wrong)."
+    "pesticide. If you are unsure, say so and use low confidence — leave detected_issue null "
+    "rather than guessing at a look-alike. Severity is 1-5 where 1=trace and 5=severe. "
+    "Put what is factually visible in observations, and what could make your reading wrong "
+    "in caveats."
 )
+
+
+class VisionError(RuntimeError):
+    """The model call failed or could not produce the requested structure.
+
+    Mirrors `llm.LlmError`. The route turns this into a 502 — a model or transport
+    failure is never a 500, and never a silently degraded "finding" that a human
+    might mistake for something the model actually saw.
+    """
 
 
 class VisionService(ABC):
@@ -188,31 +240,42 @@ class ClaudeVisionService(VisionService):
             user_text += f" The grower's concern: {context}"
         user_text += " Return the JSON object as instructed."
 
-        message = client.messages.create(
-            model=self._model,
-            max_tokens=600,
-            system=_SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": base64.b64encode(image_bytes).decode("ascii"),
-                            },
-                        },
-                        {"type": "text", "text": user_text},
-                    ],
-                }
-            ],
-        )
-        text = "".join(
-            block.text for block in message.content if getattr(block, "type", None) == "text"
-        )
-        finding = _parse_model_json(text)
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                },
+            },
+            {"type": "text", "text": user_text},
+        ]
+
+        # Structured outputs, matching llm.ClaudeLlmService. This path used to call
+        # messages.create and scrape JSON out of free text, which made it the only
+        # untyped model call in the system — on the one AI path whose output can
+        # reach the decision engine.
+        try:
+            response = client.messages.parse(
+                model=self._model,
+                max_tokens=1024,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": content}],
+                output_format=PhotoFinding,
+            )
+        except anthropic.APIStatusError as exc:
+            raise VisionError(f"Model API error ({exc.status_code}): {exc.message}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise VisionError(f"Could not reach the model API: {exc}") from exc
+
+        if getattr(response, "stop_reason", None) == "refusal":
+            raise VisionError("The model declined this request (safety refusal).")
+        parsed = getattr(response, "parsed_output", None)
+        if parsed is None:
+            raise VisionError("The model did not return a parseable structured finding.")
+
+        finding = parsed.model_dump()
         finding["model"] = self._model
         finding["is_mock"] = False
         return finding

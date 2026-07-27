@@ -90,6 +90,89 @@ def _pre_spray_decisions(planned_sprays) -> dict:
     return block
 
 
+# Grower-facing wording for each engine verdict. Deliberately describes what the check
+# FOUND, never what to do — the required next action is the engine's own field, and the
+# PCA's guidance is theirs. "Conflict caught", never "spray saved" (ENGINEERING_GUIDELINES.md §10).
+_REPORT_VERDICTS = {
+    "block": "BLOCKED — conflicts with entered harvest/re-entry timing",
+    "delay": "DELAY — a previous application's re-entry interval may still be active",
+    "pca_review_required": "PCA REVIEW REQUIRED before this application",
+    "inspect_first": "INSPECT FIRST — no logged scouting evidence for the target yet",
+    "approve": "No conflicts found from entered records",
+}
+
+# What was recorded as actually happening, in the grower's words.
+_REPORT_OUTCOMES = {
+    "sprayed_as_planned": "applied as planned",
+    "changed_product": "a different product was applied",
+    "delayed": "applied later than planned",
+    "avoided": "not applied",
+    "inspected_first": "inspected before deciding",
+}
+
+
+def summarize_decisions_for_report(planned_sprays, today: date | None = None) -> dict:
+    """The pre-spray decision workflow, shaped for the weekly report and audit packet.
+
+    This is the product's actual output, and until now it reached neither artifact —
+    both were built entirely from the legacy farm-wide recommendation path, so the
+    thing a grower receives said nothing about the decisions the check made.
+
+    Scope is all-or-nothing because a farm's records are (the demo/real mixing guard
+    in `crud.ensure_demo_real_separation` enforces exactly that): a demo farm reports
+    `scope="simulated"` so the report can label it, and never contributes to a real
+    count. `checked` counts only decisions in the reported scope.
+
+    Reuses `decision_status` for every state question rather than re-deriving outcome
+    or severity semantics — a second derivation is how two surfaces start disagreeing.
+    """
+    all_planned = list(planned_sprays or [])
+    real = _real_planned(all_planned)
+    simulated = [p for p in all_planned if p not in real]
+    # A farm is one or the other. Prefer real when both somehow exist, so a real
+    # decision can never be hidden behind a simulated label.
+    records, scope = (real, "real") if real else (simulated, "simulated")
+
+    decisions = []
+    for planned in sorted(
+        records, key=lambda p: (getattr(p, "intended_date", None) or date.min)
+    ):
+        payload = getattr(planned, "decision_payload", None) or {}
+        triggered = [r for r in (payload.get("rules") or []) if r.get("triggered")]
+        outcome = getattr(planned, "outcome", "planned")
+        decisions.append({
+            "product_name": getattr(planned, "product_name", None),
+            "intended_date": getattr(planned, "intended_date", None),
+            "verdict": getattr(planned, "decision_outcome", None),
+            "verdict_text": _REPORT_VERDICTS.get(
+                getattr(planned, "decision_outcome", None), "checked"
+            ),
+            # The single most useful line: WHY. First triggered rule only — the full
+            # rule set lives on the decision record, which the report links to.
+            "reason": triggered[0]["detail"] if triggered else None,
+            "review_state": decision_status.review_state(planned),
+            "outcome": outcome,
+            "outcome_text": _REPORT_OUTCOMES.get(outcome),
+            "conflict_caught": decision_status.conflict_caught(planned),
+            "needs_review": decision_status.needs_review(planned),
+        })
+
+    return {
+        "scope": scope,
+        "is_simulated": scope == "simulated",
+        "checked": len(records),
+        "conflicts_caught": sum(1 for d in decisions if d["conflict_caught"]),
+        "awaiting_review": sum(1 for d in decisions if d["needs_review"]),
+        "not_applied": sum(1 for d in decisions if d["outcome"] == "avoided"),
+        "decisions": decisions,
+        "note": (
+            "Counts are decisions this check documented — not outcomes it caused. "
+            "'Not applied' is the grower/PCA's recorded decision, not a confirmed "
+            "reduction; confirming one needs follow-up evidence."
+        ),
+    }
+
+
 def derive_follow_up_summary(planned, events) -> dict:
     """Read-only consolidated view of one decision's append-only follow-up timeline.
 
@@ -865,7 +948,6 @@ def build_ai_calibration(judgments, decisions_by_id: dict, follow_ups_by_id: dic
 
     real = [j for j in judgments if not _is_demo_parent(j)]
     risk = [j for j in real if j.kind == "risk_note"]
-    extraction = [j for j in real if j.kind == "extraction"]
     predictions = [j for j in risk if not j.abstained]
 
     per_level: dict[str, dict] = {}
@@ -908,8 +990,35 @@ def build_ai_calibration(judgments, decisions_by_id: dict, follow_ups_by_id: dic
             if risk else None
         ),
         "predictions_by_level": per_level,
-        "extraction_judgments": len(extraction),
-        "extraction_abstained": sum(1 for j in extraction if j.abstained),
+        # EVERY judgment kind, counted. Three of the four were being written and
+        # silently dropped from this report, which made "we log every AI output"
+        # true in the database and false in the only place anyone reads it.
+        # Counts and abstentions only — no accuracy rate is invented for a kind
+        # that has no realized-outcome signal to compare against.
+        "by_kind": {
+            kind: {
+                "judgments": len(rows),
+                "abstained": sum(1 for j in rows if j.abstained),
+                "mock": sum(1 for j in rows if j.is_mock),
+                "accuracy": None,
+                "note": (
+                    "counts only — no realized-outcome signal exists for this kind"
+                    if kind != "risk_note" else
+                    "see predictions_by_level for the realized-rescue comparison"
+                ),
+            }
+            for kind, rows in sorted(
+                {
+                    k: [j for j in real if j.kind == k]
+                    for k in {j.kind for j in real}
+                }.items()
+            )
+        },
+        # Kept for backward compatibility with existing readers of this payload.
+        "extraction_judgments": sum(1 for j in real if j.kind == "extraction"),
+        "extraction_abstained": sum(
+            1 for j in real if j.kind == "extraction" and j.abstained
+        ),
         "mock_judgments": sum(1 for j in real if j.is_mock),
         "real_model_judgments": sum(1 for j in real if not j.is_mock),
         "calibration_min_n": CALIBRATION_MIN_N,
@@ -920,6 +1029,9 @@ def build_ai_calibration(judgments, decisions_by_id: dict, follow_ups_by_id: dic
             "published only once enough follow-up-backed predictions exist.",
             "Mock judgments come from the offline demo service and must never be "
             "presented as model performance.",
+            "`by_kind` counts every logged AI call. Only risk notes have a realized "
+            "outcome to compare against; the other kinds report volume and "
+            "abstention, never an accuracy rate.",
             "Internal telemetry — never customer-facing.",
         ],
     }
