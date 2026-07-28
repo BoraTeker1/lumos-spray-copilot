@@ -128,5 +128,136 @@ class TranscribedLabelUse:
 #         source_snippet="<verbatim text of the directions being transcribed>",
 #         transcribed_by="<who read the label>",
 #     )
+#
+# Two conventions the first transcriptions established, for whoever adds the third:
+#
+#   * `source_snippet` is verbatim wording with whitespace normalized — PDF text
+#     extraction turns a table cell into ragged line breaks, and re-flowing those is
+#     not editing. No word is added, dropped, or reordered.
+#   * A value the label does not state stays None, and the reason is recorded in a
+#     comment beside it. "The label is silent" and "the label permits any amount" are
+#     different facts, and only the first one is ever true here.
 # ---------------------------------------------------------------------------------
-TRANSCRIBED_LABEL_USES: tuple[TranscribedLabelUse, ...] = ()
+TRANSCRIBED_LABEL_USES: tuple[TranscribedLabelUse, ...] = (
+    # -----------------------------------------------------------------------------
+    # Captan 80 WDG — the multi-site protectant fungicide in the strawberry program.
+    #
+    # Note for anyone comparing this against the demo story: the label states a
+    # ZERO-day pre-harvest interval for strawberries ("May be applied up to day of
+    # harvest"). The seeded demo blocks a captan application on an ENTERED PHI of 4
+    # days. The entered value was wrong, and this row is what lets the engine say so.
+    # That is the label layer working, not a transcription error.
+    # -----------------------------------------------------------------------------
+    TranscribedLabelUse(
+        epa_reg_no="34704-1075",
+        product_name="Captan 80 WDG",
+        registrant="Loveland Products Inc.",
+        registered_crop="strawberry",
+        target_pest_or_disease="Botrytis (Gray mold), Leaf spot",
+        pre_harvest_interval_days=0,
+        re_entry_interval_hours=24,
+        max_seasonal_rate_amount=30.0,
+        max_seasonal_rate_unit="lb/acre",
+        # The strawberry RESTRICTIONS block states a per-year rate cap and nothing
+        # about an application count, so this stays None.
+        max_applications_per_season=None,
+        # DIRECTIONS say "Repeat at 7- to 14-day intervals" but also "continue
+        # applications through harvest period treating immediately after each
+        # picking" — the two cannot both be a minimum interval, and neither sits in
+        # RESTRICTIONS. The label does not state an unambiguous retreatment minimum,
+        # so the retreatment check correctly keeps reporting that it did not run.
+        min_retreatment_interval_days=None,
+        active_ingredient="captan",
+        active_ingredient_concentration_amount=80.0,
+        active_ingredient_concentration_unit="%",
+        moa_group="M4",
+        label_version="EPA-accepted 2019-06-21 (Decision Number 529290)",
+        label_effective_date=date(2019, 6, 21),
+        source_document_reference=(
+            "US EPA Pesticide Product Label System, CAPTAN 80 WDG, EPA Reg. No. "
+            "34704-1075, label amendment accepted 2019-06-21 — "
+            "https://www3.epa.gov/pesticides/chem_search/ppls/"
+            "034704-01075-20190621.pdf"
+        ),
+        source_section_or_page=(
+            "DIRECTIONS FOR USE — STRAWBERRIES (printed label page 11; PDF page 13). "
+            "Active ingredient statement, printed label page 1; REI also stated under "
+            "AGRICULTURAL USE REQUIREMENTS, printed label page 3."
+        ),
+        source_snippet=(
+            "STRAWBERRIES. DISEASE: Botrytis (Gray mold), Leaf spot. APPLICATION "
+            "RATE (Lb Product/Acre): 1.87 to 3.75. RESTRICTIONS: Do not apply more "
+            "than 30.0 lbs. per acre per year. May be applied up to day of harvest. "
+            "The REI is 24 hours."
+        ),
+        transcribed_by=(
+            "Claude Code, transcribed from the EPA PPLS PDF — UNVERIFIED, pending "
+            "PCA review against the primary document"
+        ),
+    ),
+    # -----------------------------------------------------------------------------
+    # Switch 62.5WG — the rotation partner. This is the row that makes three of the
+    # four label-dependent checks executable: the label states a season application
+    # cap, a minimum interval, AND a season rate cap in one restrictions block.
+    # -----------------------------------------------------------------------------
+    TranscribedLabelUse(
+        epa_reg_no="100-953",
+        product_name="Switch 62.5WG",
+        registrant="Syngenta Crop Protection, LLC",
+        registered_crop="strawberry",
+        target_pest_or_disease=(
+            "Gray Mold (Botrytis cinerea), Powdery mildew (Sphaerotheca macularis), "
+            "Anthracnose (Colletotrichum spp.)"
+        ),
+        pre_harvest_interval_days=0,
+        re_entry_interval_hours=12,
+        max_seasonal_rate_amount=56.0,
+        max_seasonal_rate_unit="oz/acre",
+        max_applications_per_season=4,
+        min_retreatment_interval_days=7,
+        # Switch is a TWO active-ingredient product (37.5% cyprodinil + 25.0%
+        # fludioxonil). `active_ingredient` is a single field, so the honest entry is
+        # both names — not one of them, which would understate what went on the field.
+        active_ingredient="cyprodinil + fludioxonil",
+        # Deliberately None. There is no single active-ingredient concentration for a
+        # two-active product, and inventing a combined 62.5% would make the
+        # active-ingredient quantity metric produce a number for a conversion nobody
+        # can cite. Absent here means the metric REFUSES for Switch, which is correct.
+        active_ingredient_concentration_amount=None,
+        active_ingredient_concentration_unit=None,
+        moa_group="9 + 12",
+        label_version="EPA-accepted 2025-04-21 (Case Number 476706)",
+        label_effective_date=date(2025, 4, 21),
+        source_document_reference=(
+            "US EPA Pesticide Product Label System, SWITCH 62.5WG, EPA Reg. No. "
+            "100-953, PRIA label amendment accepted 2025-04-21 — "
+            "https://www3.epa.gov/pesticides/chem_search/ppls/"
+            "000100-00953-20250421.pdf"
+        ),
+        source_section_or_page=(
+            "Strawberry and Berry, Low Growing Subgroup 13-07G (except Cranberry) "
+            "use table and its Specific Use Restrictions (printed label page 35; PDF "
+            "page 39). REI stated under AGRICULTURAL USE REQUIREMENTS, printed label "
+            "page 6. Active ingredient statement, printed label page 1."
+        ),
+        source_snippet=(
+            "Strawberry and Berry, Low Growing Subgroup 13-07G (except Cranberry). "
+            "Gray Mold (Botrytis cinerea), Powdery mildew (Sphaerotheca macularis), "
+            "Anthracnose (Colletotrichum spp.). Product Rate oz/Acre: 11-14. "
+            "Specific Use Restrictions: 1) Maximum Single Application Rate: DO NOT "
+            "exceed the maximum rate listed in the table above. 2) DO NOT apply more "
+            "than 4 applications per year at the highest rate mentioned in the table "
+            "above. 3) Minimum Application Interval: 7 days. 4) DO NOT make more than "
+            "two applications by air. 5) Make only one pre-plant dip application per "
+            "crop. 6) DO NOT apply more than 56 oz/A of Switch 62.5WG per year (1.3 "
+            "lb cyprodinil and 0.9 lb fludioxonil). 7) DO NOT apply more than 1.3 lb "
+            "ai/A of cyprodinil-containing products and 0.9 lb ai/A of "
+            "fludioxonil-containing products per year. 8) May be applied on the day "
+            "of harvest (0-day PHI)."
+        ),
+        transcribed_by=(
+            "Claude Code, transcribed from the EPA PPLS PDF — UNVERIFIED, pending "
+            "PCA review against the primary document"
+        ),
+    ),
+)

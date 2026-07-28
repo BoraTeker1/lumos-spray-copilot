@@ -597,6 +597,8 @@ def test_imported_values_can_never_auto_approve():
 
 
 def test_label_dependent_checks_are_disclosed_not_simulated():
+    from app import decision_engine as de
+
     d = evaluate_planned_spray(
         farm(harvest_offset_days=30), planned(),
         [], [obs("botrytis", days_ago=3)], today=TODAY,
@@ -605,7 +607,15 @@ def test_label_dependent_checks_are_disclosed_not_simulated():
     checks = {c["check"] for c in payload["not_evaluated"]}
     assert "maximum seasonal rate" in checks
     assert "minimum retreatment interval" in checks
-    assert all("authoritative label data" in c["reason"] for c in payload["not_evaluated"])
+    # Each undisclosed check says why it did not run. Asserted against the constant
+    # rather than a phrase: the wording changed on 2026-07-28 (a label table now
+    # exists, so "no label database exists" became false), and a test that pins
+    # prose re-fails every time honesty copy is corrected.
+    assert all(
+        c["reason"] == de.REASON_NO_LABEL_DATA for c in payload["not_evaluated"]
+    )
+    # And it must still name what is missing, not just assert emptiness.
+    assert "authoritative label value" in de.REASON_NO_LABEL_DATA
     # No rule pretends to have run these.
     rule_ids = {r["rule_id"] for r in payload["rules"]}
     assert "max_seasonal_rate" not in rule_ids

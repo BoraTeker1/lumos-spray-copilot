@@ -27,6 +27,17 @@ CASE_STUDY_DISCLAIMER = (
     "product label."
 )
 
+# An operator-run reference farm carries REAL provenance — that is what lets a licensed
+# PCA verify a label against it, which is what lets the label-dependent checks run at
+# all. Real provenance is exactly why this sentence has to exist: without it the same
+# arithmetic that proves the engine works would read as proof that somebody is using it.
+REFERENCE_FARM_DISCLOSURE = (
+    "Operator reference farm — not a customer. These records were created by the Lumos "
+    "operator to exercise the engine against real, cited pesticide-label data. The "
+    "label values and the arithmetic are real; the farm, the applications, and the "
+    "outcomes are not a grower's. Nothing here is pilot evidence, traction, or usage."
+)
+
 
 def _all_record_dates(spray_events, scout_observations) -> list[date]:
     dates: list[date] = []
@@ -589,6 +600,7 @@ def build_decision_evidence(
     advisor_label: str = "agronomist",
     follow_ups_by_id: dict | None = None,
     ai_concentrations: dict | None = None,
+    is_reference_farm: bool = False,
 ) -> dict:
     """Aggregate the pre-spray decision workflow into pilot metrics (honest by design).
 
@@ -629,14 +641,29 @@ def build_decision_evidence(
             f"Review time uses a stated assumption ({ASSUMED_MANUAL_CHECK_MINUTES} min per "
             f"manual PHI/REI/rotation cross-check), not a measurement."
         ),
-        "PHI/REI inputs are user-entered, not label-verified.",
     ]
+    # Conditional, not deleted. This line is TRUE for every farm whose decisions were
+    # evaluated from typed-in values, and it stays. It becomes factually wrong only
+    # once a verified label actually backed one of these decisions, and stating it
+    # then would understate the evidence rather than protect anyone.
+    if any(getattr(p, "label_record_id", None) for p in real):
+        limitations.append(
+            "Some PHI/REI values came from a PCA-verified label record; the rest are "
+            "user-entered. Each decision names its own source."
+        )
+    else:
+        limitations.append("PHI/REI inputs are user-entered, not label-verified.")
     if not real:
         limitations.insert(0, "No real (non-demo) pre-spray decisions recorded yet.")
+    if is_reference_farm:
+        limitations.insert(0, REFERENCE_FARM_DISCLOSURE)
 
     return {
         # Top-level keys are the REAL scope (unchanged contract).
         **real_metrics,
+        # Present on every payload so no consumer has to remember to ask. A reference
+        # farm's numbers are real arithmetic on real labels and NOT customer evidence.
+        "is_reference_farm": is_reference_farm,
         "not_calculated": not_calculated_block(real_metrics.get("confirmed")),
         "demo_decisions_checked": len(demo),
         "demo_outcomes": demo_outcomes,
@@ -661,15 +688,32 @@ def build_decision_evidence(
     }
 
 
-def build_instrumentation_summary(planned_sprays, events) -> dict:
+def build_instrumentation_summary(
+    planned_sprays, events, reference_farm_ids=None
+) -> dict:
     """Pilot workflow telemetry: how the check→review→outcome loop is actually used.
 
     Internal-only. Demo/simulated planned sprays are excluded from timing and
     decision-changed stats (their timestamps are seeded); raw event counts include
     everything and say so.
+
+    Operator reference farms are excluded too, and for a sharper reason than demo data:
+    this is the funnel that answers "is anyone actually using it". A decision the
+    operator created to exercise the engine is a real record by every provenance test,
+    so nothing else in the system would filter it out — and it would land in exactly
+    the number a reader treats as usage. `reference_farm_ids` is a plain set of ints so
+    this module keeps taking plain objects.
     """
     events = list(events or [])
-    real = _real_planned(planned_sprays)
+    reference_ids = set(reference_farm_ids or ())
+    real = [
+        p for p in _real_planned(planned_sprays)
+        if getattr(p, "farm_id", None) not in reference_ids
+    ]
+    reference_decisions_excluded = sum(
+        1 for p in _real_planned(planned_sprays)
+        if getattr(p, "farm_id", None) in reference_ids
+    )
 
     counts: dict[str, int] = {}
     for e in events:
@@ -714,10 +758,18 @@ def build_instrumentation_summary(planned_sprays, events) -> dict:
         "outcomes_recorded": len(recorded),
         "decisions_changed": decisions_changed,
         "entry_source_breakdown": entry_sources,
+        "reference_decisions_excluded": reference_decisions_excluded,
         "notes": [
             "Internal workflow telemetry, not customer-facing metrics.",
             "Timing, decision-changed, and entry-source stats exclude demo/simulated "
             "planned sprays; raw event counts include every logged event.",
+            (
+                f"{reference_decisions_excluded} decision(s) on operator reference "
+                f"farms are excluded from every stat here — they were created to "
+                f"exercise the engine, not by anyone using it."
+            ) if reference_decisions_excluded else (
+                "No operator reference-farm decisions to exclude."
+            ),
             "check_started and check_abandoned are client-reported and best-effort; "
             "check_completed, review_recorded, and outcome_recorded are logged "
             "server-side and complete.",
@@ -833,9 +885,19 @@ def build_pilot_evidence(
             "descriptive picture, not a before/after result.",
         )
 
+    # Reference farms front the disclosure and drop the investor talking points
+    # entirely. `investor_summary` exists to be read aloud to an investor; on a farm
+    # with no grower there is no honest sentence for it to hold, and an empty list is
+    # the correct value rather than a hedged one.
+    is_reference_farm = bool(getattr(farm, "is_reference", False))
+    if is_reference_farm:
+        limitations.insert(0, REFERENCE_FARM_DISCLOSURE)
+        investor_summary = []
+
     return {
         "farm_id": getattr(farm, "id", None),
         "farm_name": getattr(farm, "name", None),
+        "is_reference_farm": is_reference_farm,
         "crop": getattr(farm, "crop_type", None),
         "location": getattr(farm, "location", None),
         "pilot_period_start": period_start,
@@ -1360,6 +1422,7 @@ def build_evidence_export(
     The farm is identified only as pilot-farm-{id} plus crop/area — never by name or
     location. Demo/simulated decisions are excluded by construction.
     """
+    is_reference_farm = bool(getattr(farm, "is_reference", False))
     real = _real_planned(planned_sprays)
     rows = [
         _export_decision_row(
@@ -1422,7 +1485,14 @@ def build_evidence_export(
         "not_calculated": not_calculated_block(confirmed),
         "decisions": rows,
         "input_orders": build_procurement_export(input_plans, today),
-        "limitations": list(EVIDENCE_EXPORT_LIMITATIONS),
+        # The export is the artifact that leaves the building, so the reference-farm
+        # disclosure goes FIRST in its limitations — a reader who stops after one line
+        # has still read the only line that changes what the file means.
+        "is_reference_farm": is_reference_farm,
+        "limitations": (
+            [REFERENCE_FARM_DISCLOSURE, *EVIDENCE_EXPORT_LIMITATIONS]
+            if is_reference_farm else list(EVIDENCE_EXPORT_LIMITATIONS)
+        ),
         "disclaimer": CASE_STUDY_DISCLAIMER,
     }
 

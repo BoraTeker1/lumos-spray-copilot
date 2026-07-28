@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   TriangleAlert,
   Users,
+  Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/format";
@@ -201,6 +202,12 @@ export default function OperationsPage() {
               <Badge variant="outline">
                 <FlaskConical />
                 Simulated demo data
+              </Badge>
+            )}
+            {activeFarm.is_reference && (
+              <Badge variant="outline">
+                <Wrench />
+                Operator reference farm — not a customer
               </Badge>
             )}
           </>

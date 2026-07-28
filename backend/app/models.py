@@ -31,6 +31,19 @@ class Farm(Base):
     expected_harvest_date: Mapped[date | None] = mapped_column(Date)
     # Pilot intake: is a PCA/agronomist already involved with this farm?
     advisor_involved: Mapped[bool | None] = mapped_column(Boolean)
+    # An operator-run REFERENCE farm: real (non-demo) provenance, so a licensed PCA can
+    # verify a label against it and the label-dependent checks can actually run — but
+    # NOT a customer. It exists to demonstrate capability on real regulatory data.
+    #
+    # This is a third thing, and it needs its own column precisely because the existing
+    # demo/real split cannot express it. `data_source="demo"` would make every label
+    # verification simulated, which `label_data.promotable_to_authoritative` refuses —
+    # so a reference farm must be real-mode. But real-mode alone would let its decisions
+    # be counted as pilot evidence, which would be a traction claim about a farm that
+    # has no grower. The flag keeps both facts true at once.
+    is_reference: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     spray_events: Mapped[list["SprayEvent"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"

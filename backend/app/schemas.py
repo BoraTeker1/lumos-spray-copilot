@@ -94,6 +94,11 @@ class FarmUpdate(BaseModel):
 class Farm(FarmBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    # Read-only on purpose: deliberately absent from FarmCreate/FarmUpdate. Marking a
+    # farm as a reference farm removes it from customer evidence counts, so it must be
+    # an operator act (`python -m app.reference_farm`) rather than something any client
+    # can toggle — in either direction.
+    is_reference: bool = False
 
 
 # ----------------------------------------------------------------- PCA credentials

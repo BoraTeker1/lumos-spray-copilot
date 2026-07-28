@@ -104,14 +104,44 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 
 Backend + frontend both implement:
 
+- **The operator REFERENCE FARM (2026-07-28)** — the first configuration in which the label
+  checks actually run. Plan: `~/.claude/plans/jazzy-hatching-pumpkin.md`.
+  - **Why a separate farm.** `promotable_to_authoritative` refuses a record whose only
+    verification is `simulated`, and `ensure_demo_real_separation` guarantees a demo farm's
+    verification IS simulated. **A demo farm is therefore structurally incapable of showing a
+    label-grounded decision** — by design. So the farm that shows one must carry real
+    provenance. Do not "fix" this by relaxing either guard.
+  - **`Farm.is_reference`** (migration `3fc3f253cc02`) is the other half: real provenance
+    would otherwise make operator-created decisions count as pilot evidence on a farm with no
+    grower. Reference farms are excluded from `/internal/instrumentation` (the usage funnel),
+    carry `pilot_evidence.REFERENCE_FARM_DISCLOSURE` as `limitations[0]` on decision-evidence,
+    pilot-evidence and the evidence export, publish an **empty `investor_summary`**, and show
+    an "Operator reference farm — not a customer" badge. **Read-only in the API on purpose** —
+    absent from `FarmCreate`/`FarmUpdate`, settable only by `python -m app.reference_farm`,
+    because both setting and clearing it are consequential.
+  - **`app/reference_farm.py`** — explicit entry point, never called by seed/startup. Creates
+    the farm, a `PcaCredential` + authorization, verifies both label records through the real
+    `crud.create_label_verification` path, seeds four Switch applications (the label's full
+    season allowance), then a **fifth** → `block` at authority **`verified_label_grounded`**,
+    plus an avoided Captan application with a follow-up event.
+  - **What it produced, verified live:** `not_evaluated` 4 → **1** (crop registration, honestly,
+    because only the strawberry use is transcribed); `label_max_applications` and
+    `label_max_seasonal_rate` firing at `source_authority: verified_label`;
+    `active_ingredient_quantity_avoided` = **36.0 lb captan** with its cited conversion;
+    `/compliance` `basis_text` → *"partially label-verified"*. The demo farm is unchanged.
+  - **Consequence: `LUMOS_OPERATOR_KEY` is now REQUIRED to start the API** — the reference
+    farm is real data, so `has_non_demo_data` is true and the §8 interlock fires. Correct
+    behaviour, but it will look like a broken server if you forget (see §8).
+  - **It is NOT validation.** Capability evidence, not demand evidence. §11 is unchanged:
+    still zero real pilots, still zero customer decisions.
+
 - **Label capability layer, Phases 0–5 + delivery-gap fixes (2026-07-27, commits `cba6e2a`
   → `ba8598f`)** — product identity and verified label records, so the four label-dependent
   checks can finally run. Plans: `~/.claude/plans/snoopy-hugging-pinwheel.md` (phases),
   `~/.claude/plans/elegant-snuggling-ritchie.md` (delivery gaps). **The abstention gates are
   SATISFIED, never deleted** — no structural constraint is weakened, no disclaimer removed,
-  and a pesticide recommendation stays inexpressible. **The label table is still EMPTY**, so
-  every label-dependent check still reports it did not run (see §14) — the capability exists,
-  the data does not.
+  and a pesticide recommendation stays inexpressible. **The table was filled on 2026-07-28**
+  — see the reference-farm entry below. Until then the capability existed and the data did not.
   - **`app/label_data.py` (framework-free)** — three rules govern everything: a label value
     is usable only when **attributable** (`promotable_to_authoritative` returns the REASON a
     record cannot back a decision, not a boolean); product identity is **exact or ambiguous**
@@ -119,12 +149,14 @@ Backend + frontend both implement:
     a conversion is **cited or refused** (`RATE_CONVERSIONS` is definitional only, each with
     its citation; mass↔volume is deliberately absent because it needs a per-product density,
     so `convert_rate` returns a `Refusal` naming the unit).
-  - **`app/label_table.py` ships EMPTY** (`TRANSCRIBED_LABEL_USES = ()`), exactly as
-    `BotrytisWetnessV1.thresholds` does and for the same reason: a plausible PHI is
-    indistinguishable from a correct one to every writable test, and it lands in a record a
-    PCA is entitled to trust. `TranscribedLabelUse` is frozen/kw-only with no provenance
-    defaults, so an uncited row raises at import. **Never loaded by `seed.run()`/`init_db()`**
-    — `python -m app.label_sync` or `POST /internal/labels/sync` only.
+  - **`app/label_table.py` shipped EMPTY until 2026-07-28** and now holds **two real
+    transcriptions** (Captan 80 WDG `34704-1075`, Switch 62.5WG `100-953` — strawberry use,
+    both from EPA PPLS PDFs with section, revision, effective date and verbatim snippet).
+    The discipline is unchanged: values are transcribed from a primary document or the field
+    stays `None` (= *the label is silent*, never *no limit*). `TranscribedLabelUse` is
+    frozen/kw-only with no provenance defaults, so an uncited row raises at import.
+    **Never loaded by `seed.run()`/`init_db()`** — `python -m app.label_sync` or
+    `POST /internal/labels/sync` only; `tests/test_label_library.py` asserts that.
   - **Three tables:** `PesticideProduct` (identity; unique `epa_reg_no_normalized`, plus
     `epa_reg_base` recorded so a near-miss is RECOGNIZED, never matched),
     `ProductLabelRecord` (**append-only**; a revision and a withdrawal are both just
@@ -646,7 +678,20 @@ cd backend && source .venv/bin/activate && python -m app.seed
 # superseding row. Reports 0 entries until someone transcribes one with its citation.
 cd backend && source .venv/bin/activate && python -m app.label_sync
 
+# FULL REBUILD ORDER (2026-07-28). seed.run() drops EVERY table, so re-seeding destroys
+# the label library and the reference farm. Both are scripts precisely so this is safe:
+python -m app.seed           # demo farms only
+alembic stamp head           # seeding uses create_all and desyncs Alembic
+python -m app.label_sync     # 2 transcribed labels
+python -m app.reference_farm # refuses if a reference farm already exists; prints the
+                             # PCA token ONCE — copy it or you cannot act as that PCA
+
 # Run backend:  uvicorn app.main:app --reload   (http://localhost:8000, docs at /docs)
+#   With a reference farm present the DB holds real (non-demo) records, so the §8
+#   operator-key interlock fires and the API REFUSES TO START without:
+#     LUMOS_OPERATOR_KEY=<secret> uvicorn app.main:app --reload
+#   Symptom if you forget: "Application startup failed. Exiting." — not a broken build.
+#   Nothing loads .env: export ANTHROPIC_API_KEY too, or every AI path runs on the mock.
 
 # Frontend build / lint (from frontend/)
 cd frontend && npm install
@@ -657,7 +702,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **657 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **665 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
@@ -795,14 +840,19 @@ The ask:
 
 - **No real validation yet.**
 - Engine is **rule-based, not real AI** — easy to dismiss as "just a spreadsheet."
-- **The label table is EMPTY, so in practice PHI/REI still come from user-entered per-spray
-  values.** As of 2026-07-27 the label layer exists (§5) but holds no data: nothing has been
-  transcribed from a primary document and no PCA has verified anything, so every
-  label-dependent check still reports that it did not run — now with a specific reason
-  instead of "no label database exists". **Until a real transcription with a real per-farm
-  PCA verification exists, do not claim Lumos checks against label data at all.** Coverage on
-  a first pilot is governed by whether the PCA's recommendation sheets carry EPA registration
-  numbers — a data-entry question, not a code one.
+- **Label coverage is TWO PRODUCTS, on one operator-run farm.** As of 2026-07-28 the label
+  table holds Captan 80 WDG and Switch 62.5WG (strawberry use only), verified for the
+  reference farm — so the checks demonstrably run, but on a two-row library. On the demo
+  farms and on any real pilot farm, **PHI/REI still come from user-entered per-spray values**
+  and every label-dependent check still reports it did not run. The honest claim is "Lumos
+  can check against verified label data, and does for the products transcribed so far" —
+  never "Lumos checks your sprays against the label". Coverage on a first pilot is governed
+  by whether the PCA's recommendation sheets carry EPA registration numbers (a data-entry
+  question) and by how many labels someone transcribes (a labour question) — neither is code.
+- **Only the strawberry use of each label is transcribed**, so
+  `registered_crops_transcription_complete` is False on both products and the crop-registration
+  check correctly still abstains. Do not set that flag without transcribing the full crop list;
+  a false BLOCK there would end a PCA's trust permanently.
 - **No MRL reference data** — an MRL is destination-market law, not label law; the label layer
   does not and will not supply it.
 - **Incumbents** may already cover parts (FieldView-style platforms, PCA software, ag ERPs).
@@ -819,11 +869,12 @@ The ask:
   quoted answers on whether controlled deferral is conceivable and who might pay. None of that
   is code.
 - The **label capability layer was built anyway** (Phases 0–5, 2026-07-27) on an explicit
-  instruction, ahead of buyer validation. Note what it did and did not do: it satisfied the
-  abstention gates so the four label-dependent checks *can* run, but the table is empty, no
-  PCA has verified anything, and **no buyer evidence was created**. Treat it as raised
-  ceiling, not validation — and as a reason to be more skeptical, not less, of the next
-  "we just need to build X first."
+  instruction, ahead of buyer validation, and **filled on 2026-07-28** (two real labels + the
+  reference farm) for the YC demo. Note what that did and did not do: the four label-dependent
+  checks now demonstrably run and the product can state a pesticide quantity in the unit the
+  question is asked in — and **still no buyer evidence was created**. Ceiling raised twice,
+  evidence unmoved. That is the pattern to be skeptical of, not encouraged by, the next time
+  the answer to "what should we build?" sounds obvious.
 - Remaining deep functionality (**MRL data** especially — destination-market law, a different
   source, still out of scope per §4) waits on buyer validation.
 

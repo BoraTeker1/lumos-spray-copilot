@@ -93,6 +93,19 @@ def get_farm(db: Session, farm_id: int) -> models.Farm | None:
     return db.get(models.Farm, farm_id)
 
 
+def reference_farm_ids(db: Session) -> set[int]:
+    """Ids of operator reference farms — real provenance, but nobody's grower.
+
+    Returned as a plain set so the pure evidence module can filter on it without
+    importing SQLAlchemy.
+    """
+    return set(
+        db.scalars(
+            select(models.Farm.id).where(models.Farm.is_reference.is_(True))
+        )
+    )
+
+
 def create_farm(db: Session, data: schemas.FarmCreate) -> models.Farm:
     farm = models.Farm(**data.model_dump())
     db.add(farm)

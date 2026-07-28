@@ -1,10 +1,14 @@
 """The label library: loading transcriptions, append-only revisions, and resolution.
 
-Two guarantees matter more than the routes themselves. The first is that the shipped
-table is EMPTY — a plausible PHI is indistinguishable from a correct one to every test
-that can be written about it, so the constraint has to be asserted rather than trusted.
-The second is that the loader never issues an UPDATE: a corrected transcription appends
-a superseding row, so the value a decision relied on last month is still readable.
+Two guarantees matter more than the routes themselves. The first is that every shipped
+transcription carries a citation back to a primary document, and that the table is
+loaded ONLY by an explicit operator act — never by seeding or startup. (This test file
+used to assert the table was empty. It is no longer empty: two real EPA labels were
+transcribed on 2026-07-28. The empty assertion was always a proxy for the real rule —
+"transcribed from a primary document with its citation, or not there" — so the proxy
+was replaced with the rule, not deleted.) The second is that the loader never issues an
+UPDATE: a corrected transcription appends a superseding row, so the value a decision
+relied on last month is still readable.
 """
 from datetime import date, timedelta
 
@@ -57,18 +61,65 @@ def _farm(client, name="Label Farm"):
     }).json()
 
 
-# --------------------------------------------------------------- the empty table
-def test_the_shipped_transcription_table_is_empty():
+# ------------------------------------------------------- the shipped transcriptions
+def test_every_shipped_transcription_cites_a_primary_document():
     """Load-bearing. See label_table.py's docstring before ever changing this.
 
     A value in this table ends up in a record a licensed PCA is entitled to trust and an
-    auditor may read. It is transcribed from a primary document with its citation, by a
-    human, or it is not there.
+    auditor may read. It is transcribed from a primary document with its citation, or it
+    is not there. Construction already refuses a blank citation; this asserts the
+    citation is substantive enough for a second person to re-find the document and check
+    the transcription, which is the only thing that makes it verifiable.
     """
-    assert label_table.TRANSCRIBED_LABEL_USES == ()
+    for use in label_table.TRANSCRIBED_LABEL_USES:
+        where = f"{use.product_name} ({use.epa_reg_no}) / {use.registered_crop}"
+        # A locator someone can act on, not just a non-empty string.
+        assert len(use.source_document_reference) >= 40, where
+        assert use.epa_reg_no in use.source_document_reference, where
+        # Which part of the document — a reader must not have to search 47 pages.
+        assert len(use.source_section_or_page) >= 10, where
+        # The words the values were read from, so a checker compares text to text.
+        assert len(use.source_snippet) >= 40, where
+        assert isinstance(use.label_effective_date, date), where
+        assert use.transcribed_by.strip(), where
 
 
-def test_sync_on_the_empty_table_creates_nothing_and_says_so(client):
+def test_no_shipped_transcription_claims_to_be_verified():
+    """A transcription is on file, never in force — whoever typed it, however carefully.
+
+    `sync_transcribed_labels` sets the tier itself, so this asserts the property that
+    would actually break: nothing in the shipped table can describe itself as verified,
+    because promotion is a licensed PCA's act against a specific farm.
+    """
+    for use in label_table.TRANSCRIBED_LABEL_USES:
+        assert not hasattr(use, "source_tier")
+        assert "verified" not in use.transcribed_by.lower().replace("unverified", "")
+
+
+def test_seeding_never_loads_the_transcription_table(monkeypatch):
+    """The guard that matters most now that the table is NOT empty.
+
+    Seeded label data would make demo decisions look label-grounded — a fabricated
+    regulatory claim, which is ENGINEERING_GUIDELINES.md §9 applied to the one kind of value where it
+    matters most. `seed.run()` and `init_db()` must never reach the loader.
+    """
+    from app import database, seed
+
+    calls = []
+    monkeypatch.setattr(
+        crud, "sync_transcribed_labels", lambda *a, **k: calls.append(1)
+    )
+    seed.run()
+    database.init_db()
+
+    assert calls == [], "seeding or init_db loaded the label table"
+    with SessionLocal() as db:
+        assert crud.list_pesticide_products(db) == []
+
+
+def test_sync_on_an_empty_table_creates_nothing_and_says_so(client, monkeypatch):
+    monkeypatch.setattr(label_table, "TRANSCRIBED_LABEL_USES", ())
+
     res = client.post("/internal/labels/sync")
 
     assert res.status_code == 200

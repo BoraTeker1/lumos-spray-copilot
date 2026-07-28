@@ -629,3 +629,107 @@ def test_the_grower_route_is_read_only(client):
     assert routes
     for route in routes:
         assert set(getattr(route, "methods", set())) == {"GET"}
+
+
+# ----------------------------------------- the reference farm is capability, not use
+# A reference farm is the one configuration where the label checks can actually run:
+# real provenance, so a PCA verification promotes. Real provenance is also what makes
+# it dangerous — every evidence surface counts real records, and this farm has no
+# grower. These tests are about the second half of that trade.
+def _reference_farm(client, name="Reference Farm"):
+    farm = _farm(client, name=name)
+    with SessionLocal() as db:
+        db.get(models.Farm, farm["id"]).is_reference = True
+        db.commit()
+    return farm
+
+
+def test_a_reference_farm_is_excluded_from_the_usage_funnel(client):
+    """`/internal/instrumentation` answers "is anyone actually using it".
+
+    A decision the operator created to exercise the engine is real by every provenance
+    test in the system, so nothing else would filter it out — and it would land in the
+    exact number a reader treats as usage.
+    """
+    reference = _reference_farm(client)
+    _verified_label(client, reference["id"])
+    _planned(client, reference["id"])
+
+    body = client.get("/internal/instrumentation").json()
+
+    assert body["reference_decisions_excluded"] == 1
+    assert body["entry_source_breakdown"] == {}
+    assert body["outcomes_recorded"] == 0
+    assert any("reference farm" in note for note in body["notes"])
+
+
+def test_a_normal_farms_decisions_still_reach_the_usage_funnel(client):
+    """The exclusion must be the flag, not a bug that drops everyone."""
+    farm = _farm(client, name="Ordinary Farm")
+    _verified_label(client, farm["id"])
+    _planned(client, farm["id"])
+
+    body = client.get("/internal/instrumentation").json()
+
+    assert body["reference_decisions_excluded"] == 0
+    assert sum(body["entry_source_breakdown"].values()) == 1
+
+
+def test_reference_farm_evidence_leads_with_the_disclosure(client):
+    """The number is real arithmetic. The sentence saying whose it is has to travel."""
+    from app.pilot_evidence import REFERENCE_FARM_DISCLOSURE
+
+    reference = _reference_farm(client)
+    _verified_label(client, reference["id"])
+    _planned(client, reference["id"])
+
+    body = client.get(f"/farms/{reference['id']}/decision-evidence").json()
+
+    assert body["is_reference_farm"] is True
+    assert body["limitations"][0] == REFERENCE_FARM_DISCLOSURE
+    assert "not a customer" in body["limitations"][0]
+
+
+def test_a_reference_farm_publishes_no_investor_talking_points(client):
+    """`investor_summary` exists to be read aloud. On a farm with no grower there is
+    no honest sentence for it to hold, so it is empty rather than hedged."""
+    reference = _reference_farm(client)
+
+    body = client.get(f"/farms/{reference['id']}/pilot-evidence").json()
+
+    assert body["is_reference_farm"] is True
+    assert body["investor_summary"] == []
+
+
+def test_the_evidence_export_carries_the_disclosure_first(client):
+    """The export is the artifact that leaves the building."""
+    from app.pilot_evidence import REFERENCE_FARM_DISCLOSURE
+
+    reference = _reference_farm(client)
+    _verified_label(client, reference["id"])
+    _planned(client, reference["id"])
+
+    body = client.get(f"/farms/{reference['id']}/evidence-export").json()
+
+    assert body["is_reference_farm"] is True
+    assert body["limitations"][0] == REFERENCE_FARM_DISCLOSURE
+
+
+def test_the_reference_flag_cannot_be_set_through_the_api(client):
+    """Setting it hides a farm from the usage funnel; clearing it reveals one there.
+
+    Both directions are consequential, so it is an operator act
+    (`python -m app.reference_farm`) and no request schema exposes it.
+    """
+    farm = _farm(client, name="Not Yours To Flag")
+
+    created = client.post("/farms", json={
+        "name": "Sneaky", "country": "US", "crop_type": "strawberry",
+        "is_reference": True,
+    }).json()
+    updated = client.put(
+        f"/farms/{farm['id']}", json={"name": farm["name"], "is_reference": True}
+    ).json()
+
+    assert created["is_reference"] is False
+    assert updated["is_reference"] is False

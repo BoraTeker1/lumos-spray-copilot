@@ -17,6 +17,7 @@ import {
   Sprout,
   TriangleAlert,
   Users,
+  Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatArea, formatDate } from "@/lib/format";
@@ -186,6 +187,12 @@ function FarmDetail({ farmId }) {
                 <Badge variant="outline">
                   <FlaskConical />
                   Simulated demo data
+                </Badge>
+              )}
+              {farm.is_reference && (
+                <Badge variant="outline">
+                  <Wrench />
+                  Operator reference farm — not a customer
                 </Badge>
               )}
             </div>

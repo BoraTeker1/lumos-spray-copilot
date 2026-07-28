@@ -998,6 +998,7 @@ def farm_decision_evidence(farm_id: int, db: Session = Depends(get_db)):
         # this farm, which is what keeps the active-ingredient quantity honestly
         # not-calculated rather than partially totalled.
         ai_concentrations=crud.ai_concentrations_for_farm(db, farm_id),
+        is_reference_farm=bool(farm.is_reference),
     )
 
 
@@ -2145,7 +2146,9 @@ def internal_instrumentation(db: Session = Depends(get_db)):
     """INTERNAL pilot telemetry summary: check funnel, time-to-review, changed decisions,
     entry sources, abandonment. Never customer-facing."""
     return build_instrumentation_summary(
-        crud.list_all_planned_sprays(db), crud.list_pilot_events(db)
+        crud.list_all_planned_sprays(db),
+        crud.list_pilot_events(db),
+        reference_farm_ids=crud.reference_farm_ids(db),
     )
 
 

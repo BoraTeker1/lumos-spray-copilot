@@ -7,41 +7,75 @@ Pick the script for your audience:
 - **🎙️ Tough-question answers** — for "is this replacing the agronomist / how is this different
   from John Deere / does it guarantee reduction?" (at the very bottom).
 
-Setup for all: backend + frontend running, browser at `http://localhost:3000`,
-re-run `python -m app.seed` first for a clean state. The homepage hero has the two demo CTAs.
+Setup for all: backend + frontend running, browser at `http://localhost:3000`.
+
+**Startup order matters as of 2026-07-28.** `seed.run()` drops every table, so the label
+library and the reference farm must be rebuilt after any re-seed:
+
+```bash
+cd backend && source .venv/bin/activate
+python -m app.seed              # demo farms only; DESTROYS the reference farm
+alembic stamp head              # seeding uses create_all and desyncs Alembic
+python -m app.label_sync        # loads the transcribed EPA labels
+python -m app.reference_farm    # prints the PCA token ONCE — copy it
+
+# The reference farm is REAL (non-demo) data, so the operator-key interlock now
+# applies: the API refuses to start without this.
+LUMOS_OPERATOR_KEY=<secret> ANTHROPIC_API_KEY=<key> uvicorn app.main:app --reload
+```
+
+`ANTHROPIC_API_KEY` is only needed if you intend to show a live AI path (photo scouting,
+document extraction, AI brief). **Nothing loads `.env`** — if it is not exported into the
+shell that starts uvicorn, every AI feature silently runs on the deterministic mock, and
+mock output must never be presented as model performance.
 
 ---
 
-# ⚡ 90-SECOND YC DEMO — "Lumos changed a risky spray"
+# ⚡ 90-SECOND YC DEMO — "the label says four"
 
-> Goal: one workflow, one blocked spray, one changed decision. The seeded Golden Coast farm
-> already contains the finished story; you re-run it live in the same screen.
+> Goal: show a decision grounded in a real, cited pesticide label, and one number in the
+> unit the pesticide question is actually asked in — mass of active ingredient.
+> Run this on the **Lumos Reference Ranch**, not the demo farm. That is not a
+> presentation choice; a demo farm can only hold a *simulated* label verification, which
+> never promotes, so the demo farm is structurally incapable of showing this.
 
-1. **(10s) One-liner + farms page.** *"Lumos is the pesticide decision copilot for specialty-crop
-   growers and their PCAs — the decision layer **before** the spray."* The farms page is already
-   ranked by urgency: each card says **why** it needs attention and the **next action**. Open
-   **🇺🇸 Golden Coast Strawberry Ranch**.
-2. **(30s) The seeded blocked decision.** The **Decision queue** shows the story that already
-   happened: a 4th captan cover spray planned **two days before harvest** came back
-   **BLOCK — PCA-authorized** (PHI arithmetic shown: intended date + 4 days clears *after*
-   harvest, plus "use number 4 of captan in 30 days"; PCA-authorized because the values were
-   **PCA-entered** — the source authority is printed on every rule). The demo PCA **edited**
-   the guidance — switch to a PHI-0 product — and the recorded outcome is
-   **Changed product → Switch 62.5 WG**, applied on the intended day.
-   *"That's the product: a risky spray went in, one clear outcome came back, a licensed PCA —
-   already required by law in California — redirected it, and the audit trail wrote itself.
-   Open the **Decision record** link for the printable one-pager."*
-3. **(35s) Run one live.** Click **Check a planned spray** → product `Captan 80 WDG` + date;
-   expand compliance values → AI `captan`, PHI `4`, REI `24` → **Run the decision check** →
-   **PROVISIONAL BLOCK**, with the triggered rules, the exact calculations, inputs used, and
-   who entered them. *"Grower-entered values always yield a provisional verdict — only
-   PCA-entered or label-verified data can back a PCA-authorized one. Honest by
-   construction."* Approve as the PCA, record **Avoided** with a reason.
-   (Checks run live on a demo farm are saved as **simulated demo data** — the sheet says so —
-   and real records can never mix onto a demo farm.)
-4. **(15s) Evidence + close.** Evidence tab → **Decision evidence**: decisions checked,
-   conflicts caught, sprays changed/avoided, PCA acceptance rate — demo data excluded,
-   every caveat printed. *"This is the per-pilot scoreboard we'll fill with real growers."*
+1. **(10s) One-liner.** *"Lumos is the pesticide decision copilot for specialty-crop growers
+   and their PCAs — the decision layer **before** the spray."*
+2. **(30s) The label-verified block.** Open the reference farm's blocked decision. A grower
+   plans a fifth Switch 62.5WG application. It comes back **BLOCK**, and the authority chip
+   reads **verified_label_grounded** — the first level the engine has that does not depend on
+   anyone's typing. Two rules fired, both tagged `verified_label`:
+   - *"This would be application 5 of Switch 62.5WG this season; the verified label allows 4."*
+   - *"…would total 70.0 oz/acre this season; the verified label allows 56.0 oz/acre."*
+
+   *"Nobody typed '4'. That came off EPA Reg. No. 100-953, transcribed with its section, its
+   revision date and a verbatim snippet, and verified for this farm by a licensed PCA. Click
+   through — the citation is on the record."*
+
+   Point at the **one** remaining not-evaluated check: the crop-registration check still
+   abstains, because only the strawberry use was transcribed and a partial list is not
+   evidence a crop is unregistered. *"Three of the four run. The fourth tells you why it
+   didn't. It was four out of four saying 'no label data' last week."*
+3. **(25s) The number, in the right unit.** Evidence → **Decision evidence**. One
+   follow-up-confirmed avoided captan application shows
+   **36.0 lb of captan not applied** — from the label's 80% w/w concentration, the entered
+   rate and the treated area, with the conversion's citation printed beside it.
+   *"That is the unit the pesticide question is asked in. And note what is still refused:
+   season-total reduction and risk-weighted reduction are permanently not calculated, and
+   Switch contributes nothing to that total because it has two actives and no single
+   concentration to convert from. The metric is all-or-nothing on purpose — a partial total
+   reads as a smaller number, not an incomplete one."*
+4. **(25s) Close honestly — this is the strongest part.** Point at the badge on the page:
+   **Operator reference farm — not a customer.**
+   *"I'm not going to pretend this is traction. This farm is ours. Real decisions checked for
+   real growers is zero. What this proves is that the machine works end to end on real
+   regulatory data — and what we need next is one Central Coast PCA to point it at. That's
+   the ask."*
+
+> Do **not** run this script on Golden Coast and describe it as label-grounded. Its stored
+> decision payloads are frozen snapshots from seed time and still read *"no label database
+> exists"* — true when they were written, false now. Re-seed (see the order above) if you
+> want that wording refreshed.
 
 ---
 

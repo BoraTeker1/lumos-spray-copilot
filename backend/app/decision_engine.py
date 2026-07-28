@@ -106,11 +106,15 @@ LABEL_DEPENDENT_CHECK_NAMES = {
     CHECK_CROP_REGISTRATION: "crop/use registration match",
 }
 
-# Why none of them can run. There is one reason today because exactly one thing is
-# missing, but the reason travels per check so a specific one ("this product has no
-# registration number", "no label record on file for this crop") can replace it for a
-# single check later without touching any caller.
-REASON_NO_LABEL_DATA = "requires authoritative label data — no label database exists"
+# The fallback reason, used only when no more specific one is supplied. It says "no
+# VERIFIED record supplies it" rather than "no label database exists": since 2026-07-28
+# a label table exists and holds real transcriptions, so the old wording became a false
+# statement on every decision that showed it. What stays true in every case this
+# fallback fires is that nothing a licensed PCA verified for this farm backs the check.
+REASON_NO_LABEL_DATA = (
+    "requires an authoritative label value — no label record verified for this farm "
+    "supplies it"
+)
 
 NOT_EVALUATED_CHECKS = tuple(
     {"check_id": check_id, "check": name, "reason": REASON_NO_LABEL_DATA}
@@ -200,8 +204,9 @@ class LabelContext:
 # Decision authority levels — how strongly the determining inputs back the verdict.
 # Three honest levels replace the old binary "definitive"/"provisional":
 #   verified_label_grounded — every determining check backed by verified label data.
-#     Deliberately unreachable today (no label database exists); the level exists so
-#     the gate is already correct the day label data arrives.
+#     Unreachable until 2026-07-28, when the first real labels were transcribed and
+#     verified for a farm; the gate was built ahead of the data, and did not move when
+#     the data arrived.
 #   pca_authorized — every determining check backed by PCA-entered (or verified)
 #     values. A licensed PCA supplied the inputs; still not label-verified.
 #   provisional — anything else; a PCA must confirm before it is relied on.
