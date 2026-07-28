@@ -54,6 +54,15 @@ your task needs. Optimized so future Claude/Cursor sessions avoid re-reading the
   weather data, the PCA's action threshold, and whether block randomization is operationally
   acceptable. **Do not build the reporting/calibration layer until real outcomes exist**; its
   shape will be wrong until you have seen one real block outcome.
+- **As of 2026-07-28 the active plan is `DESIGN_PARTNER_SPRINT.md`, and it contains no
+  engineering.** It is a seven-day founder sprint to secure ONE Central Coast strawberry PCA:
+  an exact partner profile, three hypotheses (behavioral / data / economic) each with a pass
+  threshold **and a kill criterion**, a 20-minute no-pitch call script, a data-availability
+  checklist mapped field-by-field to models that already exist, a five-stage pilot ladder
+  where a lower stage may never make a higher stage's claim, and a decision gate whose
+  branches include narrowing to compliance, pivoting to measurement infrastructure, and
+  abandoning the thesis. **The label layer finishing through Phase 5 did not change this
+  conclusion** — capability rose, evidence did not. Read that doc before proposing any build.
 
 ---
 
@@ -95,11 +104,14 @@ LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — a
 
 Backend + frontend both implement:
 
-- **Label capability layer, Phases 0–3 (2026-07-27, commit `cba6e2a`)** — product identity
-  and verified label records, so the four label-dependent checks can finally run. Plan:
-  `~/.claude/plans/snoopy-hugging-pinwheel.md`. **The abstention gates are SATISFIED, never
-  deleted** — no structural constraint is weakened, no disclaimer removed, and a pesticide
-  recommendation stays inexpressible.
+- **Label capability layer, Phases 0–5 + delivery-gap fixes (2026-07-27, commits `cba6e2a`
+  → `ba8598f`)** — product identity and verified label records, so the four label-dependent
+  checks can finally run. Plans: `~/.claude/plans/snoopy-hugging-pinwheel.md` (phases),
+  `~/.claude/plans/elegant-snuggling-ritchie.md` (delivery gaps). **The abstention gates are
+  SATISFIED, never deleted** — no structural constraint is weakened, no disclaimer removed,
+  and a pesticide recommendation stays inexpressible. **The label table is still EMPTY**, so
+  every label-dependent check still reports it did not run (see §14) — the capability exists,
+  the data does not.
   - **`app/label_data.py` (framework-free)** — three rules govern everything: a label value
     is usable only when **attributable** (`promotable_to_authoritative` returns the REASON a
     record cannot back a decision, not a boolean); product identity is **exact or ambiguous**
@@ -136,7 +148,44 @@ Backend + frontend both implement:
     `_entered_values_behind_label` walks BACK through the supersede chain past label rows, so
     applying a label value cannot erase the disagreement it should have reported. A later
     revision surfaces as `decision_status.label_reference_stale` instead of a silent recompute.
-  - **591 tests.** `tests/test_label_authority.py` is the invariant file — including that an
+  - **Phase 4 — AI label extraction + the act that makes a value usable.**
+    `app/label_extraction.py` reuses `extraction.py`'s `build_content_blocks` / `ALLOWED_*` /
+    `MAX_DOCUMENT_BYTES`, registers a `MockLlmService` builder, and logs
+    `AiJudgment.kind="label_extraction"`. **Three routes are three distinct trust levels and
+    must stay separate:** `POST /internal/labels/extract` (never writes),
+    `POST /internal/labels/records` (server-set `ai_extracted_unverified` — no request schema
+    exposes `source_tier`, so a client cannot claim a tier it did not earn), and
+    `POST /farms/{id}/label-verifications` (deliberately NOT under `/internal` — verification
+    is a professional act, gated by `require_pca_for_farm` and attributed from the
+    credential). `components/LabelLibraryCard.js` renders the three steps separately.
+  - **Phase 5 — the AI-quantity metric + conditional honesty copy.** `label_data.ai_quantity`
+    converts percent pairs with a MASS rate only, `lb/gal` / `g/l` with volume, and **never
+    converts areas** — cross-basis needs a per-product density, so it refuses.
+    `pilot_evidence._ai_quantity_avoided` is **all-or-nothing**: one refusal keeps the whole
+    metric not-calculated, because a partial total reads as a smaller number rather than an
+    incomplete one. Concentrations come only from labels PCA-verified for that farm
+    (`crud.ai_concentrations_for_farm`). `not_calculated_block()` narrows the disclosure by
+    evidence; `PERMANENTLY_NOT_CALCULATED` names the two that never leave. The old
+    unconditional invariant became a **XOR** (present in `not_calculated` xor computed with
+    non-empty `conversion_provenance`). `/compliance` gained a server-owned `basis_text`, and
+    `decision_engine.planned_spray_disclaimer()` sits BESIDE the constant so **zero
+    disclaimers changed wording** — asserted by test.
+  - **Delivery-gap fixes** — three defects found by auditing the running app end-to-end
+    rather than reading this file. Worth remembering as a method: *the docs described
+    capabilities the UI could not reach.*
+    - The weekly report and audit packet contained **zero** decision-workflow data (both
+      built only from the legacy `recommendation_engine` path) → fixed via
+      `pilot_evidence.summarize_decisions_for_report` + `main._decision_report_lines`.
+    - **`epa_reg_no` was not a field in `PreSpraySheet.js` at all**, so Phases 0–5 were
+      unreachable from the primary workflow. Added, plus `LabelResolutionNote` and a
+      grower-facing `GET /farms/{id}/label-resolution` (the `/internal` one is
+      operator-gated).
+    - Photo scouting used `messages.create` + JSON scraping and logged **no `AiJudgment`** —
+      the weakest-typed call on the only AI path that can reach the engine. Now
+      `messages.parse` with a `PhotoFinding` schema + `VisionError` + logging;
+      `build_ai_calibration` gained `by_kind` covering all four kinds (volume/abstention
+      only, `accuracy: None`).
+  - **657 tests.** `tests/test_label_authority.py` is the invariant file — including that an
     **APPROVE is still never `verified_label_grounded`**: `repeated_active_ingredient`
     (heuristic) and `prior_rei_overlap` (grower-entered) keep every approve provisional, so
     **merging or deleting either silently creates a no-human-review approve**.
@@ -386,11 +435,16 @@ Backend + frontend both implement:
   a **draft scouting observation the human must review/confirm** (it then feeds the rule engine).
   Real AI, clearly labelled *AI-suggested, not confirmed*; never diagnoses, never says "spray".
   Falls back to a deterministic `MockVisionService` when no `ANTHROPIC_API_KEY` is set (demo/tests
-  work offline). Confirmed notes carry `data_source="photo_ai"`. See `app/vision.py`.
+  work offline). Confirmed notes carry `data_source="photo_ai"`. Structured output via
+  `messages.parse` with a `PhotoFinding` schema (+ `VisionError`), and **every call is logged
+  as an `AiJudgment`** — this is the only AI path that can reach the engine, so it must never
+  go back to `messages.create` + JSON scraping. See `app/vision.py`.
 - **Pre-spray risk snapshot** (formerly "Compliance snapshot") card/endpoint
   (PHI/REI/resistance/scouting/weather/review status). Renamed in the UI because the signals
   come from user-entered values, not verified label data; the endpoint is still `/compliance`
-  and now returns a `basis` field saying exactly that.
+  and now returns a `basis` field saying exactly that, plus a server-owned `basis_text` that
+  becomes accurate on its own once verified labels exist (the four frontend copy sites that
+  hardcode their own wording should migrate to it).
 - **Pesticide cost analytics** — total/avg spend, most-used AI, repeated-ingredient cost,
   *potential* avoidable cost.
 - **Reduction-measurement engine** — declared spray baseline (`stated_cadence` /
@@ -449,6 +503,12 @@ Backend + frontend both implement:
     REASON), `LABEL_TIER_TO_INPUT_SOURCE`. `app/crop_aliases.py` is its curated crop-name
     sibling (same MATCH/AMBIGUOUS/NO_MATCH vocabulary as `target_aliases`, never fuzzy).
     `app/label_table.py` is the EMPTY transcription source; `app/label_sync.py` loads it.
+    `ai_quantity` + `canonical_concentration_unit` back the AI-quantity metric (mass-basis
+    only; areas are never converted).
+  - `app/label_extraction.py` — AI label-document extraction. Reuses `extraction.py`'s
+    content-block/size helpers, registers a `MockLlmService` builder, logs
+    `AiJudgment.kind="label_extraction"`. Extraction NEVER writes a label record; committing
+    one is a separate route and verifying it is a third (see §5).
   - `app/analytics.py` — `compute_cost_analytics`.
   - `app/reduction.py` — `compute_reduction` (pure, framework-free). Baseline methods +
     `CALENDAR_PROGRAMS`, `is_headline_safe` gate, honest caveats. Consumed by `pilot_evidence`.
@@ -498,7 +558,13 @@ Backend + frontend both implement:
   - Labels: `GET /internal/labels/products[/{id}]`, `POST /internal/labels/sync`,
     `GET /internal/labels/resolution?epa_reg_no=&crop=&farm_id=` (the "why does this decision
     still say the check did not run" diagnostic — calls the same
-    `crud.resolve_label_for_decision` the decision path uses, so the two cannot drift)
+    `crud.resolve_label_for_decision` the decision path uses, so the two cannot drift),
+    `POST /internal/labels/extract` (AI draft, never writes), `POST /internal/labels/records`
+    (commits as `ai_extracted_unverified` — the tier is server-set, never client-supplied),
+    `POST /farms/{id}/label-verifications` (the PCA act; NOT under `/internal`, gated by
+    `require_pca_for_farm`), and grower-facing `GET /farms/{id}/label-resolution` (same
+    resolver, no operator key — tells a grower whether a verified label supplies PHI/REI or
+    whether they still have to type them)
   - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
     `/export/pilot-feedback.csv`
   - `GET /health`; interactive docs at `/docs`.
@@ -591,7 +657,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **591 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **657 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
@@ -748,10 +814,18 @@ The ask:
 ## 15. Recommended Next Work
 
 - **Do not build more product by default.**
-- Next work = **validation assets / outreach / real-data import** (concierge pilots, case
-  studies, discovery interviews).
-- Only build **label-aware compliance** (a real PHI/REI/MRL database) or other deep functionality
-  **after buyer validation** confirms it's the thing people will pay for.
+- Next work = **execute `DESIGN_PARTNER_SPRINT.md`** (§3): five qualified PCA conversations,
+  one real anonymized dataset assessed against its §4 checklist, one completed scorecard, and
+  quoted answers on whether controlled deferral is conceivable and who might pay. None of that
+  is code.
+- The **label capability layer was built anyway** (Phases 0–5, 2026-07-27) on an explicit
+  instruction, ahead of buyer validation. Note what it did and did not do: it satisfied the
+  abstention gates so the four label-dependent checks *can* run, but the table is empty, no
+  PCA has verified anything, and **no buyer evidence was created**. Treat it as raised
+  ceiling, not validation — and as a reason to be more skeptical, not less, of the next
+  "we just need to build X first."
+- Remaining deep functionality (**MRL data** especially — destination-market law, a different
+  source, still out of scope per §4) waits on buyer validation.
 
 ---
 
