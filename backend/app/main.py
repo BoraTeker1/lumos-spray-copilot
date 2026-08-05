@@ -36,7 +36,7 @@ from app.vision import (
     build_analysis_result,
     default_vision_service,
 )
-from app.weather import default_weather_service
+from app.advisory_weather import default_weather_service
 
 app = FastAPI(
     title="Lumos Spray Copilot API",

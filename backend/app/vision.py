@@ -1,6 +1,6 @@
 """Photo-analysis (computer vision) module for the 'do I really need to spray?' copilot.
 
-Design (mirrors `weather.py`)
+Design (mirrors `advisory_weather.py`)
 -----------------------------
 * `build_observation_suggestion(...)` is the pure, testable core: it maps a model *finding*
   to a draft scouting observation the grower/PCA reviews and confirms. CV is an INPUT to the

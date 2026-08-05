@@ -248,7 +248,7 @@ class ScoutObservation(Base):
 class WeatherObservation(Base):
     """One weather reading, append-only, as an input to a disease-risk assessment.
 
-    No weather has ever been persisted in this system: `app/weather.py` computes an
+    No weather has ever been persisted in this system: `app/advisory_weather.py` computes an
     advisory disease-pressure number on the fly from a hardcoded per-city dict that
     never varies with time. That is fine for an advisory card and useless as model
     input — a risk assessment has to be reproducible from the exact readings that

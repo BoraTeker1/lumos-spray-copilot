@@ -1,6 +1,6 @@
 """Shared LLM service for the AI-driven layer (extraction, review briefs).
 
-Design (mirrors `vision.py` / `weather.py`)
+Design (mirrors `vision.py` / `advisory_weather.py`)
 -------------------------------------------
 * `LlmService` is a small abstraction over one structured call: content blocks in,
   a validated Pydantic object out. `ClaudeLlmService` uses the Anthropic SDK's

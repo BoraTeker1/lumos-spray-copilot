@@ -1,4 +1,26 @@
-"""Lightweight weather-risk module for spray decisions.
+"""SIMULATED weather advisory for the farm overview and the weekly report.
+
+Named `advisory_weather` and not `weather` on purpose. There are two weather concepts
+in this system and confusing them would be expensive:
+
+  1. **This module** — a simulated, location-keyed, time-invariant advisory. Its bands
+     are `low | moderate | elevated`. It exists so the farm-overview card and the weekly
+     report have something to say offline, and the UI labels it "Simulated demo weather
+     — not a live feed."
+  2. **The pilot path** — `ingest -> WeatherObservation -> risk_snapshot -> disease_risk`.
+     Real, timestamped, station-attributed readings feeding a versioned disease rule
+     whose bands are `low | moderate | high | abstain` and which abstains by default.
+
+**The two vocabularies are not comparable and must never be mapped onto each other.**
+"elevated" here is a hand-tuned heuristic over three numbers; "high" there would be a
+cited rule's output over admissible measured inputs. Presenting one as the other would
+put a simulated number where a PCA expects evidence.
+
+**This module must never acquire a connection to `WeatherObservation`.** It does not read
+one, and nothing on the pilot path may import it — asserted by
+`tests/test_advisory_weather.py::test_advisory_weather_is_unreachable_from_the_pilot_path`.
+If real weather should reach a decision, it goes through the ingest pipeline, where the
+point-in-time rule, station distance and quality flags all apply.
 
 Design
 ------
@@ -6,9 +28,8 @@ Design
   humidity / rain-probability to a cautious disease-pressure assessment for greenhouse
   tomatoes (fungal disease loves warm + humid; rain/humidity spikes mean "inspect leaves
   before spraying").
-* `WeatherService` is a small abstraction so a real API (e.g. Open-Meteo) can be dropped
-  in later. For the MVP we ship `MockWeatherService` with demo readings for the seed farm
-  locations (Antalya, Mersin), so the demo works offline and instantly.
+* `WeatherService` is a small abstraction; `MockWeatherService` ships demo readings for
+  the seed farm locations (Antalya, Mersin, Watsonville) so the demo works offline.
 
 Nothing here tells a farmer to spray. It raises cautious flags only.
 """
