@@ -165,3 +165,71 @@ def test_demo_block_cannot_be_added_to_a_farm_with_real_records(client):
     )
     assert res.status_code == 409
     assert "never mix" in res.json()["detail"]
+
+
+def test_a_snapshot_admits_only_weather_that_is_evidence_for_its_own_block(client):
+    """Weather was farm-wide in every block's snapshot; scouting never was.
+
+    Latent while nothing wrote weather. With ingestion running it becomes exactly what
+    `station_distance_km` and the same-hour conflict check exist to prevent: a second
+    field's station, kilometres away, landing in this block's assessment and either
+    dragging the evidence grade down or triggering `conflicting_readings_same_hour`
+    between two stations that were never in conflict.
+
+    Three things stay in scope, and the third keeps the manual pilot working: rows for
+    THIS block, rows for its field with no block set, and rows attributed to NEITHER --
+    which is every concierge-entered reading, because the weather CSV has no block or
+    field column. Excluding those would silently empty the snapshot for exactly the
+    farms running the manual path.
+    """
+    from datetime import datetime, timedelta
+
+    from app import crud, models
+    from app.database import SessionLocal
+
+    farm = client.post(
+        "/farms",
+        json={"name": "Scoping Ranch", "location": "Watsonville, CA", "country": "US",
+              "crop_type": "strawberry", "area": 20.0},
+    ).json()
+
+    db = SessionLocal()
+    try:
+        mine = models.Block(farm_id=farm["id"], name="Block A", crop="strawberry")
+        theirs = models.Block(farm_id=farm["id"], name="Block B", crop="strawberry")
+        db.add_all([mine, theirs])
+        db.commit()
+        db.refresh(mine)
+        db.refresh(theirs)
+
+        observed = datetime(2026, 7, 1, 6, 0)
+
+        def weather(station, block_id=None, field_id=None, hours=0):
+            return models.WeatherObservation(
+                farm_id=farm["id"], block_id=block_id, field_id=field_id,
+                station_id=station, station_distance_km=3.0,
+                observed_at=observed + timedelta(hours=hours),
+                recorded_at=observed + timedelta(hours=hours),
+                temperature_c=15.0, source_type="station_export",
+                data_source="provider_api", data_confidence="provider_reported",
+            )
+
+        db.add_all([
+            weather("MINE", block_id=mine.id, hours=0),
+            weather("THEIRS", block_id=theirs.id, hours=1),
+            weather("UNATTRIBUTED", hours=2),
+        ])
+        db.commit()
+
+        scoped = crud.list_weather_for_block(db, farm["id"], mine)
+        stations = {row.station_id for row in scoped}
+
+        assert "MINE" in stations
+        assert "UNATTRIBUTED" in stations, (
+            "concierge-entered weather carries no block or field and must stay visible"
+        )
+        assert "THEIRS" not in stations, (
+            "another block's station leaked into this block's evidence"
+        )
+    finally:
+        db.close()

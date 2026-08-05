@@ -584,7 +584,10 @@ def create_risk_snapshot(
         horizon_hours=horizon_hours,
         target=PILOT_TARGET,
         block=block,
-        weather_observations=list_weather_observations(db, planned.farm_id),
+        # Block-scoped, not farm-wide. Scouting on the next line has always been
+        # scoped; weather was not, and with ingestion writing 24 rows a day per station
+        # that gap becomes a second field's station landing in this block's assessment.
+        weather_observations=list_weather_for_block(db, planned.farm_id, block),
         scouting_samples=list_scouting_samples(db, planned.farm_id, planned.block_id),
     )
 
