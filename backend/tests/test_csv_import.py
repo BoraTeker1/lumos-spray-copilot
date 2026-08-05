@@ -372,3 +372,47 @@ def test_spray_event_template_carries_the_epa_column_with_no_invented_value():
     assert "epa_reg_no" in header
     example = lines[1].split(",")
     assert example[header.index("epa_reg_no")] == ""
+
+
+def test_negative_temperature_is_accepted_and_negative_rainfall_is_still_rejected():
+    """A frost night is data, not a typo — and it is the night that matters.
+
+    Every numeric weather column was validated as `>= 0` until 2026-08-05. That is
+    right for a distance, a duration and a rain depth, where a negative can only be a
+    keying error. It is wrong for a Celsius temperature, and wrong in the expensive
+    direction: a Watsonville frost night is exactly when a strawberry grower is
+    logging weather, and the row would have been rejected with "must be >= 0".
+
+    `schemas.WeatherObservationCreate.temperature_c` never carried a `ge=0`, so the
+    API already accepted sub-zero readings. The CSV path was the outlier, which is why
+    the fix is `FieldSpec.signed` on that one column rather than a loosening of the
+    default.
+    """
+    report = csv_import.parse_csv(
+        csv_import.RECORD_TYPE_WEATHER,
+        "Station,Timestamp,Temperature,Rainfall\n"
+        "CIMIS-111,2026-01-14T05:00:00,-2.5,0.0\n",
+    )
+    (row,) = report.rows
+    assert row.errors == [], row.errors
+    assert row.importable
+    assert row.values["temperature_c"] == -2.5
+
+    negative_rain = csv_import.parse_csv(
+        csv_import.RECORD_TYPE_WEATHER,
+        "Station,Timestamp,Rainfall\nCIMIS-111,2026-01-14T05:00:00,-3.0\n",
+    )
+    (bad,) = negative_rain.rows
+    assert any("must be >= 0" in e for e in bad.errors)
+    assert not bad.importable
+
+
+def test_only_temperature_is_signed_so_the_guard_stays_on_by_default():
+    """The exemption is one column wide, on purpose."""
+    signed = {
+        spec.name
+        for specs in csv_import.FIELDS_BY_TYPE.values()
+        for spec in specs
+        if spec.signed
+    }
+    assert signed == {"temperature_c"}

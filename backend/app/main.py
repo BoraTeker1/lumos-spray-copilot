@@ -17,6 +17,7 @@ from app import (
     label_extraction, llm, models, operator_key, pca_authority, schemas, vision,
 )
 from app.analytics import compute_cost_analytics
+from app.ingest import registry as ingest_registry
 from app.jobs import queue as job_queue
 from app.database import SessionLocal, get_db, init_db
 from app.pilot_evidence import (
@@ -2192,6 +2193,22 @@ def internal_jobs(
             for job in recent
         ],
     }
+
+
+@app.get("/internal/ingestion/sources", tags=["internal"])
+def internal_ingestion_sources():
+    """INTERNAL: every declared data source and the domain table governing it.
+
+    This is the artifact that makes "we declared seventeen domains and built one" a
+    checkable statement rather than a claim in a document. Each source says whether the
+    gap in front of it is a deployment task (`requires_credential`), a build task
+    (`not_implemented`), or a governance decision (`deferred_to_finance_phase`) — and
+    every deferred domain quotes the ENGINEERING_GUIDELINES.md clause that defers it.
+
+    No database access at all: sources are code, so the answer cannot depend on what
+    happens to be in this deployment's tables.
+    """
+    return ingest_registry.as_payload()
 
 
 @app.get("/internal/instrumentation", tags=["internal"])

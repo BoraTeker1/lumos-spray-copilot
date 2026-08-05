@@ -48,6 +48,7 @@ class FieldSpec:
     kind: str                 # str / date / float / int
     required: bool = False
     regulatory: bool = False  # missing => explicit "unverified" warning
+    signed: bool = False      # negatives are meaningful, not a typo (see below)
     aliases: tuple[str, ...] = ()
 
 
@@ -174,7 +175,10 @@ WEATHER_OBSERVATION_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("observed_at", "datetime", required=True,
               aliases=("timestamp", "datetime", "date time", "observed at",
                        "observation time", "reading time", "time")),
-    FieldSpec("temperature_c", "float", regulatory=True,
+    # signed: a frost night is real data, and it is exactly the night a strawberry
+    # grower cares about. Every other numeric column here is a count, a distance or a
+    # duration, where a negative IS a typo — so the guard stays on by default.
+    FieldSpec("temperature_c", "float", regulatory=True, signed=True,
               aliases=("temp", "temperature", "temp c", "temperature c",
                        "air temperature", "temperature (c)")),
     FieldSpec("relative_humidity_pct", "float",
@@ -493,7 +497,7 @@ def _parse_value(spec: FieldSpec, raw: str, date_format: str = DATE_FORMAT_AUTO)
             value = int(float(cleaned))
         except ValueError:
             return None, f"{spec.name}: '{text}' is not a whole number"
-        if value < 0:
+        if value < 0 and not spec.signed:
             return None, f"{spec.name}: must be >= 0 (got {value})"
         return value, None
     if spec.kind == "float":
@@ -501,7 +505,7 @@ def _parse_value(spec: FieldSpec, raw: str, date_format: str = DATE_FORMAT_AUTO)
             value = float(cleaned)
         except ValueError:
             return None, f"{spec.name}: '{text}' is not a number"
-        if value < 0:
+        if value < 0 and not spec.signed:
             return None, f"{spec.name}: must be >= 0 (got {value})"
         return value, None
     return text, None
