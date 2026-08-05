@@ -267,17 +267,24 @@ class WeatherObservation(Base):
     """
     __tablename__ = "weather_observations"
     __table_args__ = (
-        # At most ONE original reading per station per timestamp. A duplicated hour
-        # would double-count wetness inside a risk window and silently change a
+        # At most ONE original reading per farm per station per timestamp. A duplicated
+        # hour would double-count wetness inside a risk window and silently change a
         # snapshot digest, so this is enforced by the database rather than trusted to
         # the import's dedupe.
+        #
+        # SCOPED BY FARM because a public station serves many farms: two growers
+        # subscribing to the same CIMIS station must both be able to hold that hour,
+        # and without `farm_id` the second one's insert simply fails. It is also the
+        # semantically right key — `station_distance_km` is measured to THIS farm's
+        # field, so the same station-hour is genuinely different evidence for a farm
+        # 2 km away than for one 14 km away.
         #
         # PARTIAL (supersedes_id IS NULL) because corrections deliberately repeat the
         # station+timestamp of the row they replace — a plain unique index would make
         # the append-only correction path impossible.
         partial_unique_index(
             "uq_weather_observation_station_hour",
-            "station_id", "observed_at",
+            "farm_id", "station_id", "observed_at",
             where="supersedes_id IS NULL",
         ),
     )

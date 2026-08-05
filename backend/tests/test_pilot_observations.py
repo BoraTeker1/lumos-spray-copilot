@@ -168,6 +168,52 @@ def test_one_original_reading_per_station_hour_but_corrections_still_allowed(cli
     assert corrected.json()["supersedes_id"] == first["id"]
 
 
+def test_two_farms_may_each_hold_the_same_public_station_hour(client):
+    """A public station serves many farms; the uniqueness is per farm.
+
+    CIMIS stations are shared infrastructure. Without `farm_id` in the key the second
+    grower to receive an hour simply cannot store it, and the failure looks like a
+    duplicate the operator caused. It is also the right key on the merits:
+    `station_distance_km` is measured to THIS farm's field, so the same station-hour is
+    different evidence for a farm 2 km away than for one 14 km away.
+    """
+    farm = _farm(client, "Farm A")
+    neighbour = _farm(client, "Farm B")
+
+    first = _weather(client, farm["id"])
+    second = _weather(client, neighbour["id"])  # same station_id, same observed_at
+
+    assert first.status_code == 201
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] != second.json()["id"]
+
+    # And the per-farm constraint still bites within each farm.
+    assert _weather(client, farm["id"]).status_code == 409
+
+
+def test_the_duplicate_station_hour_409_still_explains_the_correction_path(client):
+    """The handler matches on SQLite's column list, which the widened key changed.
+
+    `main._integrity_handler` keys off the substring `weather_observations.station_id`
+    because SQLite names the violated COLUMNS, not the index. Adding `farm_id` to the
+    index changed that message. If the match ever stops firing the API silently
+    degrades to the generic "conflicts with one that already exists", which does not
+    tell anyone that a correction is posted with `supersedes_id`.
+    """
+    farm = _farm(client)
+    _weather(client, farm["id"])
+    conflict = _weather(client, farm["id"])
+
+    assert conflict.status_code == 409
+    detail = conflict.json()["detail"]
+    assert "supersedes_id" in detail
+    assert "double-count" in detail
+    assert detail != "This record conflicts with one that already exists.", (
+        "the specific weather message stopped matching — check _integrity_handler "
+        "against the current constraint columns"
+    )
+
+
 def test_observations_have_no_update_or_delete_route(client):
     """Append-only is enforced by there being no other way in."""
     farm = _farm(client)
