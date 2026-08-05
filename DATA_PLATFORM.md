@@ -309,6 +309,18 @@ need the pilot farm's actual station configuration and are not calibrated by thi
 
 ## 7. Operating it
 
+### Surfaces
+
+| Route | Audience | Notes |
+|---|---|---|
+| `GET /farms/{id}/data-readiness` | grower / PCA | **Not** operator-gated. Each measure is `{value,unit}` XOR `{abstained,reasons}` — never a null `value`. Carries a server-owned `basis_text`; `DataReadinessCard` renders it verbatim and writes no wording of its own |
+| `GET /internal/ingestion/sources` | operator | The 17-domain table + every source's status and blocker → `DomainRegistryTable` |
+| `GET /internal/ingestion` | operator | Runs with counts and issues → `IngestionCard` |
+| `POST /internal/ingestion/{source}/run` | operator | **Enqueues; never fetches inline.** Retries, dead-lettering and stall recovery live in the worker, and a route that fetched directly would be a second execution path with none of them |
+
+Nothing was added to the PCA-facing decision surface (`PreSpraySheet`, `/decisions/[id]`).
+A risk-shaped field there would break the shadow study's blinding.
+
 ```bash
 # Every declared source and the domain table governing it (operator-key gated)
 curl -H "X-Lumos-Operator-Key: $LUMOS_OPERATOR_KEY" localhost:8000/internal/ingestion/sources
@@ -335,7 +347,6 @@ real file.
 
 | Deferred | Why |
 |---|---|
-| `/farms/{id}/data-readiness` + the three React cards | Backend-only slice; the surfaces are the follow-up |
 | Live CIMIS capture | No AppKey yet. Fixtures are hand-authored and say so in their own `_provenance` block |
 | Postgres / PostGIS | SQLite is not the constraint yet |
 | `EntityLink` | Resolution here is deterministic — the operator names farm, field and station, so there is no ambiguity to record |

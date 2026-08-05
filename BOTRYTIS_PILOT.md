@@ -242,6 +242,28 @@ Blocking a real pilot:
   third-party, or nothing? Is leaf wetness *measured* or derived (which caps evidence
   grade at B/C)? `MAX_STATION_KM` / `MAX_GAP_HOURS` in `disease_risk.py` are
   provisional and cannot be chosen in the abstract.
+
+  **UPDATED 2026-08-05 — NARROWED, NOT CLOSED.** A CIMIS ingestion adapter now exists
+  (`app/ingest/`, `DATA_PLATFORM.md`), so weather can reach a snapshot automatically and
+  `ABSTAIN_NO_WEATHER` is retired for any farm with a configured station. The gap and
+  distance checks become real rather than vacuous.
+
+  **It does not supply leaf wetness.** CIMIS publishes no wetness item — verified
+  2026-08-05 against the hourly catalog — and the adapter is forbidden from deriving one
+  from humidity, because that derivation needs its own cited source (the same reason §3
+  refuses to guess the coefficients). So:
+
+  - `ABSTAIN_NO_LEAF_WETNESS` **stays binding** on CIMIS-only data.
+  - **Grade-A evidence remains unreachable without an on-site sensor.** That is a
+    procurement decision for the design partner, not a build task, and it is now a
+    measured per-farm fact on the readiness card rather than an abstract caveat.
+  - `MAX_STATION_KM` / `MAX_GAP_HOURS` stay **PROVISIONAL**. Ingestion does not
+    calibrate them; they still need the pilot farm's actual station configuration.
+  - `ABSTAIN_THRESHOLDS_NOT_SUPPLIED` (B1) is untouched.
+
+  Net effect on the assessment: it still abstains, with a shorter and more actionable
+  list — `[no_leaf_wetness_or_accepted_proxy, thresholds_not_supplied]`. One sensor and
+  one transcription away, both non-code.
 - **B3** — the PCA's action threshold for Botrytis: incidence %, severity index, or a
   qualitative call? The system must never invent one.
 - **B4** — is block-level randomization operationally acceptable, or will the grower

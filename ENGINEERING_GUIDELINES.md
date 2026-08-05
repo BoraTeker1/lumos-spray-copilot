@@ -78,7 +78,14 @@ Do **NOT** build any of the following unless the user explicitly instructs it in
   marketplace/portal/catalog, real payments, real lending, automated underwriting, credit
   scoring, money movement of any kind, revenue-sharing, commission-based quote ranking.
 - revenue-sharing / credit / money movement
-- drones / IoT / sensors / hardware / weather-station hookups
+- ~~drones / IoT / sensors / hardware / weather-station hookups~~ — **guardrail
+  partially lifted (2026-08-05)**: a climate **ingestion adapter** for CIMIS (a public
+  CA state weather API) is now built, see §5 and `DATA_PLATFORM.md`. Still NOT allowed:
+  drones, robotics, on-site sensors, or any physical hardware. That distinction is
+  load-bearing rather than pedantic — CIMIS publishes **no leaf-wetness item**, so the
+  one measurement the Botrytis pilot actually needs still requires an on-site sensor
+  and is therefore still out of scope. "Live weather" is no longer a Milestone-3 idea
+  for climate data specifically; every other feed remains gated
 - robotics / autonomous spray equipment
 - ~~computer vision / image-based disease diagnosis~~ — **guardrail lifted (2026-06-28)**: a
   photo-analysis copilot is now built (multimodal Claude, see §5). Still NOT allowed: autonomous
@@ -96,13 +103,65 @@ Do **NOT** build any of the following unless the user explicitly instructs it in
   database" stays true), bulk-importing a third-party label dataset, or any label value that
   is not transcribed from a primary document with its citation
 
-LLM weekly summaries, photo upload, and live weather are Milestone-3 ideas — also gated, not default.
+LLM weekly summaries and photo upload are Milestone-3 ideas — also gated, not default.
 
 ---
 
 ## 5. Product Features Already Built
 
 Backend + frontend both implement:
+
+- **Data-intelligence layer (2026-08-05)** — outside data reaching a decision auditably.
+  **Full contract in `DATA_PLATFORM.md`; read it before proposing anything here.**
+  Branch `data-intelligence-layer`.
+  - **The honest result, and do not overstate it.** This closed a SOFTWARE gap and made
+    a PROCUREMENT gap visible. The Botrytis assessment **still abstains**; the binding
+    blocker merely moved:
+    `no_weather_in_window` (nothing ever wrote a weather row — now fixed) →
+    **`no_leaf_wetness_or_accepted_proxy`** (an on-site sensor purchase), with
+    `thresholds_not_supplied` untouched (a transcription task). **CIMIS publishes no
+    leaf-wetness item** — verified 2026-08-05 against the hourly catalog, from
+    documentation rather than a live call because no AppKey exists. Never write that
+    this reduced pesticide use or unblocked the assessment.
+  - **17 domains declared, 9 in scope, 8 deferred** (`app/ingest/domains.py`). Declaring
+    is provably not building, via three mechanisms rather than prose: a source under a
+    deferred domain must be `deferred_to_finance_phase` and `build_adapter` raises;
+    `features.base.register()` refuses a non-MVP domain, so `debt_service_capacity`
+    cannot be *registered*; and every deferred domain quotes the §4 clause deferring it,
+    with a test asserting the quote still exists (whitespace-normalized, since §4 wraps).
+  - **Eight-stage pipeline**, each stage reusing something. `validate` reuses
+    `csv_import.validate_rows`, so an ingested reading meets the identical contract as a
+    concierge-entered one — but WITHOUT `existing_keys`, which cannot tell a repeat from
+    a correction. **Issues are recorded, never raised.** Three behaviours are
+    load-bearing: a row with no station-to-field distance is **dropped, not written with
+    a NULL** (`disease_risk` reads NULL as in-range *and* as close); a `units.Refusal`
+    drops the row carrying no number; and `recorded_at` is stamped at persist time,
+    **never back-dated** — so a backtest whose `as_of` precedes a backfill correctly
+    finds no admissible weather.
+  - **Six features that abstain rather than default.** `FeatureResult` is abstained
+    **iff** it has no value, so `0` can never stand in for "no data" — and `0 kg/ha of
+    active ingredient` is a pesticide-reduction *claim*, not a gap. Two are
+    all-or-nothing for a **bias** reason, not a purity one: a partial AI total is
+    *smaller*, not approximate, and the applications missing a `moa_group` are
+    disproportionately the repeat sprays that would drag rotation diversity down.
+    `leaf_wetness_hours` abstains permanently on CIMIS-only data — that is the point.
+  - **`feature_values` is a leak detector**: fully unique, no supersede chain, because
+    at a fixed `as_of` the inputs digest must reproduce forever. A digest that moves is
+    proof an input became visible that should not have been; it is recorded, not
+    overwritten. The digest covers the ADMISSIBLE set, or every ordinary late entry
+    would trip it and the alarm would be switched off within a week.
+  - **Surfaces:** grower-facing `GET /farms/{id}/data-readiness` (NOT operator-gated —
+    "why did my check not run" belongs to the grower) with a server-owned `basis_text`
+    the card renders verbatim; operator `GET /internal/ingestion[/sources]` and
+    `POST /internal/ingestion/{source}/run` (**enqueues, never fetches inline** — the
+    worker owns retries and dead-lettering). `DataReadinessCard`, `IngestionCard`,
+    `DomainRegistryTable`. **Nothing was added to the PCA-facing decision surface** —
+    that would break the shadow study's blinding.
+  - **Open, and not code:** no CIMIS AppKey (adapter ships inert; re-verify the
+    leaf-wetness finding against `/api/data` when one exists), and the
+    `station_distance_km` grading contradiction in `DATA_PLATFORM.md` §6 — pinned by
+    test, deliberately unfixed, decide before a real pilot enters weather by CSV.
+  - **It is NOT validation.** Capability rose; buyer evidence did not. §3/§11 unchanged.
 
 - **The operator REFERENCE FARM (2026-07-28)** — the first configuration in which the label
   checks actually run. Plan: `~/.claude/plans/jazzy-hatching-pumpkin.md`.
@@ -551,6 +610,18 @@ Backend + frontend both implement:
   - `app/weather.py` — `compute_disease_pressure`, `WeatherService` ABC, `MockWeatherService`,
     `default_weather_service`.
   - `app/pilot_evidence.py` — `build_pilot_evidence` + `build_pilot_case_study`.
+  - `app/ingest/` — outside data reaching a decision auditably. **Full contract in
+    `DATA_PLATFORM.md`; read that before touching any of it.** `base.py`/`domains.py`/
+    `registry.py`/`geo.py` are PURE (pinned by test); `pipeline.py` is the only
+    DB-touching module and `cimis.py` the only one with a network call — the first and
+    only outbound HTTP in this codebase, confined to one `_http_get` with an injectable
+    transport and a `_redact` that strips the key. The pipeline asks `describe()` BEFORE
+    `fetch`, so a deployment without `LUMOS_CIMIS_APP_KEY` is inert by construction.
+  - `app/features/` — derived values that abstain rather than default. `base.py`'s one
+    invariant is that a `FeatureResult` is abstained **iff** it has no value, so a card
+    can never render an abstention as `0`. `pit_view.py` gives `SprayEvent` the two
+    timestamps it never had (no migration — a backfilled `recorded_at` would fabricate
+    a claim about when something was known). `compute.py` is the only DB-touching module.
   - `app/seed.py` — `run()` drops+recreates schema and loads the 3 demo farms.
 - **Key models:** `Farm`, `SprayEvent`, `ScoutObservation`, `PlannedSpray`, `Recommendation`,
   `PilotFeedback`, `PilotImportBatch`, `SprayBaseline`, `PilotEvent` (workflow telemetry),
@@ -597,6 +668,12 @@ Backend + frontend both implement:
     `require_pca_for_farm`), and grower-facing `GET /farms/{id}/label-resolution` (same
     resolver, no operator key — tells a grower whether a verified label supplies PHI/REI or
     whether they still have to type them)
+  - Data platform: grower-facing `GET /farms/{id}/data-readiness` (per field/block, each
+    measure either `{value,unit}` or `{abstained,reasons}` — never a number-shaped
+    placeholder — plus a server-owned `basis_text`); operator
+    `GET /internal/ingestion/sources` (the 17-domain table with each deferral's §4
+    citation), `GET /internal/ingestion` (runs with counts + issues),
+    `POST /internal/ingestion/{source_key}/run` (**enqueues**, never fetches inline)
   - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
     `/export/pilot-feedback.csv`
   - `GET /health`; interactive docs at `/docs`.
@@ -630,7 +707,10 @@ Backend + frontend both implement:
   `DecisionEvidenceCard` (incl. demo-outcome reconciliation line), `AnalyticsCard`,
   `WeatherCard`, `ComplianceCard`, `RecommendationPanel`, `AgronomistReview`, `NextActionCard`,
   `WeeklyReport`, `PilotEvidenceCard`, `ReductionCard`, `ConciergePilotCard` (on `/internal`
-  only), `PhotoScoutCard`, `SprayEventForm`, `ScoutObservationForm`, `RiskBadge`,
+  only), `DataReadinessCard` (farm detail — renders the server-owned `basis_text`
+  verbatim and contains NO explanatory wording of its own; an abstention shows "Not
+  calculated" plus reasons, never a number), `IngestionCard` + `DomainRegistryTable`
+  (`/internal` only), `PhotoScoutCard`, `SprayEventForm`, `ScoutObservationForm`, `RiskBadge`,
   `SeverityBadge`.
 - **Page hierarchy:** dashboard (`/`) uses `GET /farms-overview` (urgency-ranked cards with
   why + next action; **Türkiye demo farms are hidden by default** behind a "show secondary-market
@@ -686,6 +766,16 @@ python -m app.label_sync     # 2 transcribed labels
 python -m app.reference_farm # refuses if a reference farm already exists; prints the
                              # PCA token ONCE — copy it or you cannot act as that PCA
 
+# Background worker: ingestion + feature recomputation. Runs the schedule then drains.
+# INERT without a provider credential — records skipped_no_credential, no network call.
+python -m app.jobs.worker --once --queues default,ingest,features
+#   Enable the CIMIS adapter (free AppKey from et.water.ca.gov):
+#     export LUMOS_CIMIS_APP_KEY=...
+#     export LUMOS_CIMIS_SUBSCRIPTIONS="4:1:111"   # farm:field:station
+#   A subscription whose FIELD HAS NO CENTROID ingests nothing: every row drops with
+#   `no_field_geolocation`. Deliberate (a NULL distance reads downstream as "in range
+#   and close"), but it looks like a broken feed. Set Field.centroid_lat/lon first.
+
 # Run backend:  uvicorn app.main:app --reload   (http://localhost:8000, docs at /docs)
 #   With a reference farm present the DB holds real (non-demo) records, so the §8
 #   operator-key interlock fires and the API REFUSES TO START without:
@@ -702,7 +792,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **665 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **864 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
@@ -766,6 +856,18 @@ npm run dev        # http://localhost:3000
   for calibration against real outcomes; AI judgments are NEVER seeded or fabricated, and
   mock-service outputs must never be presented as model performance. Don't blur the layers —
   the spray decision is still the rule engine + PCA.
+- **An ingested reading is REAL, not demo, and not reviewed.** A provider-fetched row
+  carries `data_source="provider_api"` / `data_confidence="provider_reported"` /
+  `source_type="station_export"`. Describe it as machine-fetched and unreviewed — never
+  as PCA-verified, which would be a claim with legal weight about a number nobody looked
+  at. All three columns are set because different guards read different ones.
+- **An abstention is never rendered as `0`.** A feature that cannot be calculated says so
+  and gives its reasons; the API omits the `value` key entirely rather than nulling it.
+  "0 leaf-wetness hours" reads as *no wetness occurred*, which is the opposite of *we
+  cannot see wetness* — and errs in the direction that would skip a needed spray.
+- **`recorded_at` on a backfill is ingest time, not observation time.** Backfilled
+  history is therefore admissible only for `as_of` values after the backfill ran. A
+  backtest over that window honestly finds nothing.
 - Always use **"decision support only"** language; never "diagnoses," never "tells you to spray."
 
 ---
@@ -855,6 +957,17 @@ The ask:
   a false BLOCK there would end a PCA's trust permanently.
 - **No MRL reference data** — an MRL is destination-market law, not label law; the label layer
   does not and will not supply it.
+- **No leaf-wetness measurement, and the ingestion layer cannot fix it.** CIMIS publishes
+  no wetness item, and deriving one from humidity is refused because the derivation
+  itself needs a cited source. The Botrytis assessment therefore still abstains on
+  `no_leaf_wetness_or_accepted_proxy`, and grade-A evidence stays unreachable without an
+  on-site sensor — which §4 still excludes. This is a **purchase**, not a build.
+- **No CIMIS credential.** The adapter ships inert, and the leaf-wetness finding was
+  verified from published documentation rather than a live API call.
+- **`disease_risk.evidence_grade` treats an unstated station distance as *close*** and
+  can reach GRADE_A, contradicting the CSV importer's warning. Pinned by test, not fixed
+  (`DATA_PLATFORM.md` §6) — it would change the pilot's scoring contract. Only bites
+  hand-entered CSV weather; decide before the first real pilot enters any.
 - **Incumbents** may already cover parts (FieldView-style platforms, PCA software, ag ERPs).
 - **Data-entry burden** — someone has to log sprays/scouting; unclear who, in practice.
 - **Unclear buyer** and **low willingness-to-pay** from individual growers.
@@ -875,6 +988,14 @@ The ask:
   question is asked in — and **still no buyer evidence was created**. Ceiling raised twice,
   evidence unmoved. That is the pattern to be skeptical of, not encouraged by, the next time
   the answer to "what should we build?" sounds obvious.
+- The **data-intelligence layer was built anyway** (2026-08-05) on an explicit
+  instruction, ahead of buyer validation. Note what it did and did not do: weather can
+  now reach a decision auditably, seventeen domains are declared with the eight
+  forbidden ones enforced in code, and six features abstain honestly — and **still no
+  buyer evidence was created**. That is now THREE times the ceiling has been raised
+  while evidence stayed flat (label layer, reference farm, data platform). The pattern
+  is the warning, not the achievement. The next "what should we build?" whose answer
+  sounds obvious is the one to refuse.
 - Remaining deep functionality (**MRL data** especially — destination-market law, a different
   source, still out of scope per §4) waits on buyer validation.
 

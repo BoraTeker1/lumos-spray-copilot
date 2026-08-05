@@ -241,6 +241,22 @@ export const api = {
   getWeatherRisk: (farmId) => request(`/farms/${farmId}/weather-risk`),
   getCompliance: (farmId) => request(`/farms/${farmId}/compliance`),
 
+  // Data readiness (grower-facing, NOT operator-gated). Answers "can this farm's data
+  // support a measurement yet" — deliberately carries no risk band and no action.
+  getDataReadiness: (farmId) => request(`/farms/${farmId}/data-readiness`),
+
+  // Ingestion (operator only)
+  getIngestionSources: () =>
+    request("/internal/ingestion/sources", { headers: operatorHeaders() }),
+  getIngestionRuns: (params = {}) =>
+    request(`/internal/ingestion${qs(params)}`, { headers: operatorHeaders() }),
+  runIngestionSource: (sourceKey, data) =>
+    request(`/internal/ingestion/${sourceKey}/run`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
 

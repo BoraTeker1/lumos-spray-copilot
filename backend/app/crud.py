@@ -391,6 +391,37 @@ def list_weather_for_block(
     return list(db.scalars(stmt.order_by(models.WeatherObservation.observed_at)))
 
 
+def list_ingestion_runs(
+    db: Session, farm_id: int | None = None, limit: int = 50
+) -> list[models.IngestionRun]:
+    """Recent ingestion runs, newest first."""
+    stmt = select(models.IngestionRun)
+    if farm_id is not None:
+        stmt = stmt.where(models.IngestionRun.farm_id == farm_id)
+    stmt = stmt.order_by(models.IngestionRun.id.desc()).limit(max(1, min(limit, 500)))
+    return list(db.scalars(stmt))
+
+
+def list_feature_values_for_farm(db: Session, farm_id: int) -> list[models.FeatureValue]:
+    """The LATEST stored value per (entity, feature) for a farm.
+
+    Latest by `as_of`, not by `computed_at`: the question a readiness card answers is
+    "what is true now", and a recompute of an older `as_of` — which is legitimate and
+    happens whenever someone backfills — must not appear to be the current state.
+    """
+    rows = list(
+        db.scalars(
+            select(models.FeatureValue)
+            .where(models.FeatureValue.farm_id == farm_id)
+            .order_by(models.FeatureValue.as_of)
+        )
+    )
+    latest: dict = {}
+    for row in rows:
+        latest[(row.entity_type, row.entity_id, row.name, row.version)] = row
+    return list(latest.values())
+
+
 def live_weather_by_station_hour(db: Session, farm_id: int) -> dict:
     """Live (non-superseded) readings for a farm, keyed by (station, observed_at).
 

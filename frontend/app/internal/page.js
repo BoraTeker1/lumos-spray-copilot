@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
+import DomainRegistryTable from "@/components/DomainRegistryTable";
+import IngestionCard from "@/components/IngestionCard";
 import LabelLibraryCard from "@/components/LabelLibraryCard";
 import PilotOperatorCard from "@/components/PilotOperatorCard";
 import { api } from "@/lib/api";
@@ -234,6 +236,31 @@ export default function InternalToolsPage() {
           it. Nothing here shortens that chain.
         </p>
         <LabelLibraryCard farmId={farmId} />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">Data ingestion</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Enqueue and inspect ingestion runs. The counts matter more than the status: a
+          run that fetched 24 rows and admitted 3 is not a healthy run, and each of the
+          21 dropped rows is explained individually rather than summarised away. Without
+          a provider credential the adapter is inert by construction — it records
+          <span className="font-mono"> skipped_no_credential</span> and makes no network
+          call.
+        </p>
+        <IngestionCard />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">Data domains</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Seventeen domains are declared; eight are deferred to a finance phase that
+          does not exist, and each names the ENGINEERING_GUIDELINES.md clause deferring it. Declaring is
+          not building: a source under a deferred domain cannot have an adapter, and the
+          feature registry refuses a non-MVP domain outright. This table makes that
+          boundary visible rather than leaving it in a document.
+        </p>
+        <DomainRegistryTable />
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">

@@ -37,6 +37,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ActivityTimeline from "@/components/ActivityTimeline";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import ComplianceCard from "@/components/ComplianceCard";
+import DataReadinessCard from "@/components/DataReadinessCard";
 import EvidencePanel from "@/components/EvidencePanel";
 import InputPlanForm from "@/components/InputPlanForm";
 import MetricCard from "@/components/MetricCard";
@@ -349,6 +350,11 @@ function FarmDetail({ farmId }) {
               >
                 <ComplianceCard data={compliance} />
               </SectionCard>
+
+              {/* Renders for real and demo farms alike: unlike the weather widget
+                  above, this reports what the data IS, so a demo farm honestly shows
+                  its measures abstaining. */}
+              <DataReadinessCard farmId={farmId} />
 
               <SectionCard
                 title="Inputs & orders"

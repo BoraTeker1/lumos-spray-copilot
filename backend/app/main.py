@@ -19,6 +19,7 @@ from app import (
 from app.analytics import compute_cost_analytics
 # Imported for its side effect: registering the feature specs and their job handlers.
 from app import features as _features  # noqa: F401
+from app.ingest import base as ingest_base
 from app.ingest import registry as ingest_registry
 from app.jobs import queue as job_queue
 from app.database import SessionLocal, get_db, init_db
@@ -1187,6 +1188,195 @@ def _compliance_basis_text(db: Session, farm_id: int) -> str:
 def _advisor_label(farm) -> str:
     """U.S. specialty-crop growers work with a PCA; elsewhere we just say agronomist."""
     return "PCA / agronomist" if (farm.country or "").upper() in ("US", "USA") else "agronomist"
+
+
+# ----------------------------------------------------------- Data readiness
+# One server-owned sentence, exactly as `_compliance_basis_text` is. The lesson that
+# produced that helper was four components each hardcoding their own wording and
+# drifting apart; this surface starts on the right side of it, so `DataReadinessCard`
+# renders `basis_text` verbatim and contains no sentence of its own.
+
+DATA_READINESS_BASIS_TEXT_NONE = (
+    "No outside data source is configured for this farm, so every reading here was "
+    "entered by hand. Nothing on this card is a live feed."
+)
+
+
+def _data_readiness_basis_text(runs: list, feature_rows: list) -> str:
+    """Where the numbers on the readiness card come from. Never a claim about risk.
+
+    Deliberately says what the data IS, not what it means. This card exists to answer
+    "can this farm support a measurement yet", and a sentence that drifted toward
+    "conditions look favourable" would turn a data-quality surface into a spray prompt.
+    """
+    if not runs:
+        return DATA_READINESS_BASIS_TEXT_NONE
+    succeeded = sum(1 for r in runs if r.status == ingest_base.RUN_SUCCEEDED)
+    skipped = sum(1 for r in runs if r.status == ingest_base.RUN_SKIPPED_NO_CREDENTIAL)
+    abstained = sum(1 for row in feature_rows if row.abstained)
+
+    if succeeded == 0 and skipped:
+        return (
+            "A weather source is configured but has no credential, so no data has been "
+            "fetched. Every value below is still hand-entered."
+        )
+    sentence = (
+        f"{succeeded} ingestion run(s) have brought in provider-reported weather for "
+        f"this farm. Provider readings are machine-fetched and unreviewed — they are "
+        f"not PCA-verified."
+    )
+    if abstained:
+        sentence += (
+            f" {abstained} measure(s) below could not be calculated; each one says why "
+            f"rather than showing a zero."
+        )
+    return sentence
+
+
+@app.get("/farms/{farm_id}/data-readiness", tags=["farms"])
+def data_readiness(farm_id: int, db: Session = Depends(get_db)):
+    """Whether this farm's data can yet support a measurement, per field and block.
+
+    Grower/PCA-facing and deliberately NOT under `/internal`: the answer to "why does
+    my risk assessment still say it did not run" belongs to the person whose farm it
+    is, not only to an operator.
+
+    Every feature is rendered as EITHER `{value, unit}` OR `{abstained, reasons}` —
+    never a number-shaped placeholder, and never a null `value` key, because a null in
+    a numeric field is exactly what a template turns into `0` or `--`. The shape comes
+    straight from `FeatureResult.as_payload`, whose invariant makes the two states
+    mutually exclusive.
+
+    Carries no risk band, no product, no rate and no action. A readiness card that
+    drifted into "conditions look favourable" would be a spray prompt wearing a
+    data-quality label, and would also break the shadow study's blinding.
+    """
+    _require_farm(db, farm_id)
+
+    rows = crud.list_feature_values_for_farm(db, farm_id)
+    runs = crud.list_ingestion_runs(db, farm_id=farm_id, limit=50)
+
+    def entity_block(entity_type: str) -> list:
+        out = []
+        for entity_id in sorted({r.entity_id for r in rows if r.entity_type == entity_type}):
+            measures = {}
+            for row in rows:
+                if row.entity_type != entity_type or row.entity_id != entity_id:
+                    continue
+                measures[row.name] = (
+                    {"abstained": True, "reasons": list(row.reasons or [])}
+                    if row.abstained
+                    else {"value": row.value, "unit": row.unit}
+                )
+            out.append({"entity_id": entity_id, "measures": measures})
+        return out
+
+    return {
+        "farm_id": farm_id,
+        "fields": entity_block("field"),
+        "crop_cycles": entity_block("crop_cycle"),
+        "blocks": entity_block("block"),
+        "ingestion": {
+            "runs": len(runs),
+            "last_run_at": runs[0].finished_at if runs else None,
+            "last_status": runs[0].status if runs else None,
+        },
+        # Server-owned. The card renders this string and writes none of its own.
+        "basis_text": _data_readiness_basis_text(runs, rows),
+    }
+
+
+@app.get("/internal/ingestion", tags=["internal"])
+def internal_ingestion_runs(
+    farm_id: int | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL ingestion health: recent runs with their counts and issues.
+
+    The counts are the point. A run that fetched 24 rows and admitted 24 is a different
+    event from one that fetched 24 and admitted 3, and a pipeline reporting only
+    success/failure would show both as `succeeded`.
+    """
+    runs = crud.list_ingestion_runs(db, farm_id=farm_id, limit=limit)
+    return {
+        "runs": [
+            {
+                "id": run.id,
+                "source_key": run.source_key,
+                "domain": run.domain,
+                "farm_id": run.farm_id,
+                "field_id": run.field_id,
+                "status": run.status,
+                "window_start": run.window_start,
+                "window_end": run.window_end,
+                "adapter_version": run.adapter_version,
+                "counts": {
+                    "fetched": run.fetched_count,
+                    "parsed": run.parsed_count,
+                    "admitted": run.admitted_count,
+                    "duplicate": run.duplicate_count,
+                    "superseded": run.superseded_count,
+                    "issues": run.issue_count,
+                },
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+                "duration_ms": run.duration_ms,
+                "error": run.error,
+                "issues": [
+                    {
+                        "stage": issue.stage,
+                        "severity": issue.severity,
+                        "code": issue.code,
+                        "message": issue.message,
+                        "row_index": issue.row_index,
+                    }
+                    for issue in run.issues[:20]
+                ],
+            }
+            for run in runs
+        ],
+    }
+
+
+@app.post("/internal/ingestion/{source_key}/run", tags=["internal"])
+def internal_ingestion_run_now(
+    source_key: str,
+    payload: schemas.IngestionRunRequest,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL: enqueue one ingestion run. Does NOT fetch synchronously.
+
+    Enqueuing rather than running inline is deliberate: the worker is where retries,
+    dead-lettering and stall recovery live, and a route that fetched directly would be
+    a second execution path with none of them. It also keeps a slow provider from
+    holding an HTTP request open.
+    """
+    if source_key not in ingest_registry.source_keys():
+        raise HTTPException(status_code=404, detail=f"unknown source {source_key!r}")
+    _require_farm(db, payload.farm_id)
+
+    job = job_queue.enqueue(
+        db,
+        "ingest.run_source",
+        {
+            "source_key": source_key,
+            "farm_id": payload.farm_id,
+            "field_id": payload.field_id,
+            "station_id": payload.station_id,
+            "lookback_hours": payload.lookback_hours,
+        },
+        source_key=source_key,
+    )
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "source": ingest_registry.describe(source_key).as_payload(),
+        "note": (
+            "Enqueued. Run the worker to execute it: "
+            "python -m app.jobs.worker --once --queues ingest"
+        ),
+    }
 
 
 # -------------------------------------------------------------- Weekly report

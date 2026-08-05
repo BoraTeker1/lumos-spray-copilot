@@ -1018,6 +1018,25 @@ class RowImportRequest(BaseModel):
     ai_judgment_id: int | None = None
 
 
+# ------------------------------------------------------- Ingestion (operator)
+class IngestionRunRequest(BaseModel):
+    """Ask for one ingestion run over one window.
+
+    `station_id` is REQUIRED and never inferred. Resolution in the pipeline is
+    deterministic precisely because the operator names farm, field and station up
+    front — a reading from a station nobody asked for is recorded as an issue rather
+    than silently joined to whatever field looked closest.
+
+    Note that `field_id` is optional but effectively required in practice: a run whose
+    field has no centroid drops every row with `no_field_geolocation`, because a NULL
+    station distance reads downstream as "in range and close".
+    """
+    farm_id: int
+    station_id: str = Field(min_length=1)
+    field_id: int | None = None
+    lookback_hours: int = Field(default=6, ge=1, le=24 * 90)
+
+
 # ------------------------------------------------------- CSV pilot import
 class CsvImportRequest(BaseModel):
     """CSV pilot import (dry-run by default — nothing is written until dry_run=False).
