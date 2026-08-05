@@ -25,61 +25,31 @@ from the audit record years later.
 
 Nothing here decides anything. It gathers, filters, and hashes; `app/disease_risk.py`
 reads the result.
+
+As of the platform work, the two-timestamp rule itself lives in `app/pit.py` — every
+feature, forecast, and score needs the same guarantee, and there must be exactly one
+implementation of it. This module keeps its own names as re-exports so the pilot's
+contract (and `tests/test_leakage.py`) is unchanged.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from app import pit
+from app.pit import (  # noqa: F401  (re-exported: the pilot's vocabulary is unchanged)
+    EXCLUDED_DEMO_OR_MOCK,
+    EXCLUDED_FUTURE_OBSERVATION,
+    EXCLUDED_QUALITY_FLAG,
+    EXCLUDED_RECORDED_LATE,
+    EXCLUDED_SUPERSEDED,
+    admissible,
+)
+
 SNAPSHOT_VERSION = "risk-snapshot-v1"
 
-# Reasons an input was excluded. Recorded per row so the exclusion is auditable —
-# "we did not use this, and here is why" is part of the evidence, not a detail.
-EXCLUDED_FUTURE_OBSERVATION = "observed_after_as_of"
-EXCLUDED_RECORDED_LATE = "recorded_after_as_of"
-EXCLUDED_SUPERSEDED = "superseded_by_correction"
-EXCLUDED_QUALITY_FLAG = "quality_flagged"
-EXCLUDED_DEMO_OR_MOCK = "demo_or_simulated_source"
-
-
-def _is_demo(row) -> bool:
-    """Mirrors decision_status.is_demo_record without importing it (framework-free)."""
-    return (
-        getattr(row, "data_source", None) == "demo"
-        or getattr(row, "data_confidence", None) == "simulated"
-    )
-
-
-def admissible(row, as_of: datetime, superseded_ids: set) -> str | None:
-    """Why this observation may NOT be used, or None when it may.
-
-    The two-timestamp rule lives here and nowhere else.
-    """
-    if getattr(row, "id", None) in superseded_ids:
-        return EXCLUDED_SUPERSEDED
-    observed_at = getattr(row, "observed_at", None)
-    if observed_at is None or observed_at > as_of:
-        return EXCLUDED_FUTURE_OBSERVATION
-    # The hindsight guard: knowing it later is not knowing it then.
-    recorded_at = getattr(row, "recorded_at", None)
-    if recorded_at is not None and recorded_at > as_of:
-        return EXCLUDED_RECORDED_LATE
-    if getattr(row, "quality_flag", None):
-        return EXCLUDED_QUALITY_FLAG
-    # A demo/simulated reading must never reach a real assessment. The farm-level
-    # mixing guard already prevents this; belt and braces, because a fabricated input
-    # silently entering calibration would poison every number downstream.
-    if _is_demo(row):
-        return EXCLUDED_DEMO_OR_MOCK
-    return None
-
-
-def _superseded_ids(rows) -> set:
-    return {
-        r.supersedes_id for r in rows if getattr(r, "supersedes_id", None) is not None
-    }
+_is_demo = pit.is_demo
+_superseded_ids = pit.superseded_ids
 
 
 def _weather_payload(row) -> dict:
@@ -147,9 +117,12 @@ class SnapshotDraft:
 
 
 def digest_of(payload: dict) -> str:
-    """sha256 over canonical JSON — stable across dict ordering and re-serialization."""
-    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(f"{SNAPSHOT_VERSION}|{body}".encode()).hexdigest()
+    """sha256 over canonical JSON — stable across dict ordering and re-serialization.
+
+    Namespaced by SNAPSHOT_VERSION, so digests computed before and after the move to
+    `app/pit.py` are byte-identical.
+    """
+    return pit.digest_of(payload, SNAPSHOT_VERSION)
 
 
 def build_snapshot(

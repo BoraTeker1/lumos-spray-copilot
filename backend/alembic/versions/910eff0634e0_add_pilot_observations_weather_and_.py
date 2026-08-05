@@ -89,7 +89,7 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_weather_observations_block_id'), ['block_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_weather_observations_farm_id'), ['farm_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_weather_observations_observed_at'), ['observed_at'], unique=False)
-        batch_op.create_index('uq_weather_observation_station_hour', ['station_id', 'observed_at'], unique=True, sqlite_where=sa.text('supersedes_id IS NULL'))
+        batch_op.create_index('uq_weather_observation_station_hour', ['station_id', 'observed_at'], unique=True, sqlite_where=sa.text('supersedes_id IS NULL'), postgresql_where=sa.text('supersedes_id IS NULL'))
 
     with op.batch_alter_table('pilot_import_batches', schema=None) as batch_op:
         # server_default is REQUIRED here: the model's `default=0` is applied in
@@ -111,7 +111,7 @@ def downgrade() -> None:
         batch_op.drop_column('weather_observation_count')
 
     with op.batch_alter_table('weather_observations', schema=None) as batch_op:
-        batch_op.drop_index('uq_weather_observation_station_hour', sqlite_where=sa.text('supersedes_id IS NULL'))
+        batch_op.drop_index('uq_weather_observation_station_hour', sqlite_where=sa.text('supersedes_id IS NULL'), postgresql_where=sa.text('supersedes_id IS NULL'))
         batch_op.drop_index(batch_op.f('ix_weather_observations_observed_at'))
         batch_op.drop_index(batch_op.f('ix_weather_observations_farm_id'))
         batch_op.drop_index(batch_op.f('ix_weather_observations_block_id'))

@@ -14,9 +14,10 @@ from sqlalchemy.orm import Session
 
 from app import (
     ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction,
-    label_extraction, llm, operator_key, pca_authority, schemas, vision,
+    label_extraction, llm, models, operator_key, pca_authority, schemas, vision,
 )
 from app.analytics import compute_cost_analytics
+from app.jobs import queue as job_queue
 from app.database import SessionLocal, get_db, init_db
 from app.pilot_evidence import (
     build_ai_calibration,
@@ -2139,6 +2140,58 @@ def internal_ai_calibration(db: Session = Depends(get_db)):
     return build_ai_calibration(
         judgments, decisions_by_id, crud.list_all_follow_up_events(db)
     )
+
+
+@app.get("/internal/jobs", tags=["internal"])
+def internal_jobs(
+    status: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL background-job health: queue counts plus the most recent jobs.
+
+    The question this answers is "is the platform still ingesting and recomputing", and
+    the number that matters is `dead` — a dead job is work that silently stopped
+    happening, which for a weather feed means every dependent feature quietly goes
+    stale rather than visibly failing.
+    """
+    query = db.query(models.Job)
+    if status:
+        query = query.filter(models.Job.status == status)
+    recent = query.order_by(models.Job.updated_at.desc(), models.Job.id.desc()).limit(
+        max(1, min(limit, 500))
+    ).all()
+    return {
+        "stats": job_queue.stats(db),
+        "jobs": [
+            {
+                "id": job.id,
+                "queue": job.queue,
+                "task_name": job.task_name,
+                "status": job.status,
+                "priority": job.priority,
+                "attempts": job.attempts,
+                "max_attempts": job.max_attempts,
+                "run_at": job.run_at,
+                "source_key": job.source_key,
+                "last_error": job.last_error,
+                "locked_by": job.locked_by,
+                "finished_at": job.finished_at,
+                "created_at": job.created_at,
+                "runs": [
+                    {
+                        "attempt": run.attempt,
+                        "status": run.status,
+                        "started_at": run.started_at,
+                        "duration_ms": run.duration_ms,
+                        "error": run.error,
+                    }
+                    for run in job.runs
+                ],
+            }
+            for job in recent
+        ],
+    }
 
 
 @app.get("/internal/instrumentation", tags=["internal"])

@@ -10,6 +10,7 @@ Two defences are tested here:
   2. TEMPORAL — admissibility is checked on BOTH `observed_at` and `recorded_at`.
      Filtering on `observed_at` alone looks correct and silently leaks.
 """
+import importlib
 import inspect
 import json
 from datetime import datetime, timedelta
@@ -94,11 +95,49 @@ def test_snapshot_signature_admits_no_post_decision_inputs():
         assert not any(f in name for f in forbidden), f"leaky parameter: {name}"
 
 
+# The only `app` modules risk_snapshot may import: pure, stdlib-only, sessionless.
+# The list is explicit and short on purpose — adding to it is the visible change in
+# review that adding a leak would otherwise avoid.
+FRAMEWORK_FREE_APP_MODULES = ("pit",)
+
+
 def test_module_cannot_reach_a_database_or_the_app_at_all():
-    """Framework-free by construction — it cannot query for what it must not see."""
-    source = inspect.getsource(risk_snapshot)
-    for forbidden in ("sqlalchemy", "fastapi", "from app import", "import crud"):
-        assert forbidden not in source, f"risk_snapshot must not import {forbidden}"
+    """Framework-free by construction — it cannot query for what it must not see.
+
+    Restated (2026-07-28) when the two-timestamp rule moved to `app/pit.py`: the
+    invariant was never "imports no app module", it was "cannot reach a session, a
+    model, or a route". A blanket ban on `from app import` enforced that by proxy and
+    would now forbid depending on the very module that OWNS the admissibility rule.
+
+    The replacement is stricter, not looser: it names the modules that may be imported,
+    and it applies the same source check TRANSITIVELY to each of them — so `pit` is now
+    held to the boundary too, which the old string check never did.
+    """
+    forbidden = ("sqlalchemy", "fastapi", "import crud", "SessionLocal", "get_db")
+
+    def assert_clean(module, name):
+        source = inspect.getsource(module)
+        for token in forbidden:
+            assert token not in source, f"{name} must not reference {token}"
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("from app.") or stripped.startswith("from app import"):
+                imported = stripped.replace("from app import", "").replace("from app.", "")
+                imported = imported.split(" import ")[0].strip().rstrip("(").strip()
+                for part in imported.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    assert part in FRAMEWORK_FREE_APP_MODULES, (
+                        f"{name} imports `app.{part}`, which is not on the framework-free "
+                        f"allowlist; the leakage boundary depends on every dependency "
+                        f"being sessionless"
+                    )
+
+    assert_clean(risk_snapshot, "risk_snapshot")
+    for allowed in FRAMEWORK_FREE_APP_MODULES:
+        module = importlib.import_module(f"app.{allowed}")
+        assert_clean(module, f"app.{allowed}")
 
 
 def test_no_post_decision_value_appears_in_the_payload_even_when_all_of_it_exists():

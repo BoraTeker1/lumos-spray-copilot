@@ -3,7 +3,11 @@ backend/.venv/
 __pycache__/
 *.pyc
 backend/lumos.db
+# Pre-migration snapshots of the dev database (lumos.db.pre-*, .bak, rehearsal copies).
+# Taking one before a migration is the documented workflow; committing one is not.
+backend/lumos.db.*
 .pytest_cache/
+backend/.lumos-storage/
 
 # Node / Next.js
 frontend/node_modules/

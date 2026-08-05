@@ -3,12 +3,12 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text,
-    select, text,
+    select,
 )
 from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
 from app import clock, decision_status, procurement_status
-from app.database import Base
+from app.database import Base, partial_unique_index
 
 # All created_at defaults go through the app clock so a pinned LUMOS_DEMO_TODAY keeps
 # seeded and live records on the same timeline (see app/clock.py).
@@ -44,6 +44,17 @@ class Farm(Base):
     is_reference: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # ---- locale primitives (platform Phase 0)
+    # Currency, timezone and jurisdiction were previously INFERRED from `country` in
+    # main.py's display helpers ("$" if US else "TRY"). That inference is what makes a
+    # second market a rewrite, so the facts are columns now. Backfilled from the old
+    # rule, so no existing behaviour changes.
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), index=True
+    )
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    timezone: Mapped[str | None] = mapped_column(String(60))
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(10))
 
     spray_events: Mapped[list["SprayEvent"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
@@ -75,6 +86,13 @@ class Farm(Base):
     blocks: Mapped[list["Block"]] = relationship(
         back_populates="farm", cascade="all, delete-orphan"
     )
+    fields: Mapped[list["Field"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
+    crop_cycles: Mapped[list["CropCycle"]] = relationship(
+        back_populates="farm", cascade="all, delete-orphan"
+    )
+    organization: Mapped["Organization | None"] = relationship(back_populates="farms")
 
 
 class Block(Base):
@@ -97,6 +115,10 @@ class Block(Base):
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     crop: Mapped[str | None] = mapped_column(String(100))
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled: reads
+    # migrate to the spine gradually, and a record created by an older client is still
+    # valid. See the "canonical spine" section at the end of this module.
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
     cultivar: Mapped[str | None] = mapped_column(String(120))
     area: Mapped[float | None] = mapped_column(Float)  # in area_unit
     area_unit: Mapped[str | None] = mapped_column(String(10))  # "acres" / "m2"
@@ -123,6 +145,12 @@ class SprayEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled;
+    # reads migrate gradually. See the "canonical spine" section below.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
+    operation_id: Mapped[int | None] = mapped_column(ForeignKey("operations.id"), index=True)
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
     # EPA registration number, when known. This is the join key to a product's label
     # record: without it a past application cannot be tied to a product identity, so
@@ -186,6 +214,11 @@ class ScoutObservation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled;
+    # reads migrate gradually. See the "canonical spine" section below.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
     observation_date: Mapped[date] = mapped_column(Date, nullable=False)
     crop_stage: Mapped[str | None] = mapped_column(String(100))
     visible_issue: Mapped[str | None] = mapped_column(String(200))
@@ -242,16 +275,19 @@ class WeatherObservation(Base):
         # PARTIAL (supersedes_id IS NULL) because corrections deliberately repeat the
         # station+timestamp of the row they replace — a plain unique index would make
         # the append-only correction path impossible.
-        Index(
+        partial_unique_index(
             "uq_weather_observation_station_hour",
             "station_id", "observed_at",
-            unique=True,
-            sqlite_where=text("supersedes_id IS NULL"),
+            where="supersedes_id IS NULL",
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled;
+    # reads migrate gradually. See the "canonical spine" section below.
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
     # Weather is usually recorded per station, not per block; nullable by design.
     block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"), index=True)
     station_id: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -301,6 +337,10 @@ class ScoutingSample(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled;
+    # reads migrate gradually. See the "canonical spine" section below.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
     # A sample is always OF a block — that is what makes it comparable across arms.
     block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
@@ -447,11 +487,10 @@ class PcaDisposition(Base):
         # same reason as the weather index: a correction repeats the planned_spray_id
         # of the row it replaces, and a plain unique index would make the append-only
         # correction path impossible.
-        Index(
+        partial_unique_index(
             "uq_pca_disposition_live_per_decision",
             "planned_spray_id",
-            unique=True,
-            sqlite_where=text("supersedes_id IS NULL"),
+            where="supersedes_id IS NULL",
         ),
     )
 
@@ -498,11 +537,10 @@ class PilotProtocol(Base):
     """
     __tablename__ = "pilot_protocols"
     __table_args__ = (
-        Index(
+        partial_unique_index(
             "uq_pilot_protocol_active_version",
             "farm_id", "version",
-            unique=True,
-            sqlite_where=text("effective_to IS NULL"),
+            where="effective_to IS NULL",
         ),
     )
 
@@ -614,6 +652,11 @@ class PlannedSpray(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False)
+
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled;
+    # reads migrate gradually. See the "canonical spine" section below.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
     intended_date: Mapped[date] = mapped_column(Date, nullable=False)
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
     active_ingredient: Mapped[str | None] = mapped_column(String(200))
@@ -1110,6 +1153,10 @@ class InputPlan(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+
+    # ---- canonical spine links (platform Phase 0). NULLABLE and backfilled;
+    # reads migrate gradually. See the "canonical spine" section below.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
     # draft / submitted_for_quotes / quoted / quote_selected / ordered / cancelled
     status: Mapped[str] = mapped_column(String(30), default=procurement_status.PLAN_DRAFT)
     requested_by: Mapped[str | None] = mapped_column(String(120))
@@ -1674,3 +1721,486 @@ class ProductLabelVerification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     label_record: Mapped["ProductLabelRecord"] = relationship(back_populates="verifications")
+
+
+# ============================================================ platform infrastructure
+# Everything below this line is substrate, not domain: stored documents and the job
+# queue. They carry no agronomic or financial meaning and are deliberately generic —
+# a domain concept that needs one of these references it, never the other way round.
+
+
+class Document(Base):
+    """A stored document: the pointer, the hash, and what it is evidence of.
+
+    The bytes live in object storage (see `app/storage.py`); this row is how the rest of
+    the system finds and verifies them. `sha256` is stored redundantly with the key so a
+    citation can be checked without a round trip, and so an object whose bytes changed
+    is detectable rather than merely unlikely.
+
+    `subject_type`/`subject_id` are a deliberate soft polymorphic reference rather than
+    a dozen nullable foreign keys: a document can be evidence for a label record, a soil
+    test, a parcel's ownership, an insurance policy, or an ingestion run, and that list
+    will keep growing. The cost is no referential integrity on that edge; the benefit is
+    that adding a new subject kind is not a migration.
+    """
+    __tablename__ = "documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Object-storage key. Content-addressed: contains the sha256 (see storage.content_key).
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    filename: Mapped[str | None] = mapped_column(String(300))
+    content_type: Mapped[str | None] = mapped_column(String(120))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    # Soft reference to whatever this document is evidence for.
+    subject_type: Mapped[str | None] = mapped_column(String(60), index=True)
+    subject_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    farm_id: Mapped[int | None] = mapped_column(ForeignKey("farms.id"), index=True)
+    uploaded_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class Job(Base):
+    """One unit of background work: current state, mutated only by the queue.
+
+    The queue is the database. That is a deliberate choice over Redis/Celery: the
+    platform needs exactly one durable, transactional place where "this ingestion window
+    has already been processed" is true, and adding a second datastore to get a queue
+    would mean that fact lives somewhere that can disagree with the rows it produced.
+    Postgres `FOR UPDATE SKIP LOCKED` makes this correct under concurrent workers, and
+    `app/jobs/queue.py` is a thin enough seam to swap if throughput ever demands it.
+
+    `idempotency_key` is what makes a job safe to enqueue twice — a scheduler that fires
+    late, a retry, a duplicate webhook. It is unique across LIVE jobs only (partial
+    index), because a key must be re-usable once the work it named has finished.
+    """
+    __tablename__ = "jobs"
+    __table_args__ = (
+        partial_unique_index(
+            "uq_job_live_idempotency_key",
+            "idempotency_key",
+            where="status IN ('pending', 'running')",
+        ),
+        Index("ix_job_claimable", "status", "run_at", "priority"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    queue: Mapped[str] = mapped_column(String(40), nullable=False, default="default", index=True)
+    task_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    idempotency_key: Mapped[str | None] = mapped_column(String(200))
+    # pending / running / succeeded / failed / dead
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    # Lower runs first. Monitoring beats nightly recomputation.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    # Earliest time this may run: scheduling and retry backoff are the same mechanism.
+    run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=clock.current_datetime)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    # Which data source this job belongs to, when it is an ingestion job. Lets the
+    # operator console answer "is the weather feed healthy" without parsing task names.
+    source_key: Mapped[str | None] = mapped_column(String(80), index=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    locked_by: Mapped[str | None] = mapped_column(String(120))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    runs: Mapped[list["JobRun"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan",
+        order_by="(JobRun.attempt, JobRun.id)",
+    )
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in ("succeeded", "dead")
+
+
+class JobRun(Base):
+    """One attempt at a job. Append-only — a retry is a new row, never an overwrite.
+
+    Without this, a job that failed four times and succeeded on the fifth looks exactly
+    like a job that succeeded first time, and "is this feed actually healthy" becomes
+    unanswerable.
+    """
+    __tablename__ = "job_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(120))
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=clock.current_datetime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    # succeeded / failed
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict | None] = mapped_column(JSON)
+
+    job: Mapped["Job"] = relationship(back_populates="runs")
+
+
+# ================================================================== canonical spine
+# The entity backbone every domain hangs off. Added 2026-07-28 (platform Phase 0).
+#
+# The problem this solves: until now the deepest thing this system could describe was a
+# Farm with ONE crop_type, ONE planting_date and ONE expected_harvest_date. Two seasons
+# of strawberries on the same ground were indistinguishable, a farm with three fields was
+# one row, and there was nowhere to put a cost, a yield, a loan, or a pledge that belonged
+# to a particular planting rather than to the whole farm forever.
+#
+# `CropCycle` is the load-bearing addition. It is simultaneously the agronomic unit (what
+# is planted where, when), the economic unit (its costs and its revenue), the credit unit
+# (what is being financed), the collateral unit (its expected harvest), and the risk unit
+# (its weather exposure and insurance). Everything the platform adds later joins here.
+#
+# Nothing in this section is required by the spray/compliance workflow, which continues to
+# work farm-scoped. The links from existing models are all NULLABLE and are populated by a
+# backfill; reads migrate to the spine gradually rather than in one cut.
+
+
+class Organization(Base):
+    """The ownership boundary: who a set of farms belongs to.
+
+    Not a tenant and not an auth construct — there is still no login. This exists so a
+    grower with several farms, a lender's portfolio, and a supplier's customers each have
+    a subject. `organization_id` is denormalised onto top-level tables as it is added, so
+    the tenancy enforcement of a much later phase is a WHERE clause rather than a
+    migration of every relationship in the system.
+    """
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    legal_name: Mapped[str | None] = mapped_column(String(300))
+    # Locale primitives live HERE and on Farm, never implied by country in application
+    # code. ENGINEERING_GUIDELINES.md's US/TR wording helpers infer currency from `Farm.country`; that
+    # habit is what makes a second market a rewrite instead of a configuration.
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(10))  # e.g. "US-CA"
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    timezone: Mapped[str | None] = mapped_column(String(60))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farms: Mapped[list["Farm"]] = relationship(back_populates="organization")
+    parties: Mapped[list["Party"]] = relationship(back_populates="organization")
+
+
+class Party(Base):
+    """A person or company that acts in the system.
+
+    Everywhere else in this codebase an actor is a free-text string — `reviewed_by`,
+    `entered_by`, `requested_by`, `supplier_name`, `provider_name`. That is survivable
+    for attribution and impossible for anything that needs HISTORY: "this grower's
+    repayment record", "this supplier's on-time rate", "this buyer's contract
+    performance" all need the actor to be a row.
+
+    Existing string columns are deliberately left in place. A `*_by_party_id` column is
+    added beside one only when something actually needs to join on it, so this is
+    additive rather than a rewrite of every attribution in the system.
+    """
+    __tablename__ = "parties"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # person / organization
+    party_type: Mapped[str] = mapped_column(String(20), nullable=False, default="person")
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    legal_name: Mapped[str | None] = mapped_column(String(300))
+    email: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(60))
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(10))
+    # External identifiers keyed by issuer (PCA licence no, tax id, assessor id, DUNS).
+    # A dict rather than columns because the set is jurisdiction-specific and open-ended.
+    external_ids: Mapped[dict | None] = mapped_column(JSON)
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    organization: Mapped["Organization | None"] = relationship(back_populates="parties")
+    roles: Mapped[list["PartyRole"]] = relationship(
+        back_populates="party", cascade="all, delete-orphan"
+    )
+
+
+class PartyRole(Base):
+    """What a party IS, to whom, and when.
+
+    A party is not intrinsically "a supplier" — it is a supplier to someone, over a
+    period. The same company can be a supplier and a buyer; a PCA can advise several
+    organizations. Roles are dated so a relationship that ended stays visible instead of
+    being deleted.
+    """
+    __tablename__ = "party_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), nullable=False, index=True)
+    # grower / pca / agronomist / supplier / lender / insurer / buyer / operator / agent
+    role: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # The organization this role is held TOWARDS, when it is relational.
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    party: Mapped["Party"] = relationship(back_populates="roles")
+
+
+class Field(Base):
+    """The agronomic unit: a piece of ground that gets planted and managed as one thing.
+
+    Distinct from `LandParcel`, which is the LEGAL unit, and the distinction is not
+    pedantry: you farm fields and you pledge parcels. A field may straddle two parcels
+    and a parcel may hold three fields, so collateral, tenure, and insurance cannot be
+    reasoned about from field geometry alone.
+
+    GEOMETRY, and why it is GeoJSON text today. PostGIS is the Phase 0 target and the
+    cutover migration adds real `geography(MultiPolygon, 4326)` columns populated from
+    `boundary_geojson`. Until then the GeoJSON is the portable, losslessly round-trippable
+    form, and `area_m2`/`centroid_*` are stored explicitly rather than computed — so no
+    caller has to branch on whether spatial functions exist yet. The GeoJSON remains the
+    interchange representation after the cutover; the geometry column is the index.
+    """
+    __tablename__ = "fields"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    boundary_geojson: Mapped[str | None] = mapped_column(Text)
+    centroid_lat: Mapped[float | None] = mapped_column(Float)
+    centroid_lon: Mapped[float | None] = mapped_column(Float)
+    # Canonical area in square metres (see app/units.py). Every area in the platform is
+    # stored canonically and displayed in the farm's unit; the pair below records what
+    # the human actually said, so a converted number never silently replaces an entered
+    # one in the record of what someone claimed.
+    area_m2: Mapped[float | None] = mapped_column(Float)
+    display_area: Mapped[float | None] = mapped_column(Float)
+    display_area_unit: Mapped[str | None] = mapped_column(String(10))
+    irrigation_type: Mapped[str | None] = mapped_column(String(60))
+    water_source: Mapped[str | None] = mapped_column(String(60))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship(back_populates="fields")
+    crop_cycles: Mapped[list["CropCycle"]] = relationship(
+        back_populates="field", cascade="all, delete-orphan"
+    )
+
+
+class LandParcel(Base):
+    """The legal unit: what a deed, a lease, a lien, or an assessor's roll describes.
+
+    Exists separately from `Field` because collateral and tenure attach to legal
+    descriptions, not to agronomic ones. A lease that expires inside a loan tenor is an
+    underwriting fact, and it is a fact ABOUT A PARCEL.
+    """
+    __tablename__ = "land_parcels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    farm_id: Mapped[int | None] = mapped_column(ForeignKey("farms.id"), index=True)
+    # Assessor's parcel number or equivalent registry identifier, as printed.
+    parcel_identifier: Mapped[str | None] = mapped_column(String(120), index=True)
+    registry_name: Mapped[str | None] = mapped_column(String(160))
+    county: Mapped[str | None] = mapped_column(String(120))
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(10))
+    boundary_geojson: Mapped[str | None] = mapped_column(Text)
+    area_m2: Mapped[float | None] = mapped_column(Float)
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    tenure_rights: Mapped[list["TenureRight"]] = relationship(
+        back_populates="land_parcel", cascade="all, delete-orphan"
+    )
+
+
+class TenureRight(Base):
+    """Who holds what right over a parcel, for how long, evidenced by what.
+
+    Dated on purpose. "Owned" and "leased until March" are the same shape of fact and
+    differ only in a date that changes what can be pledged and for how long.
+    """
+    __tablename__ = "tenure_rights"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    land_parcel_id: Mapped[int] = mapped_column(
+        ForeignKey("land_parcels.id"), nullable=False, index=True
+    )
+    holder_party_id: Mapped[int | None] = mapped_column(ForeignKey("parties.id"), index=True)
+    # owned / leased / licensed / sharecrop / other
+    tenure_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    annual_cost_amount: Mapped[float | None] = mapped_column(Float)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    # The document that evidences it (deed, lease). Soft ref to documents.id.
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    land_parcel: Mapped["LandParcel"] = relationship(back_populates="tenure_rights")
+
+
+class FieldParcelOverlap(Base):
+    """How much of a field sits on a parcel. The agronomic-to-legal join.
+
+    Carries an area because the relationship is partial: pledging a parcel does not
+    pledge a whole field, and a coverage calculation that assumed it did would overstate
+    collateral.
+    """
+    __tablename__ = "field_parcel_overlaps"
+    __table_args__ = (
+        Index("uq_field_parcel_overlap", "field_id", "land_parcel_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    field_id: Mapped[int] = mapped_column(ForeignKey("fields.id"), nullable=False, index=True)
+    land_parcel_id: Mapped[int] = mapped_column(
+        ForeignKey("land_parcels.id"), nullable=False, index=True
+    )
+    overlap_area_m2: Mapped[float | None] = mapped_column(Float)
+    # "declared" (a human said so) or "computed" (from geometry). Never conflated: a
+    # computed overlap inherits the accuracy of two boundaries nobody surveyed.
+    determination_method: Mapped[str | None] = mapped_column(String(30), default="declared")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CropCycle(Base):
+    """One planting of one crop on one field in one season. THE join key.
+
+    Everything the platform adds after Phase 0 references this row: costs, yield
+    forecasts, revenue, credit applications, collateral pledges, insurance coverage,
+    monitoring events. It is what makes "this season" a thing that can be reasoned about
+    separately from "this farm", which is the distinction the previous schema could not
+    make at all.
+
+    `crop` and `variety_name` are strings for now, matching the existing `Farm.crop_type`
+    vocabulary. Catalog tables for crop and variety arrive with the crop plan in a later
+    phase, when something actually consumes traits — adding empty catalog tables now would
+    be a table per noun with no consumer.
+
+    Areas follow the same rule as Field: canonical m2 plus what the human said.
+    """
+    __tablename__ = "crop_cycles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    field_id: Mapped[int] = mapped_column(ForeignKey("fields.id"), nullable=False, index=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    crop: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    variety_name: Mapped[str | None] = mapped_column(String(160))
+    # The season this planting belongs to. `season_year` is what queries group by;
+    # `season_label` is what humans call it ("2026 spring plant") and may not be a year.
+    season_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    season_label: Mapped[str | None] = mapped_column(String(60))
+    planting_date: Mapped[date | None] = mapped_column(Date)
+    expected_harvest_start: Mapped[date | None] = mapped_column(Date)
+    expected_harvest_end: Mapped[date | None] = mapped_column(Date)
+    actual_harvest_start: Mapped[date | None] = mapped_column(Date)
+    actual_harvest_end: Mapped[date | None] = mapped_column(Date)
+    planted_area_m2: Mapped[float | None] = mapped_column(Float)
+    display_area: Mapped[float | None] = mapped_column(Float)
+    display_area_unit: Mapped[str | None] = mapped_column(String(10))
+    target_market: Mapped[str | None] = mapped_column(String(60))
+    target_grade: Mapped[str | None] = mapped_column(String(60))
+    # planned / planted / growing / harvesting / closed / abandoned
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="growing", index=True)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship(back_populates="crop_cycles")
+    field: Mapped["Field"] = relationship(back_populates="crop_cycles")
+    operations: Mapped[list["Operation"]] = relationship(
+        back_populates="crop_cycle", cascade="all, delete-orphan"
+    )
+
+
+class Operation(Base):
+    """Anything done to a crop cycle: the thin supertype over typed detail.
+
+    Deliberately thin, and deliberately NOT a rewrite of `SprayEvent`. A spray keeps its
+    own table, its own regulatory columns, and its own engine; it gains an `operation_id`
+    so that "what happened on this cycle, in order, at what cost" is answerable in one
+    query across sprays, irrigations, fertiliser passes, and harvests. Typed detail tables
+    for the other operation types arrive with the crop plan.
+
+    The alternative — forcing sprays into a generic operation table with a JSON detail
+    blob — would have meant the PHI/REI/MoA columns the decision engine reads become
+    untyped, which is a real regression in exchange for a tidier diagram.
+    """
+    __tablename__ = "operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
+    block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"), index=True)
+    # planting / irrigation / fertilization / crop_protection / scouting / harvest /
+    # tillage / other
+    operation_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    planned_on: Mapped[date | None] = mapped_column(Date)
+    performed_on: Mapped[date | None] = mapped_column(Date, index=True)
+    area_m2: Mapped[float | None] = mapped_column(Float)
+    display_area: Mapped[float | None] = mapped_column(Float)
+    display_area_unit: Mapped[str | None] = mapped_column(String(10))
+    cost_amount: Mapped[float | None] = mapped_column(Float)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    performed_by: Mapped[str | None] = mapped_column(String(120))
+    performed_by_party_id: Mapped[int | None] = mapped_column(ForeignKey("parties.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    crop_cycle: Mapped["CropCycle | None"] = relationship(back_populates="operations")
+
+
+class InputProduct(Base):
+    """Canonical identity for anything a farm buys and applies.
+
+    `PesticideProduct` stays exactly as it is and becomes a SPECIALISATION of this row,
+    linked 1:1. That direction matters: the label layer's identity rules (exact-or-
+    ambiguous EPA registration matching, append-only label records, farm-scoped
+    verification) are the strictest thing in the codebase and must not be loosened to
+    accommodate a fertiliser, which has no registration number and needs none.
+    """
+    __tablename__ = "input_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # seed / fertilizer / crop_protection / biological / adjuvant / other
+    category: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    manufacturer: Mapped[str | None] = mapped_column(String(200))
+    # Normalised lookup key within a category (lowercased name, or the normalised EPA
+    # registration number for a pesticide). Not unique: two registrants may ship the
+    # same trade name, and collapsing them would be exactly the identity error the
+    # label layer refuses to make.
+    canonical_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    # The pesticide specialisation, when this product is one.
+    pesticide_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pesticide_products.id"), index=True
+    )
+    unit_of_sale: Mapped[str | None] = mapped_column(String(30))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)

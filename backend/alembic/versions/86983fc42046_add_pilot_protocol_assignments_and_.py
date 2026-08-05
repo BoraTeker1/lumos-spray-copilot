@@ -42,7 +42,7 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('pilot_protocols', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_pilot_protocols_farm_id'), ['farm_id'], unique=False)
-        batch_op.create_index('uq_pilot_protocol_active_version', ['farm_id', 'version'], unique=True, sqlite_where=sa.text('effective_to IS NULL'))
+        batch_op.create_index('uq_pilot_protocol_active_version', ['farm_id', 'version'], unique=True, sqlite_where=sa.text('effective_to IS NULL'), postgresql_where=sa.text('effective_to IS NULL'))
 
     op.create_table('block_assignments',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -111,7 +111,7 @@ def downgrade() -> None:
 
     op.drop_table('block_assignments')
     with op.batch_alter_table('pilot_protocols', schema=None) as batch_op:
-        batch_op.drop_index('uq_pilot_protocol_active_version', sqlite_where=sa.text('effective_to IS NULL'))
+        batch_op.drop_index('uq_pilot_protocol_active_version', sqlite_where=sa.text('effective_to IS NULL'), postgresql_where=sa.text('effective_to IS NULL'))
         batch_op.drop_index(batch_op.f('ix_pilot_protocols_farm_id'))
 
     op.drop_table('pilot_protocols')
