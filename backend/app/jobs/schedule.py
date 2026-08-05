@@ -27,11 +27,16 @@ class Schedule:
     source_key: str | None = None
 
 
-# Phase 0 schedules. Real ingestion, feature, and monitoring schedules land in later
-# phases; this list is what proves the loop works.
 SCHEDULES: tuple[Schedule, ...] = (
     Schedule("system.heartbeat", every_seconds=300, payload={"note": "scheduled"}),
     Schedule("system.reclaim_stalled", every_seconds=300),
+    # Hourly weather fan-out. Enqueues nothing when no subscription is configured, and
+    # each enqueued run is itself inert without a provider credential — so this line
+    # costs a deployment with neither exactly one no-op job per hour.
+    Schedule("ingest.enqueue_due_weather", every_seconds=3600, source_key="cimis_hourly"),
+    # Feature recomputation, slightly offset in cadence from ingestion so a recompute
+    # normally sees the hour that just landed rather than racing it.
+    Schedule("features.recompute_due", every_seconds=3600, source_key="features"),
 )
 
 

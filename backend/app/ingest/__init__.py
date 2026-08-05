@@ -16,3 +16,8 @@ a session, and a stray `from app import crud` in one of them would make the guar
 matter of discipline rather than construction.
 """
 from app.ingest import base, domains, geo, registry  # noqa: F401
+
+# Imported for their side effects: `tasks` registers the two job handlers, and adapter
+# modules register themselves with `registry`. Order matters — the pure modules above
+# must be bound before anything that imports them from this package.
+from app.ingest import cimis, pipeline, tasks  # noqa: F401,E402

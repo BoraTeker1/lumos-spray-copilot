@@ -17,6 +17,8 @@ from app import (
     label_extraction, llm, models, operator_key, pca_authority, schemas, vision,
 )
 from app.analytics import compute_cost_analytics
+# Imported for its side effect: registering the feature specs and their job handlers.
+from app import features as _features  # noqa: F401
 from app.ingest import registry as ingest_registry
 from app.jobs import queue as job_queue
 from app.database import SessionLocal, get_db, init_db

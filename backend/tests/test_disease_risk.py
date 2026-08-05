@@ -289,3 +289,55 @@ def test_evidence_grade_reflects_inputs_not_confidence():
         for h in range(24, -1, -2)
     ])
     assert disease_risk.evidence_grade(far_and_derived) == "C"
+
+
+def test_all_unstated_distances_are_graded_close():
+    """PINS A KNOWN CONTRADICTION rather than fixing it. Read before changing either side.
+
+    `csv_import.py:697-701` warns a user that leaving `station_distance_km` blank means
+    "the evidence grade cannot reach its highest level". `evidence_grade` does not
+    implement that promise:
+
+        distances = [... if r.get("station_distance_km") is not None]
+        close = not distances or max(distances) <= (MAX_STATION_KM / 3.0)
+
+    With every distance unstated, `distances` is empty and `close` is True via
+    `not distances`. So an all-unstated payload is treated as CLOSE and can reach
+    GRADE_A. Unstated distance is permissive, not conservative — the opposite of what
+    the importer tells the user.
+
+    Left as-is deliberately (2026-08-05): changing it alters the pilot's scoring
+    contract, which was outside the data-platform slice that found it. Pinned here so
+    the behaviour cannot drift silently while the contradiction is open, and recorded in
+    DATA_PLATFORM.md 6.
+
+    The ingestion path is unaffected either way: it always computes a distance or drops
+    the row (`ingest/pipeline.py`, align stage). The exposure is hand-entered CSV
+    weather on a real pilot farm. DECIDE THIS BEFORE THE FIRST ONE.
+    """
+    unstated = _payload(weather=[
+        _weather(h, station_distance_km=None) for h in range(24, -1, -2)
+    ])
+    assert disease_risk.evidence_grade(unstated) == "A"
+
+    # And it is genuinely the missing distance doing it: state a far one and the grade
+    # drops, proving the field is read when present.
+    far = _payload(weather=[
+        _weather(h, station_distance_km=12.0) for h in range(24, -1, -2)
+    ])
+    assert disease_risk.evidence_grade(far) == "B"
+
+
+def test_an_unstated_distance_is_also_treated_as_in_range():
+    """The same permissiveness in the abstention path, for the same reason.
+
+    A NULL distance never triggers `no_station_within_range`. That is tolerable for a
+    human leaving a cell blank and is why `ingest/pipeline.py` drops a row it cannot
+    place rather than writing a null.
+    """
+    unstated = _payload(weather=[
+        _weather(h, station_distance_km=None) for h in range(24, -1, -2)
+    ])
+    assert disease_risk.ABSTAIN_NO_NEARBY_STATION not in (
+        disease_risk.abstention_reasons(unstated)
+    )

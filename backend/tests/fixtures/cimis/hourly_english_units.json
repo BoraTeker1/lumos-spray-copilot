@@ -1,0 +1,27 @@
+{
+  "_provenance": {
+    "authored": "HAND-AUTHORED from the published CIMIS /api/data response shape.",
+    "not_a_capture": "This is NOT a live capture. See hourly_metric.json for the full note.",
+    "purpose": "The adapter requests unitOfMeasure=M, but a payload that declares English units anyway must not be trusted at its column's word. The adapter attaches unit hints and lets the pipeline's normalize stage convert through app/units.py, where the conversion is cited and a refusal drops the row. 58.64 F is 14.8 C; 0.0 in is 0.0 mm."
+  },
+  "Data": {
+    "Providers": [
+      {
+        "Name": "cimis",
+        "Type": "station",
+        "Owner": "water.ca.gov",
+        "Records": [
+          {
+            "Date": "2026-07-01",
+            "Station": "111",
+            "Scope": "english",
+            "Hour": "0600",
+            "HlyAirTmp": { "Value": "58.64", "Qc": " ", "Unit": "F" },
+            "HlyRelHum": { "Value": "93.0", "Qc": " ", "Unit": "%" },
+            "HlyPrecip": { "Value": "0.0", "Qc": " ", "Unit": "in" }
+          }
+        ]
+      }
+    ]
+  }
+}

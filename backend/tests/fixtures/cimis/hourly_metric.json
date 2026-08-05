@@ -1,0 +1,56 @@
+{
+  "_provenance": {
+    "authored": "HAND-AUTHORED from the published CIMIS /api/data response shape.",
+    "not_a_capture": "This is NOT a live capture. No CIMIS AppKey was available on 2026-08-05, so no request was made. Presenting a fabricated fixture as a real capture would be the ENGINEERING_GUIDELINES.md 9 honesty failure one layer down.",
+    "shape_source": "CIMIS Web API documentation at et.water.ca.gov/Rest/Index, hourly data items verified 2026-08-05",
+    "replace_when": "A key exists: re-capture live, strip appKey from the request, and change `authored` to say so with the date and station.",
+    "note": "CIMIS publishes no leaf-wetness item, so none appears here. Do not add one."
+  },
+  "Data": {
+    "Providers": [
+      {
+        "Name": "cimis",
+        "Type": "station",
+        "Owner": "water.ca.gov",
+        "Records": [
+          {
+            "Date": "2026-07-01",
+            "Julian": "182",
+            "Station": "111",
+            "Standard": "english",
+            "ZipCodes": "",
+            "Scope": "metric",
+            "Hour": "0600",
+            "HlyAirTmp": { "Value": "14.8", "Qc": " ", "Unit": "C" },
+            "HlyRelHum": { "Value": "93.0", "Qc": " ", "Unit": "%" },
+            "HlyPrecip": { "Value": "0.0", "Qc": " ", "Unit": "mm" }
+          },
+          {
+            "Date": "2026-07-01",
+            "Julian": "182",
+            "Station": "111",
+            "Standard": "english",
+            "ZipCodes": "",
+            "Scope": "metric",
+            "Hour": "0700",
+            "HlyAirTmp": { "Value": "15.6", "Qc": " ", "Unit": "C" },
+            "HlyRelHum": { "Value": "91.0", "Qc": " ", "Unit": "%" },
+            "HlyPrecip": { "Value": "0.0", "Qc": " ", "Unit": "mm" }
+          },
+          {
+            "Date": "2026-07-01",
+            "Julian": "182",
+            "Station": "111",
+            "Standard": "english",
+            "ZipCodes": "",
+            "Scope": "metric",
+            "Hour": "0800",
+            "HlyAirTmp": { "Value": "17.2", "Qc": " ", "Unit": "C" },
+            "HlyRelHum": { "Value": "84.0", "Qc": " ", "Unit": "%" },
+            "HlyPrecip": { "Value": "0.0", "Qc": " ", "Unit": "mm" }
+          }
+        ]
+      }
+    ]
+  }
+}

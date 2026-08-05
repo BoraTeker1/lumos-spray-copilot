@@ -7,11 +7,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.procurement_status import FINANCING_OFFER_DISCLAIMER
 
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
+#
+# "provider_api" / "provider_reported" were added for the ingestion layer (2026-08-05).
+# Neither existing value could be reused honestly: `manual_entry` would be a false claim
+# about who entered the reading, and `pca_reviewed` would be a lie with legal weight,
+# since nobody reviewed it. A provider's number is real data of a specific and limited
+# kind — machine-fetched, unreviewed — and it needed its own word.
 DataSource = Literal[
     "demo", "grower_interview", "spreadsheet", "whatsapp", "email", "manual_entry",
-    "photo_ai", "ai_extracted", "unknown"
+    "photo_ai", "ai_extracted", "provider_api", "unknown"
 ]
-DataConfidence = Literal["simulated", "user_provided", "pca_reviewed", "incomplete"]
+DataConfidence = Literal[
+    "simulated", "user_provided", "pca_reviewed", "provider_reported", "incomplete"
+]
 
 # Field-level provenance for compliance/decision-critical input values.
 # "authoritative_provider" is deliberately unreachable today (no label-data provider

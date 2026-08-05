@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text,
-    select,
+    UniqueConstraint, select,
 )
 from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
@@ -262,8 +262,10 @@ class WeatherObservation(Base):
     time. Filtering on `observed_at` alone is the subtle leak this column exists to
     prevent.
 
-    Ingestion is CSV/concierge only — no weather-provider integration exists, and none
-    should be built before the provider and field requirements are known.
+    Ingestion is CSV/concierge OR a registered provider adapter (`app/ingest/`). A
+    provider-written row is distinguishable at a glance and by query: `source_type` is
+    `station_export`, `data_source` is `provider_api`, `data_confidence` is
+    `provider_reported`, and `ingestion_run_id` points at the run that wrote it.
     """
     __tablename__ = "weather_observations"
     __table_args__ = (
@@ -321,6 +323,14 @@ class WeatherObservation(Base):
     # Corrections append a new row pointing at the one they replace — never an edit.
     supersedes_id: Mapped[int | None] = mapped_column(
         ForeignKey("weather_observations.id")
+    )
+    # Which ingestion run wrote this row, when a provider adapter did. A join rather
+    # than a string stuffed into `source_reference`: the audit question is "what else
+    # did that run write, and what did it drop", which a free-text field cannot answer.
+    # Deliberately NOT serialized by `risk_snapshot._weather_payload`, so adding it
+    # leaves every stored snapshot digest byte-identical.
+    ingestion_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingestion_runs.id"), index=True
     )
     data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
@@ -1850,6 +1860,147 @@ class JobRun(Base):
     result: Mapped[dict | None] = mapped_column(JSON)
 
     job: Mapped["Job"] = relationship(back_populates="runs")
+
+
+class IngestionRun(Base):
+    """One attempt to bring outside data in, and everything that happened to it.
+
+    The counts are the point. A run that fetched 24 rows and admitted 24 is not the
+    same event as one that fetched 24 and admitted 3, and the difference — 21 rows
+    dropped for reasons that are individually recorded in `ingestion_issues` — is the
+    only way an operator learns that a feed has quietly degraded. A pipeline that
+    logged only success/failure would report both of those as "succeeded".
+
+    `skipped_no_credential` is a first-class status, not a failure. A deployment
+    without an API key is correctly configured and simply cannot fetch; recording that
+    as `failed` would make a healthy system look broken and train the operator to stop
+    reading the column.
+
+    Not uniquely indexed on anything. Idempotency lives in two places that are both
+    stronger than a constraint here: the job queue's live idempotency key stops a
+    duplicate run being enqueued, and the partial unique index on
+    `weather_observations` plus a value-digest comparison stops a duplicate ROW being
+    written. Re-running a window is therefore safe and observable — you get a second
+    run whose `duplicate_count` equals the batch size and whose `admitted_count` is 0.
+    """
+    __tablename__ = "ingestion_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    domain: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    farm_id: Mapped[int | None] = mapped_column(ForeignKey("farms.id"), index=True)
+    field_id: Mapped[int | None] = mapped_column(ForeignKey("fields.id"), index=True)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime)
+    window_end: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    adapter_version: Mapped[str | None] = mapped_column(String(20))
+    # sha256 over the REDACTED request description. A credential must never reach a
+    # digest, because a digest is stored and a stored secret is a leaked secret.
+    request_digest: Mapped[str | None] = mapped_column(String(64))
+
+    fetched_count: Mapped[int] = mapped_column(Integer, default=0)
+    parsed_count: Mapped[int] = mapped_column(Integer, default=0)
+    admitted_count: Mapped[int] = mapped_column(Integer, default=0)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0)
+    superseded_count: Mapped[int] = mapped_column(Integer, default=0)
+    issue_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), index=True)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), index=True)
+
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    issues: Mapped[list["IngestionIssue"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="IngestionIssue.id"
+    )
+
+
+class IngestionIssue(Base):
+    """Something that went wrong with one row, or with a run.
+
+    ISSUES ARE RECORDED, NEVER RAISED. That is the whole design of the pipeline. A bad
+    row in hour 14 must not abort a 720-row backfill, and "we dropped this reading and
+    here is why" is part of the evidence rather than a detail — the same stance the
+    risk snapshot takes when it records an exclusion reason instead of silently
+    filtering.
+
+    `detail` carries small structured facts that make an issue actionable: the unit
+    that refused to convert, the station that was not asked for. It must never carry a
+    credential or a raw response body.
+    """
+    __tablename__ = "ingestion_issues"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ingestion_run_id: Mapped[int] = mapped_column(
+        ForeignKey("ingestion_runs.id"), nullable=False, index=True
+    )
+    stage: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)
+    code: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    row_index: Mapped[int | None] = mapped_column(Integer)
+    natural_key: Mapped[str | None] = mapped_column(String(200))
+    detail: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    run: Mapped["IngestionRun"] = relationship(back_populates="issues")
+
+
+class FeatureValue(Base):
+    """One computed feature, for one entity, at one `as_of`.
+
+    FULLY unique on (entity_type, entity_id, name, version, as_of) — no supersede chain,
+    unlike every observation table here. That difference is deliberate and follows from
+    point-in-time correctness: `pit.admissible` excludes anything recorded after `as_of`,
+    so recomputing at a FIXED `as_of` must reproduce the identical `inputs_digest`
+    forever, no matter how much data has arrived since.
+
+    Which makes this table a leak detector, and the cheapest one in the system. If a
+    recompute at an unchanged `as_of` produces a DIFFERENT digest, some input reached the
+    computation that should not have been visible then. `compute.persist` therefore
+    upserts only when the digest matches and records an issue when it does not, rather
+    than overwriting and losing the evidence.
+
+    An abstention is stored as a row with `value IS NULL` and non-empty `reasons`. The
+    pair is enforced in `features.base.FeatureResult`, so a row here cannot say "no
+    value" and "no reason" at once.
+    """
+    __tablename__ = "feature_values"
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_type", "entity_id", "name", "version", "as_of",
+            name="uq_feature_value_entity_name_version_as_of",
+        ),
+        Index("ix_feature_value_lookup", "entity_type", "entity_id", "name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    farm_id: Mapped[int | None] = mapped_column(ForeignKey("farms.id"), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    value: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(20))
+    evidence_grade: Mapped[str | None] = mapped_column(String(10))
+    abstained: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reasons: Mapped[list | None] = mapped_column(JSON)
+    excluded: Mapped[list | None] = mapped_column(JSON)
+    inputs_digest: Mapped[str | None] = mapped_column(String(64))
+
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=clock.current_datetime
+    )
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
 
 
 # ================================================================== canonical spine

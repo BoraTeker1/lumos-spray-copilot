@@ -67,18 +67,10 @@ _DEFERRED_BLOCKER = (
 
 PLACEHOLDERS: tuple[SourceDescriptor, ...] = (
     # --- MVP domains, adapters not built ---
-    SourceDescriptor(
-        source_key="cimis_hourly",
-        domain="climate",
-        title="CIMIS hourly station data",
-        provider="California Department of Water Resources",
-        status=SOURCE_NOT_IMPLEMENTED,
-        blocker="Adapter not built yet.",
-        notes=(
-            "CIMIS publishes hourly air temperature, RH, precipitation, dew point, "
-            "soil temperature, radiation and wind. It does NOT publish leaf wetness."
-        ),
-    ),
+    # NOTE: `cimis_hourly` is deliberately NOT here. It has a real adapter
+    # (`app/ingest/cimis.py`) which registers itself at import and answers `describe()`
+    # for itself — only the adapter knows whether its credential is present, so a
+    # placeholder would either duplicate that check or lie about it.
     SourceDescriptor(
         source_key="soil_lab_report",
         domain="soil",

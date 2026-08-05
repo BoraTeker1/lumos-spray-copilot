@@ -1,0 +1,36 @@
+{
+  "_provenance": {
+    "authored": "HAND-AUTHORED from the published CIMIS /api/data response shape.",
+    "not_a_capture": "This is NOT a live capture. See hourly_metric.json for the full note.",
+    "purpose": "One hour carries a QC flag ('M' = missing/suspect in CIMIS QC vocabulary). The adapter must carry that flag onto quality_flag so pit.admissible excludes the row entirely, rather than averaging over a reading the station itself doubts."
+  },
+  "Data": {
+    "Providers": [
+      {
+        "Name": "cimis",
+        "Type": "station",
+        "Owner": "water.ca.gov",
+        "Records": [
+          {
+            "Date": "2026-07-01",
+            "Station": "111",
+            "Scope": "metric",
+            "Hour": "0600",
+            "HlyAirTmp": { "Value": "14.8", "Qc": " ", "Unit": "C" },
+            "HlyRelHum": { "Value": "93.0", "Qc": " ", "Unit": "%" },
+            "HlyPrecip": { "Value": "0.0", "Qc": " ", "Unit": "mm" }
+          },
+          {
+            "Date": "2026-07-01",
+            "Station": "111",
+            "Scope": "metric",
+            "Hour": "0700",
+            "HlyAirTmp": { "Value": "99.9", "Qc": "M", "Unit": "C" },
+            "HlyRelHum": { "Value": "93.0", "Qc": " ", "Unit": "%" },
+            "HlyPrecip": { "Value": "0.0", "Qc": " ", "Unit": "mm" }
+          }
+        ]
+      }
+    ]
+  }
+}

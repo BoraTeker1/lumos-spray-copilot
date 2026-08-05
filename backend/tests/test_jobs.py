@@ -270,15 +270,29 @@ def test_bucket_key_is_stable_within_a_bucket_and_changes_across_them():
 
 # ---------------------------------------------------------------------- worker
 
+def _schedules_on(queue_name: str) -> int:
+    """How many schedules enqueue onto a given queue.
+
+    Every schedule used to land on `default`, so these tests compared against
+    `len(SCHEDULES)` directly. Since the hourly weather fan-out runs on the `ingest`
+    queue, that shortcut would assert a `default`-only worker runs ingest jobs — which
+    is exactly the queue isolation the worker is supposed to provide.
+    """
+    return sum(
+        1 for s in schedule.SCHEDULES
+        if registry.resolve(s.task_name).queue == queue_name
+    )
+
+
 def test_worker_tick_schedules_and_drains(db):
     """The end-to-end Phase 0 proof: schedule -> enqueue -> claim -> run -> record."""
     summary = worker.tick(db, queues=("default",))
 
     assert summary["scheduled"] == len(schedule.SCHEDULES)
-    assert summary["ran"] == len(schedule.SCHEDULES)
+    assert summary["ran"] == _schedules_on("default")
     assert summary["failed"] == 0
     assert db.query(models.Job).filter(models.Job.status == queue.STATUS_SUCCEEDED).count() == (
-        len(schedule.SCHEDULES)
+        _schedules_on("default")
     )
     heartbeat = db.query(models.JobRun).join(models.Job).filter(
         models.Job.task_name == "system.heartbeat"
@@ -319,7 +333,14 @@ def test_internal_jobs_endpoint_reports_queue_health(client):
         session.close()
 
     body = client.get("/internal/jobs").json()
-    assert body["stats"]["by_status"]["succeeded"] == len(schedule.SCHEDULES)
+    assert body["stats"]["by_status"]["succeeded"] == _schedules_on("default")
+    # Everything scheduled onto another queue sits pending: this worker only drains
+    # `default`. Its visibility here is the point of the endpoint. Counted as
+    # "not on default" rather than naming a queue, so adding a third one does not
+    # silently make this assertion weaker.
+    assert body["stats"]["by_status"].get("pending", 0) == (
+        len(schedule.SCHEDULES) - _schedules_on("default")
+    )
     assert body["stats"]["dead"] == 0
     heartbeat = [j for j in body["jobs"] if j["task_name"] == "system.heartbeat"][0]
     assert heartbeat["attempts"] == 1

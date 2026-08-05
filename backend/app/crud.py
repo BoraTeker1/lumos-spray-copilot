@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from types import SimpleNamespace
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import (
@@ -346,6 +346,158 @@ def list_weather_observations(
     if block_id is not None:
         stmt = stmt.where(models.WeatherObservation.block_id == block_id)
     return list(db.scalars(stmt.order_by(models.WeatherObservation.observed_at)))
+
+
+def list_weather_for_block(
+    db: Session, farm_id: int, block: models.Block
+) -> list[models.WeatherObservation]:
+    """Weather that is evidence FOR THIS BLOCK, rather than for the whole farm.
+
+    `create_risk_snapshot` used to pass every reading on the farm into every block's
+    snapshot. That was latent while no weather existed; with ingestion running it
+    becomes exactly what `station_distance_km` and the same-hour conflict check exist to
+    prevent — a second field's station, 20 km away, landing in this block's assessment
+    and either dragging the evidence grade down or triggering
+    `conflicting_readings_same_hour` between two stations that were never in conflict.
+
+    Three things are in scope, and the third is the one that keeps the pilot working:
+
+      * rows attributed to THIS block;
+      * rows attributed to this block's FIELD but no particular block — station data is
+        per-field, and this is the normal shape of an ingested reading;
+      * rows attributed to NEITHER. The weather CSV has no block or field column, so
+        every concierge-entered reading looks like this. Excluding them would silently
+        empty the snapshot for exactly the farms running the manual pilot path.
+
+    What is excluded is only what was never about this block: another block's rows, and
+    another field's rows.
+    """
+    stmt = select(models.WeatherObservation).where(
+        models.WeatherObservation.farm_id == farm_id
+    )
+    scoped = models.WeatherObservation.block_id == block.id
+    unattributed = and_(
+        models.WeatherObservation.block_id.is_(None),
+        models.WeatherObservation.field_id.is_(None),
+    )
+    if block.field_id is not None:
+        field_level = and_(
+            models.WeatherObservation.block_id.is_(None),
+            models.WeatherObservation.field_id == block.field_id,
+        )
+        stmt = stmt.where(or_(scoped, field_level, unattributed))
+    else:
+        stmt = stmt.where(or_(scoped, unattributed))
+    return list(db.scalars(stmt.order_by(models.WeatherObservation.observed_at)))
+
+
+def live_weather_by_station_hour(db: Session, farm_id: int) -> dict:
+    """Live (non-superseded) readings for a farm, keyed by (station, observed_at).
+
+    "Live" means no other row supersedes it. The ingestion pipeline compares an
+    incoming reading against this to decide duplicate-vs-correction, so including a
+    superseded row here would let a correction be undone by the next fetch.
+    """
+    superseded = {
+        row_id
+        for (row_id,) in db.execute(
+            select(models.WeatherObservation.supersedes_id).where(
+                models.WeatherObservation.farm_id == farm_id,
+                models.WeatherObservation.supersedes_id.is_not(None),
+            )
+        )
+    }
+    out: dict = {}
+    for obs in db.scalars(
+        select(models.WeatherObservation).where(
+            models.WeatherObservation.farm_id == farm_id
+        )
+    ):
+        if obs.id in superseded:
+            continue
+        out[((obs.station_id or "").strip().lower(), obs.observed_at)] = obs
+    return out
+
+
+def create_weather_observations_bulk(
+    db: Session,
+    farm_id: int,
+    rows: list[dict],
+    *,
+    field_id: int | None = None,
+    ingestion_run_id: int | None = None,
+    is_demo: bool = False,
+    superseded_pairs: list | None = None,
+) -> list[models.WeatherObservation]:
+    """Append many provider-fetched readings in ONE transaction.
+
+    Exists because `create_weather_observation` calls `ensure_demo_real_separation`,
+    which full-scans seven tables per call. That is fine for a human entering one
+    reading and quadratic-feeling for a 30-day hourly backfill — 720 rows would mean
+    ~5000 table scans. The guard is called ONCE for the batch, with a SimpleNamespace,
+    exactly as `commit_import` does.
+
+    `recorded_at` is stamped at PERSIST time and is never back-dated to `observed_at`.
+    Backfilling a month of history and claiming we knew it a month ago would fabricate
+    knowledge the operator did not have — precisely the hindsight leak `app/pit.py`
+    exists to prevent. The correct and slightly uncomfortable consequence: backfilled
+    history is admissible only for `as_of` values after the backfill ran, so a backtest
+    over that window finds no admissible weather.
+    """
+    superseded_pairs = superseded_pairs or []
+    if not rows and not superseded_pairs:
+        return []
+
+    data_source = "demo" if is_demo else "provider_api"
+    data_confidence = "simulated" if is_demo else "provider_reported"
+    ensure_demo_real_separation(
+        db,
+        farm_id,
+        SimpleNamespace(data_source=data_source, data_confidence=data_confidence),
+    )
+
+    recorded_at = clock.current_datetime()
+    created: list[models.WeatherObservation] = []
+
+    def _build(values: dict, supersedes_id: int | None) -> models.WeatherObservation:
+        return models.WeatherObservation(
+            farm_id=farm_id,
+            field_id=field_id,
+            station_id=values.get("station_id"),
+            station_name=values.get("station_name"),
+            station_distance_km=values.get("station_distance_km"),
+            observed_at=values.get("observed_at"),
+            recorded_at=recorded_at,
+            temperature_c=values.get("temperature_c"),
+            relative_humidity_pct=values.get("relative_humidity_pct"),
+            rainfall_mm=values.get("rainfall_mm"),
+            leaf_wetness_minutes=values.get("leaf_wetness_minutes"),
+            wetness_is_measured=values.get("wetness_is_measured"),
+            # `station_export` says WHERE the reading came from; `provider_api` /
+            # `provider_reported` say who entered it and how much it is worth. Both are
+            # read by different guards, so a writer must set both.
+            source_type="demo" if is_demo else "station_export",
+            source_reference=values.get("source_reference"),
+            quality_flag=values.get("quality_flag"),
+            supersedes_id=supersedes_id,
+            ingestion_run_id=ingestion_run_id,
+            data_source=data_source,
+            data_confidence=data_confidence,
+        )
+
+    for values in rows:
+        row = _build(values, None)
+        db.add(row)
+        created.append(row)
+    for values, supersedes_id in superseded_pairs:
+        row = _build(values, supersedes_id)
+        db.add(row)
+        created.append(row)
+
+    db.commit()
+    for row in created:
+        db.refresh(row)
+    return created
 
 
 def incidence_pct(units_affected: int, units_inspected: int) -> float | None:

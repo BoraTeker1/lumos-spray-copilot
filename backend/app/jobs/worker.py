@@ -24,6 +24,13 @@ from app import clock
 from app.database import SessionLocal
 from app.jobs import queue, schedule, tasks  # noqa: F401  (importing tasks registers them)
 
+# Task modules from other packages must be imported here too, or the worker claims a
+# job whose handler was never registered and dead-letters it after five attempts. This
+# is the registration point for the whole process; `app/main.py` gets the same effect
+# by importing `app.ingest`.
+from app.ingest import tasks as ingest_tasks  # noqa: F401,E402
+from app.features import tasks as feature_tasks  # noqa: F401,E402
+
 logger = logging.getLogger("lumos.worker")
 
 _should_stop = False

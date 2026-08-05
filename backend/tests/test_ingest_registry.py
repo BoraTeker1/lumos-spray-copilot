@@ -150,8 +150,14 @@ def test_every_declared_source_names_a_declared_domain():
 
 
 def test_building_an_adapter_that_does_not_exist_names_the_blocker():
-    with pytest.raises(registry.SourceError, match="not built yet"):
-        registry.build_adapter("cimis_hourly")
+    """A declared-but-unbuilt source explains itself instead of raising a bare KeyError."""
+    with pytest.raises(registry.SourceError, match="a lab report is a document"):
+        registry.build_adapter("soil_lab_report")
+
+
+def test_an_unknown_source_is_distinguishable_from_an_unbuilt_one():
+    with pytest.raises(registry.SourceError, match="unknown source"):
+        registry.build_adapter("no_such_source")
 
 
 # --------------------------------------------------------------------------
