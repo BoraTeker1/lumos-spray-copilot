@@ -257,6 +257,21 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // Historical opportunity scan (operator only — pilot ladder Stage 2).
+  // Operator-gated for a reason beyond tooling convenience: a risk histogram reaching a
+  // PCA enrolled in the blinded shadow study would contaminate the baseline their
+  // dispositions exist to provide.
+  runOpportunityScan: (farmId, data) =>
+    request(`/internal/farms/${farmId}/opportunity-scans`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  getOpportunityScans: (params = {}) =>
+    request(`/internal/opportunity-scans${qs(params)}`, { headers: operatorHeaders() }),
+  getOpportunityScan: (scanId) =>
+    request(`/internal/opportunity-scans/${scanId}`, { headers: operatorHeaders() }),
+
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
 

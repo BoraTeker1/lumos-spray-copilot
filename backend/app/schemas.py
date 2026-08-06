@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app import backtest
 from app.procurement_status import FINANCING_OFFER_DISCLAIMER
 
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
@@ -360,6 +361,69 @@ class DiseaseRiskAssessment(BaseModel):
     calculation: dict | None = None
     is_shadow: bool
     computed_at: datetime
+
+
+# ------------------------------------------------------- historical opportunity scan
+class OpportunityScanCreate(BaseModel):
+    """Operator-triggered replay of past decision dates for one block.
+
+    `decision_dates` are the dates sprays were ACTUALLY scheduled for — supplied by the
+    operator from the partner's records, never inferred from the spray table. A spray
+    that happened is evidence of a decision; a date nobody scheduled is not, and
+    generating a regular grid of dates would silently invent the denominator that the
+    whole opportunity figure is a fraction of.
+    """
+    block_id: int
+    decision_dates: list[datetime] = Field(min_length=1)
+    horizon_hours: int = 72
+    lookback_hours: int = 168
+    run_by: str | None = None
+
+
+class OpportunityScanItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    as_of: datetime
+    risk_band: str
+    abstained: bool
+    reasons: list | None = None
+    evidence_grade: str | None = None
+    probability_or_index: float | None = None
+    input_digest: str
+    excluded_count: int
+
+
+class OpportunityScan(BaseModel):
+    """OPERATOR-FACING ONLY, like its shadow-assessment neighbour.
+
+    Note the fields that do not exist, and must not be added: no avoided count, no
+    reduction percentage, no recommendation. `backtest.SCAN_CANNOT_CONCLUDE` travels on
+    the response instead, stating why each of those is absent.
+    """
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+    id: int
+    farm_id: int
+    block_id: int
+    scan_version: str
+    model_version: str
+    target: str
+    basis: str
+    horizon_hours: int
+    lookback_hours: int
+    dates_scanned: int
+    assessed_count: int
+    band_counts: dict | None = None
+    reason_counts: dict | None = None
+    grade_counts: dict | None = None
+    run_by: str | None = None
+    created_at: datetime
+    items: list[OpportunityScanItem] = []
+    # Defaulted, never read from the ORM row, so EVERY serialization of a scan carries
+    # its own claim ceiling. A caller cannot receive the histogram without also
+    # receiving the statement of what it does not establish.
+    cannot_conclude: dict = Field(
+        default_factory=lambda: dict(backtest.SCAN_CANNOT_CONCLUDE)
+    )
 
 
 PcaDispositionValue = Literal[

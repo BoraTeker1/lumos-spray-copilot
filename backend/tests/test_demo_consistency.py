@@ -226,3 +226,78 @@ def test_demo_scenarios_share_scenario_consistent_field_blocks(seeded):
     assert rescue["field_block"] == "South Block"
     mite_obs = [o for o in observations if "mite" in (o["visible_issue"] or "")]
     assert mite_obs and all(o["field_block"] == "South Block" for o in mite_obs)
+
+
+# ------------------------------------------------------------------ demo blocks
+# Blocks were added to the seed (2026-08-06) because every Botrytis-pilot surface
+# rendered empty without them and the product looked half built. These tests pin what
+# they must and must NOT make possible.
+
+
+def test_the_us_demo_farm_has_blocks_with_pilot_observations(seeded):
+    farm = _us_farm(seeded)
+    blocks = seeded.get(f"/farms/{farm['id']}/blocks").json()
+    assert {b["name"] for b in blocks} == {"Field 7", "South Block"}
+    assert all(b["crop"] == "strawberry" for b in blocks)
+
+    weather = seeded.get(f"/farms/{farm['id']}/weather-observations").json()
+    samples = seeded.get(f"/farms/{farm['id']}/scouting-samples").json()
+    assert len(weather) > 0
+    assert len(samples) == 2
+
+
+def test_the_tr_contrast_farms_have_no_blocks(seeded):
+    """The pilot is single-crop, single-region by design."""
+    for farm in seeded.get("/farms").json():
+        if farm["country"] == "TR":
+            assert seeded.get(f"/farms/{farm['id']}/blocks").json() == []
+
+
+def test_seeded_weather_carries_no_leaf_wetness(seeded):
+    """Seeding a wetness number would fabricate the one measurement the pilot lacks.
+
+    No farm in this system has a wetness sensor, and CIMIS publishes no wetness item.
+    A demo value would make the blocker invisible in the exact place it is being
+    demonstrated.
+    """
+    farm = _us_farm(seeded)
+    for row in seeded.get(f"/farms/{farm['id']}/weather-observations").json():
+        assert row["leaf_wetness_minutes"] is None
+        assert row["wetness_is_measured"] is None
+
+
+def test_a_demo_block_can_never_produce_a_risk_band(seeded):
+    """The demo/real guard reaches into the risk path, not just the UI.
+
+    Every seeded reading is demo/simulated, so `pit.admissible` excludes all of them
+    and the assessment abstains. If this ever fails, a demo farm has started producing
+    risk output that looks real — the same class of error as a demo farm showing a
+    label-grounded decision.
+    """
+    farm = _us_farm(seeded)
+    planned = [
+        p for p in seeded.get(f"/farms/{farm['id']}/planned-sprays").json()
+        if p.get("block_id")
+    ]
+    assert planned, "expected at least one block-linked demo decision"
+
+    snap = seeded.post(
+        f"/planned-sprays/{planned[0]['id']}/risk-snapshot", json={}
+    ).json()
+    assert snap["payload"]["weather"] == []
+    reasons = {e["reason"] for e in snap["excluded"]}
+    # The demo guard must be doing the work. `observed_after_as_of` also appears —
+    # the pinned clock puts as_of at midnight while readings run to 06:00, which is
+    # the future-observation rule working correctly — so this asserts the demo reason
+    # is present rather than that it is the only one.
+    assert "demo_or_simulated_source" in reasons
+    assert reasons <= {"demo_or_simulated_source", "observed_after_as_of"}
+
+
+def test_one_demo_decision_is_deliberately_left_unlinked_to_a_block(seeded):
+    """A farm partway through adopting blocks is the realistic state, and block_id is
+    nullable precisely for it. Linking all three would hide that."""
+    farm = _us_farm(seeded)
+    planned = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()
+    assert any(p.get("block_id") is None for p in planned)
+    assert any(p.get("block_id") is not None for p in planned)

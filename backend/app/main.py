@@ -787,6 +787,67 @@ def get_shadow_assessments(farm_id: int | None = None, db: Session = Depends(get
     return crud.list_shadow_assessments(db, farm_id)
 
 
+@app.post(
+    "/internal/farms/{farm_id}/opportunity-scans",
+    response_model=schemas.OpportunityScan,
+    status_code=201,
+    tags=["internal"],
+)
+def post_opportunity_scan(
+    farm_id: int,
+    payload: schemas.OpportunityScanCreate,
+    db: Session = Depends(get_db),
+):
+    """Replay a past season's scheduled spray dates for one block (pilot ladder Stage 2).
+
+    INTERNAL on purpose, and for a different reason than most `/internal` routes. This
+    is not merely operator tooling: a risk histogram reaching a PCA who is enrolled in
+    the blinded shadow study would contaminate the baseline their dispositions exist to
+    provide. It stays behind the operator key for as long as any farm is in shadow.
+
+    Returns the histogram together with `cannot_conclude` — the scan cannot be received
+    without its claim ceiling.
+    """
+    _require_farm(db, farm_id)
+    try:
+        return crud.run_opportunity_scan(
+            db,
+            farm_id,
+            payload.block_id,
+            payload.decision_dates,
+            horizon_hours=payload.horizon_hours,
+            lookback_hours=payload.lookback_hours,
+            run_by=payload.run_by,
+        )
+    except crud.CrossFarmReferenceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get(
+    "/internal/opportunity-scans",
+    response_model=list[schemas.OpportunityScan],
+    tags=["internal"],
+)
+def get_opportunity_scans(
+    farm_id: int | None = None, limit: int = 50, db: Session = Depends(get_db)
+):
+    return crud.list_opportunity_scans(db, farm_id, limit)
+
+
+@app.get(
+    "/internal/opportunity-scans/{scan_id}",
+    response_model=schemas.OpportunityScan,
+    tags=["internal"],
+)
+def get_opportunity_scan(scan_id: int, db: Session = Depends(get_db)):
+    scan = crud.get_opportunity_scan(db, scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Opportunity scan not found")
+    return scan
+
+
 def _require_planned_spray(db: Session, planned_id: int):
     planned = crud.get_planned_spray(db, planned_id)
     if planned is None:

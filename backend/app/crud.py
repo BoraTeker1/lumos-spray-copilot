@@ -12,9 +12,9 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import (
-    clock, crop_aliases, csv_import, decision_status, disease_risk, label_data,
-    label_table, models, pca_authority, procurement_status, risk_snapshot, schemas,
-    target_aliases,
+    backtest, clock, crop_aliases, csv_import, decision_status, disease_risk,
+    label_data, label_table, models, pca_authority, procurement_status, risk_snapshot,
+    schemas, target_aliases,
 )
 from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -633,6 +633,10 @@ def create_risk_snapshot(
         payload=draft.as_payload(),
         input_digest=draft.input_digest,
         excluded=draft.excluded,
+        # Explicit rather than defaulted. This is the live pilot's proof-grade path, and
+        # the one place where reading `basis` from anywhere but the call site would be
+        # a silent downgrade.
+        basis=risk_snapshot.BASIS_POINT_IN_TIME,
     )
     db.add(row)
     db.commit()
@@ -655,6 +659,97 @@ def latest_risk_snapshot(
 ) -> models.RiskInputSnapshot | None:
     snapshots = list_risk_snapshots(db, planned_spray_id)
     return snapshots[-1] if snapshots else None
+
+
+# ------------------------------------------------------- historical opportunity scan
+def run_opportunity_scan(
+    db: Session,
+    farm_id: int,
+    block_id: int,
+    decision_dates: list[datetime],
+    *,
+    horizon_hours: int = 72,
+    lookback_hours: int = 168,
+    run_by: str | None = None,
+) -> models.OpportunityScan:
+    """Replay past decision dates for one block and store the histogram.
+
+    Mirrors `create_risk_snapshot`'s narrowing: the whole session is in scope here and
+    only the block and its observations are handed to `backtest.run_scan`, which is
+    framework-free and therefore cannot reach an outcome even if someone wanted it to.
+
+    Nothing is written to `risk_input_snapshots` or `disease_risk_assessments`. A
+    retrospective replay must not leave rows in the tables the prospective pilot
+    calibrates from — see `models.OpportunityScan`.
+    """
+    block = get_block(db, block_id)
+    if block is None:
+        raise CrossFarmReferenceError("block not found")
+    ensure_block_on_farm(db, farm_id, block_id)
+    if not decision_dates:
+        raise ValueError(
+            "a scan with no decision dates has nothing to replay — supply the dates "
+            "the sprays were actually scheduled for"
+        )
+
+    result = backtest.run_scan(
+        decision_dates=decision_dates,
+        block=block,
+        weather_observations=list_weather_for_block(db, farm_id, block),
+        scouting_samples=list_scouting_samples(db, farm_id, block_id),
+        target=PILOT_TARGET,
+        horizon_hours=horizon_hours,
+        lookback_hours=lookback_hours,
+    )
+
+    scan = models.OpportunityScan(
+        farm_id=farm_id,
+        block_id=block_id,
+        scan_version=backtest.SCAN_VERSION,
+        model_version=result.model_version,
+        target=result.target,
+        basis=result.basis,
+        horizon_hours=horizon_hours,
+        lookback_hours=lookback_hours,
+        dates_scanned=result.dates_scanned,
+        assessed_count=result.assessed_count,
+        band_counts=result.band_counts,
+        reason_counts=result.reason_counts,
+        grade_counts=result.grade_counts,
+        run_by=run_by,
+    )
+    scan.items = [
+        models.OpportunityScanItem(
+            as_of=item.as_of,
+            risk_band=item.risk_band,
+            abstained=item.abstained,
+            reasons=list(item.reasons),
+            evidence_grade=item.evidence_grade,
+            probability_or_index=item.probability_or_index,
+            input_digest=item.input_digest,
+            excluded_count=item.excluded_count,
+        )
+        for item in result.items
+    ]
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+    return scan
+
+
+def get_opportunity_scan(db: Session, scan_id: int) -> models.OpportunityScan | None:
+    return db.get(models.OpportunityScan, scan_id)
+
+
+def list_opportunity_scans(
+    db: Session, farm_id: int | None = None, limit: int = 50
+) -> list[models.OpportunityScan]:
+    stmt = select(models.OpportunityScan)
+    if farm_id is not None:
+        stmt = stmt.where(models.OpportunityScan.farm_id == farm_id)
+    return list(
+        db.scalars(stmt.order_by(models.OpportunityScan.created_at.desc()).limit(limit))
+    )
 
 
 class SnapshotRequiredError(Exception):

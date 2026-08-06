@@ -326,6 +326,143 @@ def run() -> None:
         db.add(farm3_obs)
 
         # ------------------------------------------------------------------ #
+        # Blocks — the Botrytis pilot's unit of comparison.                   #
+        #                                                                     #
+        # Without these, every pilot surface (disposition card, operator      #
+        # card, opportunity scan) renders empty and the product looks half    #
+        # built. They exist ONLY on the U.S. wedge farm; the TR contrast      #
+        # farms are not in the pilot's declared scope.                        #
+        #                                                                     #
+        # The names deliberately echo the free-text `field_block` values      #
+        # already used above, and the link is still made EXPLICITLY on each   #
+        # record below. That distinction is the whole point of Block's        #
+        # docstring: authoring a demo block called "Field 7" is a decision    #
+        # someone made, whereas deriving one from the string would fabricate  #
+        # structure nobody recorded.                                          #
+        # ------------------------------------------------------------------ #
+        block_field7 = models.Block(
+            farm_id=farm3.id,
+            name="Field 7",
+            crop="strawberry",
+            cultivar="Monterey",
+            area=6.0,
+            area_unit="acres",
+            planting_date=farm3.planting_date,
+            expected_harvest_date=farm3.expected_harvest_date,
+            phenology_stage="fruiting",
+            phenology_observed_on=today - timedelta(days=2),
+            notes="Low, shaded rows — the block carrying the gray-mold pressure.",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        block_south = models.Block(
+            farm_id=farm3.id,
+            name="South Block",
+            crop="strawberry",
+            cultivar="Albion",
+            area=5.0,
+            area_unit="acres",
+            planting_date=farm3.planting_date,
+            expected_harvest_date=farm3.expected_harvest_date,
+            phenology_stage="fruiting",
+            phenology_observed_on=today - timedelta(days=6),
+            notes="Warmer, better airflow — the contrast block.",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        db.add_all([block_field7, block_south])
+        db.flush()
+
+        # Station weather, two-hourly across the snapshot's 7-day lookback so the
+        # record has no gap beyond `disease_risk.MAX_GAP_HOURS`.
+        #
+        # `recorded_at` == `observed_at`: the demo story is a station reporting as the
+        # weather happens. It is NOT back-dated history — that distinction is the one
+        # `app/pit.py` exists to protect, and a seed that quietly violated it would
+        # teach exactly the wrong thing to whoever reads this next.
+        #
+        # NOTE WHAT THIS DOES NOT PRODUCE, because it surprises people. These rows are
+        # demo/simulated, so `pit.admissible` excludes every one of them and any
+        # assessment over this block abstains. That is correct and worth demonstrating:
+        # the demo/real guard is not a UI filter, it reaches all the way into the risk
+        # path. A demo farm can never show a risk band, for the same structural reason
+        # it can never show a label-grounded decision (ENGINEERING_GUIDELINES.md §5, reference farm).
+        #
+        # THE CONFUSING PART: the abstention reads `no_weather_in_window`, NOT
+        # `demo_or_simulated_input_present`. Demo rows are filtered out at the snapshot
+        # layer, so `disease_risk._weather_problems` never sees them and honestly
+        # reports that no ADMISSIBLE weather exists. Someone looking at 85 visible
+        # weather rows will read that as a bug. It is not — the real reason is on
+        # `RiskInputSnapshot.excluded`, every row tagged `demo_or_simulated_source`.
+        #
+        # `leaf_wetness_minutes` stays None on purpose: no wetness sensor exists on any
+        # farm in this system, and seeding a wetness number would fabricate the exact
+        # measurement the pilot is blocked on.
+        weather_rows = []
+        for step in range(85):
+            observed = _at(today, 6) - timedelta(hours=2 * step)
+            weather_rows.append(
+                models.WeatherObservation(
+                    farm_id=farm3.id,
+                    block_id=block_field7.id,
+                    station_id="CIMIS-111",
+                    station_name="Watsonville West (demo)",
+                    station_distance_km=4.2,
+                    observed_at=observed,
+                    recorded_at=observed,
+                    temperature_c=round(13.5 + 3.5 * ((step % 12) / 12.0), 1),
+                    relative_humidity_pct=round(78.0 + 14.0 * ((step % 9) / 9.0), 1),
+                    rainfall_mm=0.0,
+                    leaf_wetness_minutes=None,
+                    wetness_is_measured=None,
+                    source_type="manual_entry",
+                    source_reference="Demo station export (simulated)",
+                    data_source="demo",
+                    data_confidence="simulated",
+                )
+            )
+        db.add_all(weather_rows)
+
+        # Standardized scouting samples — the pilot's counted-units format, which is a
+        # different record from the free-text `ScoutObservation` above. Both exist
+        # because a severity 1-5 impression and "9 of 200 fruit affected" are not the
+        # same evidence, and the pilot needs the countable one.
+        db.add_all([
+            models.ScoutingSample(
+                farm_id=farm3.id,
+                block_id=block_field7.id,
+                observed_at=_at(today - timedelta(days=2), 8),
+                recorded_at=_at(today - timedelta(days=2), 8),
+                method="fruit_count",
+                target="botrytis_fruit_rot",
+                units_inspected=200,
+                units_affected=9,
+                incidence_pct=4.5,
+                scout_name="Demo scout (simulated)",
+                notes="Low shaded rows; infected berries clustered.",
+                source_type="manual_entry",
+                data_source="demo",
+                data_confidence="simulated",
+            ),
+            models.ScoutingSample(
+                farm_id=farm3.id,
+                block_id=block_south.id,
+                observed_at=_at(today - timedelta(days=6), 8),
+                recorded_at=_at(today - timedelta(days=6), 8),
+                method="fruit_count",
+                target="botrytis_fruit_rot",
+                units_inspected=200,
+                units_affected=2,
+                incidence_pct=1.0,
+                scout_name="Demo scout (simulated)",
+                notes="Contrast block — better airflow, little pressure.",
+                source_type="manual_entry",
+                data_source="demo",
+                data_confidence="simulated",
+            ),
+        ])
+
+        # ------------------------------------------------------------------ #
         # Demo scenario 1 (risky spray CHANGED after PCA review):             #
         #   a 4th captan cover spray planned 1 day before harvest is BLOCKED  #
         #   (PHI conflict + repeated chemistry), the demo PCA edits the       #
@@ -406,6 +543,10 @@ def run() -> None:
             created_at=_at(prev, 8),
         )
         db.add(planned1)
+        # Linked EXPLICITLY, not inferred from `field_block="Field 7"` above. Without a
+        # block_id `crud.create_risk_snapshot` refuses outright — a risk assessment is
+        # always about a specific block, and the block is never guessed from free text.
+        planned1.block_id = block_field7.id
 
         # The spray that actually happened after the changed-product outcome —
         # created and LINKED to the decision, exactly like a live recorded outcome.
@@ -537,6 +678,10 @@ def run() -> None:
             created_at=datetime.combine(today, datetime.min.time()),
         )
         db.add(planned2)
+        # DELIBERATELY left unlinked. Its `field_block` is "North Block", for which no
+        # Block row was authored — so this decision shows the real, common state of a
+        # farm partway through adopting blocks. `block_id` is nullable precisely for
+        # this, and a risk snapshot correctly refuses on it rather than guessing.
 
         db.flush()  # assign planned2.id for its provenance/audit/follow-up rows
         _seed_decision_trail(
@@ -668,6 +813,7 @@ def run() -> None:
             created_at=check_ts,
         )
         db.add(planned3)
+        planned3.block_id = block_south.id
         db.flush()
         _seed_decision_trail(
             db, planned3, source_type="user_entered",

@@ -417,6 +417,15 @@ class RiskInputSnapshot(Base):
     # reproduce this exactly, which is what makes an assessment auditable.
     input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     excluded: Mapped[list | None] = mapped_column(JSON)
+    # Which admissibility rule produced this row: point_in_time (both timestamps, the
+    # proof-grade basis the live pilot uses) or retrospective_reconstruction
+    # (observed_at only, the historical scan's weaker basis). Nullable with a
+    # point-in-time default so every row written before this column existed reads
+    # correctly — they were all point-in-time, because nothing else could build one.
+    # See `app/risk_snapshot.py` for why the two must never be confused.
+    basis: Mapped[str | None] = mapped_column(
+        String(40), default="point_in_time", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
 
@@ -475,6 +484,80 @@ class DiseaseRiskAssessment(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
     data_source: Mapped[str] = mapped_column(String(40), default="rule_engine")
     data_confidence: Mapped[str] = mapped_column(String(40), default="computed")
+
+
+class OpportunityScan(Base):
+    """One historical opportunity scan over a past season. Append-only.
+
+    Deliberately NOT a flag on `DiseaseRiskAssessment`. That table is the prospective
+    pilot's record of what a rule said about an upcoming spray, and the pilot's central
+    design commitment is keeping four moments strictly separate (see `PcaDisposition`).
+    A retrospective scan is a fifth thing: it reads a weaker snapshot basis, it makes a
+    weaker claim, and its rows must never be counted in a calibration join or appear in
+    a PCA-facing serializer. Giving it its own table makes all of that true by
+    construction rather than by a WHERE clause somebody has to remember.
+
+    There is no avoided-spray column and no reduction column, mirroring
+    `backtest.ScanResult`. A scan cannot express that a spray was avoidable, because
+    every historical outcome followed the actual spray.
+    """
+    __tablename__ = "opportunity_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+
+    scan_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    target: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Always retrospective_reconstruction today. Stored rather than assumed so a future
+    # point-in-time scan (possible once a farm has been ingesting prospectively for a
+    # season) is distinguishable from this one without reading the code that wrote it.
+    basis: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    lookback_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    dates_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assessed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    band_counts: Mapped[dict | None] = mapped_column(JSON)
+    # The useful output while the threshold table is empty: a per-farm work list of
+    # exactly what stopped each date from being assessable.
+    reason_counts: Mapped[dict | None] = mapped_column(JSON)
+    grade_counts: Mapped[dict | None] = mapped_column(JSON)
+
+    run_by: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    items: Mapped[list["OpportunityScanItem"]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
+
+
+class OpportunityScanItem(Base):
+    """One replayed decision date within a scan. Append-only.
+
+    Carries its snapshot digest so a reader can reproduce the inputs behind any single
+    date — the same auditability property `RiskInputSnapshot` gives the live pilot.
+    """
+    __tablename__ = "opportunity_scan_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunity_scans.id"), nullable=False, index=True
+    )
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    risk_band: Mapped[str] = mapped_column(String(20), nullable=False)
+    abstained: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Every reason, not just the first.
+    reasons: Mapped[list | None] = mapped_column(JSON)
+    evidence_grade: Mapped[str | None] = mapped_column(String(2))
+    probability_or_index: Mapped[float | None] = mapped_column(Float)
+    input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    excluded_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    scan: Mapped["OpportunityScan"] = relationship(back_populates="items")
 
 
 class PcaDisposition(Base):

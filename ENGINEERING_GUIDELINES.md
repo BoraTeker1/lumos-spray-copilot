@@ -111,6 +111,43 @@ LLM weekly summaries and photo upload are Milestone-3 ideas — also gated, not 
 
 Backend + frontend both implement:
 
+- **Historical opportunity scan — pilot ladder Stage 2 (2026-08-06)** — replays a past
+  season's scheduled spray dates and reports what the versioned rule read on each.
+  Plan: `~/.claude/plans/giggly-pondering-dewdrop.md`.
+  - **The design crux, and the reason this needed engineering at all.** `pit.admissible`
+    excludes any row with `recorded_at > as_of`, and a concierge import of last season
+    stamps `recorded_at` at ingest time. A point-in-time replay of a past date therefore
+    admits **NOTHING** — verified live: same block, same `as_of`, point-in-time admitted
+    **0** rows (15 excluded `recorded_after_as_of`), retrospective admitted **7**. The
+    fix is a second, explicitly-named basis, **never a back-dated timestamp**:
+    `risk_snapshot.BASIS_RETROSPECTIVE` relaxes exactly one rule and nothing else
+    (superseded / quality-flagged / demo stay excluded, pinned by test).
+  - **Prospective digests did NOT move.** `basis` is absent from a point-in-time payload
+    and retrospective gets its own digest namespace, so a reconstruction can never
+    masquerade as the prospective record of that moment.
+    `PINNED_PROSPECTIVE_DIGEST` in `tests/test_leakage.py` pins this — commit `f06005f`
+    moved these digests once; this change must not.
+  - **`app/backtest.py`** (pure, framework-free) reuses `build_snapshot` + `assess`,
+    reimplementing neither. Output is a histogram — band counts, **reason counts**,
+    grade counts. **There is no avoided count and no reduction figure**, and
+    `FORBIDDEN_KEY_SUBSTRINGS` + a payload-walking test make adding one fail CI.
+    `SCAN_CANNOT_CONCLUDE` rides on every payload via a schema `default_factory`, so the
+    histogram cannot be received without its claim ceiling.
+  - **`app/botrytis_thresholds.py` ships EMPTY**, exactly like `label_table.py` did.
+    Frozen/kw-only, no provenance defaults, overlap-checked. **The arithmetic IS now
+    implemented** (`BotrytisWetnessV1.evaluate`) and tested against SYNTHETIC tables
+    built in the test file — so transcribing the primary source is the only remaining
+    step. A temperature outside the transcribed table abstains
+    (`ABSTAIN_TEMPERATURE_OUTSIDE_TABLE`) rather than reading low.
+  - `OpportunityScan`/`OpportunityScanItem` are a **separate append-only table**, not a
+    flag on `DiseaseRiskAssessment` — a retrospective row must never enter a calibration
+    join or a PCA-facing serializer. Operator-gated routes only; nothing was added to
+    the PCA-facing surface, or the shadow study's blinding breaks.
+  - **What it does NOT establish:** every historical outcome followed the actual spray,
+    so there is no untreated counterfactual and no date can be called avoidable. This is
+    *sizing*, and the reason histogram — not the band counts — is the useful output
+    while the threshold table is empty. **Still zero pilots; §3/§11 unchanged.**
+
 - **Data-intelligence layer (2026-08-05)** — outside data reaching a decision auditably.
   **Full contract in `DATA_PLATFORM.md`; read it before proposing anything here.**
   Branch `data-intelligence-layer`.
@@ -600,6 +637,12 @@ Backend + frontend both implement:
     content-block/size helpers, registers a `MockLlmService` builder, logs
     `AiJudgment.kind="label_extraction"`. Extraction NEVER writes a label record; committing
     one is a separate route and verifying it is a third (see §5).
+  - `app/backtest.py` — the historical opportunity scan (pure, framework-free). Reuses
+    `risk_snapshot.build_snapshot` (at `BASIS_RETROSPECTIVE`) + `disease_risk.assess`.
+    `SCAN_CANNOT_CONCLUDE` is the claim ceiling; `FORBIDDEN_KEY_SUBSTRINGS` is the test
+    hook that stops an avoided/reduction key ever being added.
+    `app/botrytis_thresholds.py` is its EMPTY transcription source (sibling of
+    `label_table.py`) — fill it and the rule works with no other code change.
   - `app/analytics.py` — `compute_cost_analytics`.
   - `app/reduction.py` — `compute_reduction` (pure, framework-free). Baseline methods +
     `CALENDAR_PROGRAMS`, `is_headline_safe` gate, honest caveats. Consumed by `pilot_evidence`.
@@ -674,6 +717,10 @@ Backend + frontend both implement:
     `GET /internal/ingestion/sources` (the 17-domain table with each deferral's §4
     citation), `GET /internal/ingestion` (runs with counts + issues),
     `POST /internal/ingestion/{source_key}/run` (**enqueues**, never fetches inline)
+  - Opportunity scan (operator only): `POST /internal/farms/{id}/opportunity-scans`
+    (block + the dates sprays were ACTUALLY scheduled for — never a generated grid, which
+    would invent the denominator), `GET /internal/opportunity-scans[/{id}]`. Every
+    response carries `cannot_conclude`. Append-only: no PUT/PATCH/DELETE.
   - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
     `/export/pilot-feedback.csv`
   - `GET /health`; interactive docs at `/docs`.
@@ -792,7 +839,7 @@ npm run dev        # http://localhost:3000
 
 - **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
   is the only lint step.
-- **Passing test count:** repo currently shows **864 passing**. **Always re-run `pytest` to
+- **Passing test count:** repo currently shows **892 passing**. **Always re-run `pytest` to
   confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
   the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
 - **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
@@ -996,6 +1043,14 @@ The ask:
   while evidence stayed flat (label layer, reference farm, data platform). The pattern
   is the warning, not the achievement. The next "what should we build?" whose answer
   sounds obvious is the one to refuse.
+- The **historical opportunity scan was built anyway** (2026-08-06) on an explicit
+  instruction. This is the FOURTH cycle of capability-up / evidence-flat. It is the
+  least bad of the four, because its output is a number a PCA can argue with rather
+  than another capability — but note precisely what it did: it makes a design-partner
+  conversation concrete, and it created no buyer evidence. **It is blocked on two
+  non-code things it cannot itself resolve** — the threshold transcription (B1) and, for
+  grade-A evidence, a leaf-wetness sensor. Do not build a fifth thing to work around
+  either; both are a purchase or a reading task.
 - Remaining deep functionality (**MRL data** especially — destination-market law, a different
   source, still out of scope per §4) waits on buyer validation.
 

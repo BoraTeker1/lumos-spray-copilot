@@ -5,6 +5,7 @@ import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
 import DomainRegistryTable from "@/components/DomainRegistryTable";
 import IngestionCard from "@/components/IngestionCard";
+import OpportunityScanCard from "@/components/OpportunityScanCard";
 import LabelLibraryCard from "@/components/LabelLibraryCard";
 import PilotOperatorCard from "@/components/PilotOperatorCard";
 import { api } from "@/lib/api";
@@ -261,6 +262,20 @@ export default function InternalToolsPage() {
           boundary visible rather than leaving it in a document.
         </p>
         <DomainRegistryTable />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold">Historical opportunity scan</h2>
+        <p className="mb-3 mt-1 text-xs text-gray-500">
+          Pilot ladder Stage 2. Replays a past season&rsquo;s scheduled spray dates and
+          reports what the versioned rule read on each — or, while the threshold table
+          is empty, exactly what stopped each date from being assessable. That reason
+          histogram is a per-farm work list, and it is available before a single
+          coefficient is transcribed. It is <strong>sizing, never evidence</strong>:
+          every historical outcome followed the actual spray, so there is no untreated
+          counterfactual and no date here can be called avoidable.
+        </p>
+        <OpportunityScanCard />
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
