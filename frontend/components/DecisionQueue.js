@@ -21,9 +21,9 @@ export function decisionColumns({ includeNextActionText = false } = {}) {
       header: "Decision",
       render: (p) => (
         <div className="min-w-0">
-          <div className="font-medium text-gray-900">{p.product_name}</div>
+          <div className="font-medium text-ink">{p.product_name}</div>
           {p.active_ingredient && (
-            <div className="text-xs text-gray-500">{p.active_ingredient}</div>
+            <div className="text-xs text-muted">{p.active_ingredient}</div>
           )}
         </div>
       ),
@@ -32,14 +32,14 @@ export function decisionColumns({ includeNextActionText = false } = {}) {
       key: "field",
       header: "Field",
       priority: "secondary",
-      render: (p) => <span className="text-gray-700">{p.field_block || "—"}</span>,
+      render: (p) => <span className="text-ink">{p.field_block || "—"}</span>,
     },
     {
       key: "target",
       header: "Target",
       priority: "secondary",
       render: (p) => (
-        <span className="text-xs text-gray-600">{p.target_pest_or_disease || "—"}</span>
+        <span className="text-xs text-muted">{p.target_pest_or_disease || "—"}</span>
       ),
     },
     {
@@ -66,7 +66,7 @@ export function decisionColumns({ includeNextActionText = false } = {}) {
       key: "planned",
       header: "Planned",
       render: (p) => (
-        <span className="whitespace-nowrap text-gray-700">{formatDate(p.intended_date)}</span>
+        <span className="whitespace-nowrap text-ink">{formatDate(p.intended_date)}</span>
       ),
     },
   ];
@@ -76,7 +76,7 @@ export function decisionColumns({ includeNextActionText = false } = {}) {
       header: "Next action",
       priority: "secondary",
       render: (p) => (
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted">
           {p.current_next_action === "none" ? "—" : nextActionLabel(p.current_next_action)}
         </span>
       ),

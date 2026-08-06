@@ -22,8 +22,8 @@ function InstrumentationSummary() {
     api.getInstrumentation().then(setData).catch((err) => setError(err.message));
   }, []);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading telemetry…</p>;
+  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (!data) return <p className="text-sm text-muted">Loading telemetry…</p>;
 
   const rows = [
     ["Checks started (client-reported)", data.checks_started],
@@ -48,15 +48,15 @@ function InstrumentationSummary() {
 
   return (
     <div>
-      <dl className="divide-y divide-gray-100 text-sm">
+      <dl className="divide-y divide-line text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between gap-3 py-1.5">
-            <dt className="text-gray-500">{label}</dt>
-            <dd className="text-right font-medium text-gray-900">{value}</dd>
+            <dt className="text-muted">{label}</dt>
+            <dd className="text-right font-medium text-ink">{value}</dd>
           </div>
         ))}
       </dl>
-      <ul className="mt-2 space-y-0.5 text-[11px] text-gray-400">
+      <ul className="mt-2 space-y-0.5 text-[11px] text-muted">
         {(data.notes || []).map((n, i) => (
           <li key={i}>• {n}</li>
         ))}
@@ -73,8 +73,8 @@ function AiCalibrationSummary() {
     api.getAiCalibration().then(setData).catch((err) => setError(err.message));
   }, []);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading AI calibration…</p>;
+  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (!data) return <p className="text-sm text-muted">Loading AI calibration…</p>;
 
   const rows = [
     ["Risk notes logged", data.risk_notes_total],
@@ -90,17 +90,17 @@ function AiCalibrationSummary() {
 
   return (
     <div>
-      <dl className="divide-y divide-gray-100 text-sm">
+      <dl className="divide-y divide-line text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between gap-3 py-1.5">
-            <dt className="text-gray-500">{label}</dt>
-            <dd className="text-right font-medium text-gray-900">{value}</dd>
+            <dt className="text-muted">{label}</dt>
+            <dd className="text-right font-medium text-ink">{value}</dd>
           </div>
         ))}
       </dl>
       <table className="mt-3 w-full text-left text-xs">
         <thead>
-          <tr className="text-gray-500">
+          <tr className="text-muted">
             <th className="py-1 pr-3 font-medium">Predicted risk</th>
             <th className="py-1 pr-3 font-medium">Predictions</th>
             <th className="py-1 pr-3 font-medium">With follow-up</th>
@@ -110,7 +110,7 @@ function AiCalibrationSummary() {
         </thead>
         <tbody>
           {Object.entries(data.predictions_by_level || {}).map(([level, block]) => (
-            <tr key={level} className="border-t border-gray-100">
+            <tr key={level} className="border-t border-line">
               <td className="py-1 pr-3 font-medium uppercase">{level}</td>
               <td className="py-1 pr-3">{block.predictions}</td>
               <td className="py-1 pr-3">{block.with_follow_up}</td>
@@ -124,7 +124,7 @@ function AiCalibrationSummary() {
           ))}
         </tbody>
       </table>
-      <ul className="mt-2 space-y-0.5 text-[11px] text-gray-400">
+      <ul className="mt-2 space-y-0.5 text-[11px] text-muted">
         {(data.notes || []).map((n, i) => (
           <li key={i}>• {n}</li>
         ))}
@@ -151,31 +151,31 @@ export default function InternalToolsPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-lg font-semibold text-gray-900">Internal tools</h1>
-        <p className="mt-0.5 max-w-2xl text-xs text-gray-500">
+        <h1 className="text-lg font-semibold text-ink">Internal tools</h1>
+        <p className="mt-0.5 max-w-2xl text-xs text-muted">
           Operator-only concierge tooling. Not part of the customer-facing workflow and not
           linked from the navigation.
         </p>
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error} — is the backend running on <code>http://localhost:8000</code>?
         </div>
       )}
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Pilot instrumentation</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Workflow telemetry for running a real pilot: the check funnel, review latency,
           changed decisions, and how data gets entered. Never customer-facing.
         </p>
         <InstrumentationSummary />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">AI calibration</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Every AI output (extraction, risk note, evidence action) is logged append-only;
           this compares predicted rescue risk against realized rescues from follow-up
           records. Rates are published only past the minimum-n gate — counts until then.
@@ -183,17 +183,17 @@ export default function InternalToolsPage() {
         <AiCalibrationSummary />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Concierge import</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an
           existing farm, with provenance tags on every row.
         </p>
         {farms.length === 0 ? (
-          <p className="text-sm text-gray-500">No farms yet — create one first.</p>
+          <p className="text-sm text-muted">No farms yet — create one first.</p>
         ) : (
           <>
-            <label className="mb-4 block text-xs font-medium text-gray-600">
+            <label className="mb-4 block text-xs font-medium text-muted">
               Target farm
               <select
                 className="mt-1 w-full max-w-sm rounded border px-2 py-1.5 text-sm"
@@ -218,9 +218,9 @@ export default function InternalToolsPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Botrytis shadow pilot</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Issue and authorize PCA credentials, review the protocol, and read shadow
           risk assessments. Assessments are operator-only by construction — they are
           absent from the PCA-facing decision payload, not merely hidden in their UI.
@@ -228,9 +228,9 @@ export default function InternalToolsPage() {
         <PilotOperatorCard farmId={farmId} />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Pesticide label library</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Extract label directions with AI, correct every value against the document,
           and commit them as UNVERIFIED. A committed value is on file, not in force:
           only a licensed PCA verifying it for a specific farm lets a decision rely on
@@ -239,9 +239,9 @@ export default function InternalToolsPage() {
         <LabelLibraryCard farmId={farmId} />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Data ingestion</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Enqueue and inspect ingestion runs. The counts matter more than the status: a
           run that fetched 24 rows and admitted 3 is not a healthy run, and each of the
           21 dropped rows is explained individually rather than summarised away. Without
@@ -252,9 +252,9 @@ export default function InternalToolsPage() {
         <IngestionCard />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Data domains</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Seventeen domains are declared; eight are deferred to a finance phase that
           does not exist, and each names the ENGINEERING_GUIDELINES.md clause deferring it. Declaring is
           not building: a source under a deferred domain cannot have an adapter, and the
@@ -264,9 +264,9 @@ export default function InternalToolsPage() {
         <DomainRegistryTable />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Historical opportunity scan</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Pilot ladder Stage 2. Replays a past season&rsquo;s scheduled spray dates and
           reports what the versioned rule read on each — or, while the threshold table
           is empty, exactly what stopped each date from being assessable. That reason
@@ -278,15 +278,15 @@ export default function InternalToolsPage() {
         <OpportunityScanCard />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Supplier quotes & financing (concierge)</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
+        <p className="mb-3 mt-1 text-xs text-muted">
           Enter supplier quotes against open RFQs, indicative financing offers
           (never approvals), and append-only order lifecycle events. Phase 1 has
           no supplier portal — Lumos staff transcribe on suppliers&apos; behalf.
         </p>
         {farms.length === 0 ? (
-          <p className="text-sm text-gray-500">No farms yet — create one first.</p>
+          <p className="text-sm text-muted">No farms yet — create one first.</p>
         ) : (
           farmId && (
             <ConciergeQuoteCard

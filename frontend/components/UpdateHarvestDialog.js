@@ -63,7 +63,7 @@ export default function UpdateHarvestDialog({ farmId, currentDate, onUpdated, tr
             required
             aria-label="Expected harvest date"
           />
-          {error && <p className="text-xs text-red-600">{error}</p>}
+          {error && <p className="text-xs text-risk-fg">{error}</p>}
           <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save harvest date"}
           </Button>

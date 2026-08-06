@@ -68,19 +68,19 @@ export default function FeedbackPage() {
   }
 
   const input = fieldClass;
-  const label = "text-xs font-medium text-gray-600";
+  const label = "text-xs font-medium text-muted";
 
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Feedback" }]} />
       <div>
-        <h1 className="text-lg font-semibold text-gray-900">Pilot feedback</h1>
-        <p className="mt-1 text-sm text-gray-500">
+        <h1 className="text-lg font-semibold text-ink">Pilot feedback</h1>
+        <p className="mt-1 text-sm text-muted">
           Capture what growers, PCAs, and operators say after a demo. Stored locally.
         </p>
       </div>
 
-      <form onSubmit={submit} className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-2">
+      <form onSubmit={submit} className="grid gap-3 rounded-card border border-line bg-surface p-5 shadow-sm sm:grid-cols-2">
         <div>
           <span className={label}>Person type *</span>
           <select className={input} value={form.person_type} onChange={(e) => update("person_type", e.target.value)}>
@@ -131,7 +131,7 @@ export default function FeedbackPage() {
           <span className={label}>Notes</span>
           <textarea className={input} rows={2} value={form.notes} onChange={(e) => update("notes", e.target.value)} placeholder="Verbatim quotes, next steps…" />
         </div>
-        {error && <p className="text-sm text-red-600 sm:col-span-2">{error}</p>}
+        {error && <p className="text-sm text-risk-fg sm:col-span-2">{error}</p>}
         <div className="sm:col-span-2">
           <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save feedback"}
@@ -144,7 +144,7 @@ export default function FeedbackPage() {
         {items.length > 0 && (
           <a
             href={`${API_BASE_URL}/export/pilot-feedback.csv`}
-            className="rounded-lg border border-leaf-600/40 bg-white px-3 py-1.5 text-sm font-medium text-leaf-700 shadow-sm hover:bg-leaf-50"
+            className="rounded-control border border-leaf-600/40 bg-surface px-3 py-1.5 text-sm font-medium text-leaf-700 shadow-sm hover:bg-leaf-50"
           >
             Export CSV
           </a>
@@ -153,22 +153,22 @@ export default function FeedbackPage() {
 
       <div className="space-y-2">
         {items.map((it) => (
-          <div key={it.id} className="rounded-xl border border-gray-200 bg-white p-3 text-sm shadow-sm">
+          <div key={it.id} className="rounded-card border border-line bg-surface p-3 text-sm shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{it.person_type}</span>
-              {it.crop && <span className="text-xs text-gray-500">{it.crop}</span>}
-              {it.region && <span className="text-xs text-gray-500">· {it.region}</span>}
-              {it.requested_pilot && <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800">requested pilot</span>}
-              <span className="ml-auto text-xs text-gray-400">{formatDate(it.created_at)}</span>
+              <span className="rounded-full bg-draft-bg px-2 py-0.5 text-xs font-medium">{it.person_type}</span>
+              {it.crop && <span className="text-xs text-muted">{it.crop}</span>}
+              {it.region && <span className="text-xs text-muted">· {it.region}</span>}
+              {it.requested_pilot && <span className="rounded-full bg-ok-bg px-2 py-0.5 text-xs text-ok-fg">requested pilot</span>}
+              <span className="ml-auto text-xs text-muted">{formatDate(it.created_at)}</span>
             </div>
-            <div className="mt-1 text-xs text-gray-600">
+            <div className="mt-1 text-xs text-muted">
               pain: {it.biggest_pain || "—"} · records: {it.current_records_method || "—"} ·
               would use: {it.would_use_real_data || "—"} · would pay: {it.would_pay || "—"}
             </div>
-            {it.notes && <p className="mt-1 text-gray-700">{it.notes}</p>}
+            {it.notes && <p className="mt-1 text-ink">{it.notes}</p>}
           </div>
         ))}
-        {items.length === 0 && <p className="text-sm text-gray-500">No feedback captured yet.</p>}
+        {items.length === 0 && <p className="text-sm text-muted">No feedback captured yet.</p>}
       </div>
     </div>
   );

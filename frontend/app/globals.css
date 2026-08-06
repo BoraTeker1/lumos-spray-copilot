@@ -3,11 +3,22 @@
 @tailwind utilities;
 
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  @apply bg-canvas text-ink antialiased;
+}
+
+/* Tabular figures for any number that sits in a column with other numbers —
+   dates, costs, rates, PHI/REI days. Digits must line up vertically or a
+   scanned column of intervals reads as noise. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Print: hide app chrome and interactive controls so printable pages
-   (e.g. the decision record) come out as a clean one-column document. */
+   (e.g. the decision record) come out as a clean one-column document.
+   NOTE: these rules key off element tags — AppShell must keep rendering the
+   sidebar as <aside>, the top bar as <header> and the disclaimer as <footer>,
+   or printing silently regresses. `.no-print` covers everything else,
+   including the mobile bottom navigation. */
 @media print {
   aside,
   header,
@@ -20,5 +31,17 @@ body {
   }
   body {
     background: white;
+  }
+}
+
+/* Respect reduced-motion preferences (accessibility rule in the design spec). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

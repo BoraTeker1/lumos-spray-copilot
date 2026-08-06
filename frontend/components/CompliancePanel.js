@@ -130,31 +130,31 @@ export default function CompliancePanel() {
       key: "date",
       header: "Date",
       render: (r) => (
-        <span className="whitespace-nowrap text-gray-700">{formatDate(r.date)}</span>
+        <span className="whitespace-nowrap text-ink">{formatDate(r.date)}</span>
       ),
     },
     {
       key: "field",
       header: "Field",
       priority: "secondary",
-      render: (r) => <span className="text-gray-700">{r.field || "—"}</span>,
+      render: (r) => <span className="text-ink">{r.field || "—"}</span>,
     },
     {
       key: "issue",
       header: "Signal",
       render: (r) => (
         <div className="min-w-0 max-w-[340px]">
-          <div className="flex items-center gap-1.5 font-medium text-gray-900">
+          <div className="flex items-center gap-1.5 font-medium text-ink">
             {r.severity === "critical" ? (
-              <OctagonX className="h-3.5 w-3.5 shrink-0 text-red-600" aria-hidden />
+              <OctagonX className="h-3.5 w-3.5 shrink-0 text-risk-fg" aria-hidden />
             ) : (
-              <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+              <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-warn-fg" aria-hidden />
             )}
             {r.title}
           </div>
-          <p className="mt-0.5 text-xs text-gray-600">{r.detail}</p>
+          <p className="mt-0.5 text-xs text-muted">{r.detail}</p>
           {r.calculation && (
-            <p className="mt-0.5 font-mono text-[11px] text-gray-500">{r.calculation}</p>
+            <p className="mt-0.5 font-mono text-[11px] text-muted">{r.calculation}</p>
           )}
         </div>
       ),
@@ -165,7 +165,7 @@ export default function CompliancePanel() {
       priority: "secondary",
       render: (r) => (
         <div className="text-xs">
-          <div className="font-medium text-gray-900">{r.planned.product_name}</div>
+          <div className="font-medium text-ink">{r.planned.product_name}</div>
           <StatusBadge kind="verdict" value={r.planned.decision_outcome} className="mt-1" />
         </div>
       ),
@@ -175,7 +175,7 @@ export default function CompliancePanel() {
       header: "Source authority",
       priority: "secondary",
       render: (r) => (
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted">
           {r.source ? AUTHORITY_SOURCE_LABELS[r.source] || r.source : "—"}
         </span>
       ),
@@ -201,7 +201,7 @@ export default function CompliancePanel() {
   return (
     <div className="space-y-4">
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error}
         </div>
       )}
@@ -231,7 +231,7 @@ export default function CompliancePanel() {
         />
       )}
 
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <div className="min-w-0 lg:col-span-8">
           <SectionCard
             title="Records requiring attention"
@@ -289,10 +289,10 @@ export default function CompliancePanel() {
 
         <div className="space-y-4 lg:col-span-4">
           <SectionCard title="Harvest window" icon={<CalendarClock />}>
-            <div className="space-y-1.5 text-xs text-gray-600">
+            <div className="space-y-1.5 text-xs text-muted">
               <div className="flex items-center justify-between">
                 <span>Expected harvest</span>
-                <span className="font-medium text-gray-900">
+                <span className="font-medium text-ink">
                   {overview?.expected_harvest_date
                     ? formatDate(overview.expected_harvest_date)
                     : "—"}
@@ -318,7 +318,7 @@ export default function CompliancePanel() {
                 )}
               </div>
               {harvestOverdue && (
-                <p className="rounded bg-red-50 p-2 text-[11px] text-red-800">
+                <p className="rounded bg-risk-bg p-2 text-[11px] text-risk-fg">
                   A stale harvest date can invalidate PHI checks. Update it before the
                   next pre-spray decision.
                 </p>
@@ -326,7 +326,7 @@ export default function CompliancePanel() {
             </div>
           </SectionCard>
 
-          <p className="px-1 text-[11px] leading-snug text-gray-500">
+          <p className="px-1 text-[11px] leading-snug text-muted">
             Decision support only. Always confirm PHI, REI, rates, crop use, and
             restrictions with the product label and a licensed PCA / agronomist.
           </p>

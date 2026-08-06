@@ -51,7 +51,7 @@ export default function ScoutObservationForm({ farmId, onCreated }) {
   return (
     <form onSubmit={submit} className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs text-gray-500">
+        <label className="text-xs text-muted">
           Observation date *
           <input
             type="date"
@@ -73,7 +73,7 @@ export default function ScoutObservationForm({ farmId, onCreated }) {
           value={form.visible_issue}
           onChange={(e) => update("visible_issue", e.target.value)}
         />
-        <label className="text-xs text-gray-500">
+        <label className="text-xs text-muted">
           Severity (1–5)
           <select
             className={input}
@@ -101,7 +101,7 @@ export default function ScoutObservationForm({ farmId, onCreated }) {
         value={form.notes}
         onChange={(e) => update("notes", e.target.value)}
       />
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-risk-fg">{error}</p>}
       <button
         type="submit"
         disabled={saving}

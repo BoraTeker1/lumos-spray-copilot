@@ -103,7 +103,7 @@ export default function LinkApplicationDialog({ order, onChanged }) {
               </optgroup>
             )}
           </Select>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-risk-fg">{error}</p>}
           <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Link application"}
           </Button>

@@ -31,7 +31,7 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
     }
   }
 
-  const boxCls = (latest && BOX_STYLES[latest.risk_level]) || "border-gray-200 bg-gray-50";
+  const boxCls = (latest && BOX_STYLES[latest.risk_level]) || "border-line bg-canvas";
 
   return (
     <div className="space-y-3">
@@ -40,26 +40,26 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
         <button
           onClick={generate}
           disabled={generating}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-50"
+          className="rounded-control border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink shadow-sm transition hover:bg-canvas disabled:opacity-50"
         >
           {generating ? "Generating…" : latest ? "Re-generate" : "Generate recommendation"}
         </button>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-risk-fg">{error}</p>}
 
       {latest ? (
         <>
           <NextActionCard action={latest.next_action} />
 
-          <div className={`rounded-lg border p-4 ${boxCls}`}>
+          <div className={`rounded-control border p-4 ${boxCls}`}>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <RiskBadge level={latest.risk_level} />
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted">
                 generated {formatDate(latest.created_at)}
               </span>
             </div>
-            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-gray-800">
+            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink">
               {latest.recommendation_text}
             </pre>
 
@@ -67,7 +67,7 @@ export default function RecommendationPanel({ farmId, latest, onChanged }) {
           </div>
         </>
       ) : (
-        <div className="rounded-lg border border-dashed bg-gray-50 p-4 text-sm text-gray-500">
+        <div className="rounded-control border border-dashed bg-canvas p-4 text-sm text-muted">
           No recommendation yet. Click{" "}
           <span className="font-medium">Generate recommendation</span> to review
           the farm&apos;s current sprays and scouting.

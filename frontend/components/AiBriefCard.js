@@ -40,9 +40,9 @@ export default function AiBriefCard({ plannedId }) {
   }
 
   return (
-    <div className="no-print space-y-2 rounded-md border border-blue-200 bg-blue-50/40 p-3">
+    <div className="no-print space-y-2 rounded-control border border-info-line bg-info-bg/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-blue-900">
+        <p className="text-xs font-semibold text-info-fg">
           AI review brief (beta) — suggestion only; the verdict above stays deterministic
         </p>
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={generate}>
@@ -51,16 +51,16 @@ export default function AiBriefCard({ plannedId }) {
         </Button>
       </div>
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-risk-fg">{error}</p>}
 
       {brief && (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-gray-600">Rescue risk (qualitative):</span>
+            <span className="text-muted">Rescue risk (qualitative):</span>
             <Badge variant={RISK_BADGE[brief.rescue_risk] || "outline"}>
               {brief.rescue_risk === "abstain" ? "ABSTAINED" : brief.rescue_risk.toUpperCase()}
             </Badge>
-            <span className="text-gray-500">
+            <span className="text-muted">
               grounded in {brief.comparable_count} comparable real decision(s)
               {" · "}confidence: {brief.confidence}
               {brief.is_mock && " · mock (set ANTHROPIC_API_KEY for the real model)"}
@@ -68,27 +68,27 @@ export default function AiBriefCard({ plannedId }) {
           </div>
 
           {brief.abstained ? (
-            <p className="rounded bg-white px-2 py-1.5 text-xs text-amber-800">
+            <p className="rounded bg-surface px-2 py-1.5 text-xs text-warn-fg">
               {brief.abstain_reason}
             </p>
           ) : (
-            <p className="rounded bg-white px-2 py-1.5 text-xs text-gray-700">
+            <p className="rounded bg-surface px-2 py-1.5 text-xs text-ink">
               {brief.rationale}
             </p>
           )}
 
           {brief.next_evidence_actions?.length > 0 && (
             <div>
-              <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
                 Suggested next evidence-gathering actions (never a spray or product)
               </p>
-              <ul className="mt-1 space-y-1 text-xs text-gray-700">
+              <ul className="mt-1 space-y-1 text-xs text-ink">
                 {brief.next_evidence_actions.map((a, i) => (
-                  <li key={i} className="rounded bg-white px-2 py-1">
+                  <li key={i} className="rounded bg-surface px-2 py-1">
                     <span className="font-medium">
                       {ACTION_LABELS[a.action_type] || a.action_type.replace(/_/g, " ")}
                     </span>
-                    {a.detail && <span className="text-gray-500"> — {a.detail}</span>}
+                    {a.detail && <span className="text-muted"> — {a.detail}</span>}
                   </li>
                 ))}
               </ul>
@@ -96,7 +96,7 @@ export default function AiBriefCard({ plannedId }) {
           )}
 
           {brief.comparables?.length > 0 && (
-            <details className="text-[11px] text-gray-500">
+            <details className="text-[11px] text-muted">
               <summary className="cursor-pointer font-medium">
                 Comparable decisions the brief is grounded in
               </summary>
@@ -115,7 +115,7 @@ export default function AiBriefCard({ plannedId }) {
             </details>
           )}
 
-          <p className="text-[11px] text-gray-400">{brief.disclaimer}</p>
+          <p className="text-[11px] text-muted">{brief.disclaimer}</p>
         </div>
       )}
     </div>

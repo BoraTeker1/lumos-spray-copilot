@@ -32,8 +32,8 @@ export const STATUS = {
     approve: { label: "APPROVED", tone: "good", icon: CircleCheck },
     block: { label: "BLOCKED", tone: "risk", icon: OctagonX },
     delay: { label: "DELAYED", tone: "warn", icon: Clock },
-    inspect_first: { label: "INSPECT FIRST", tone: "warn", icon: Search },
-    pca_review_required: { label: "PCA REVIEW", tone: "info", icon: CircleHelp },
+    inspect_first: { label: "INSPECT FIRST", tone: "inspect", icon: Search },
+    pca_review_required: { label: "PCA REVIEW", tone: "review", icon: CircleHelp },
   },
   // Workflow state (workflow_state) — is anyone still on the hook?
   workflow: {

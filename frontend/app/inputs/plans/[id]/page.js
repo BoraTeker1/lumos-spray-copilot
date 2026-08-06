@@ -66,12 +66,12 @@ export default function InputPlanDetailPage({ params }) {
 
   if (error && !plan) {
     return (
-      <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
         {error}
       </div>
     );
   }
-  if (!plan || !farm) return <p className="text-sm text-gray-500">Loading input plan…</p>;
+  if (!plan || !farm) return <p className="text-sm text-muted">Loading input plan…</p>;
 
   const country = farm.country;
   const isDraft = plan.status === "draft";
@@ -84,8 +84,8 @@ export default function InputPlanDetailPage({ params }) {
       header: "Input",
       render: (i) => (
         <div className="min-w-0">
-          <div className="font-medium text-gray-900">{i.product_name}</div>
-          <div className="text-xs text-gray-500">
+          <div className="font-medium text-ink">{i.product_name}</div>
+          <div className="text-xs text-muted">
             {[i.active_ingredient, i.category].filter(Boolean).join(" · ")}
           </div>
         </div>
@@ -95,7 +95,7 @@ export default function InputPlanDetailPage({ params }) {
       key: "qty",
       header: "Quantity",
       render: (i) => (
-        <span className="text-sm text-gray-700">
+        <span className="text-sm text-ink">
           {i.quantity} {i.unit}
           {i.acres ? ` · ${i.acres} ac` : ""}
         </span>
@@ -104,19 +104,19 @@ export default function InputPlanDetailPage({ params }) {
     {
       key: "needed",
       header: "Needed by",
-      render: (i) => <span className="text-sm text-gray-700">{formatDate(i.needed_by_date)}</span>,
+      render: (i) => <span className="text-sm text-ink">{formatDate(i.needed_by_date)}</span>,
     },
     {
       key: "field",
       header: "Field",
       priority: "secondary",
-      render: (i) => <span className="text-sm text-gray-700">{i.field_block || "—"}</span>,
+      render: (i) => <span className="text-sm text-ink">{i.field_block || "—"}</span>,
     },
     {
       key: "use",
       header: "Intended use",
       priority: "secondary",
-      render: (i) => <span className="text-sm text-gray-700">{i.intended_use || "—"}</span>,
+      render: (i) => <span className="text-sm text-ink">{i.intended_use || "—"}</span>,
     },
     {
       key: "est",
@@ -124,7 +124,7 @@ export default function InputPlanDetailPage({ params }) {
       align: "right",
       priority: "secondary",
       render: (i) => (
-        <span className="text-sm text-gray-700">{formatCost(i.estimated_cost, country)}</span>
+        <span className="text-sm text-ink">{formatCost(i.estimated_cost, country)}</span>
       ),
     },
     {
@@ -142,7 +142,7 @@ export default function InputPlanDetailPage({ params }) {
             <StatusBadge kind="review" value={i.source_decision_review_state} />
           </div>
         ) : (
-          <span className="text-xs text-gray-500">Manual entry</span>
+          <span className="text-xs text-muted">Manual entry</span>
         ),
     },
     {
@@ -175,7 +175,7 @@ export default function InputPlanDetailPage({ params }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[22px] font-semibold text-gray-900">
+            <h1 className="text-[22px] font-semibold text-ink">
               Input plan #{plan.id}
             </h1>
             <StatusBadge kind="planStatus" value={plan.status} />
@@ -191,15 +191,15 @@ export default function InputPlanDetailPage({ params }) {
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-gray-500">{planNextStep(plan.status)}</p>
+          <p className="mt-1 text-sm text-muted">{planNextStep(plan.status)}</p>
           {plan.selection_reason && (
-            <p className="mt-1 text-xs text-gray-600">
+            <p className="mt-1 text-xs text-muted">
               <span className="font-medium">Selection reason:</span>{" "}
               {plan.selection_reason}
             </p>
           )}
           {plan.cancelled_reason && (
-            <p className="mt-1 text-xs text-gray-500">Reason: {plan.cancelled_reason}</p>
+            <p className="mt-1 text-xs text-muted">Reason: {plan.cancelled_reason}</p>
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -239,7 +239,7 @@ export default function InputPlanDetailPage({ params }) {
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error}
         </div>
       )}
@@ -258,7 +258,7 @@ export default function InputPlanDetailPage({ params }) {
           rows={plan.items}
           rowKey={(i) => i.id}
           minWidth={720}
-          empty={<p className="text-sm text-gray-500">No items on this plan.</p>}
+          empty={<p className="text-sm text-muted">No items on this plan.</p>}
         />
       </SectionCard>
 
@@ -290,11 +290,11 @@ export default function InputPlanDetailPage({ params }) {
           description="Manually collected indicative terms. A request is not an offer, and selecting an offer is not a loan approval, funding, or a binding agreement — no money moves through Lumos."
         >
           {offers.length === 0 ? (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted">
               Financing requested — awaiting indicative terms from the concierge.
             </p>
           ) : (
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               {offers.map((o) => (
                 <FinancingOfferCard
                   key={o.id}
@@ -307,7 +307,7 @@ export default function InputPlanDetailPage({ params }) {
             </div>
           )}
           {plan.financing_notes && (
-            <p className="mt-3 text-xs text-gray-500">Notes: {plan.financing_notes}</p>
+            <p className="mt-3 text-xs text-muted">Notes: {plan.financing_notes}</p>
           )}
         </SectionCard>
       )}
@@ -323,17 +323,17 @@ export default function InputPlanDetailPage({ params }) {
               <li key={e.id} className="flex items-start gap-3 text-sm">
                 <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-leaf-600" />
                 <div className="min-w-0">
-                  <div className="font-medium text-gray-900">
+                  <div className="font-medium text-ink">
                     {planEventLabel(e.event_type)}
-                    <span className="ml-2 text-xs font-normal text-gray-500">
+                    <span className="ml-2 text-xs font-normal text-muted">
                       {formatDate(e.occurred_on)}
                       {e.actor ? ` · ${e.actor}` : ""}
                     </span>
                   </div>
                   {e.payload?.reason && (
-                    <p className="text-xs text-gray-600">Reason: {e.payload.reason}</p>
+                    <p className="text-xs text-muted">Reason: {e.payload.reason}</p>
                   )}
-                  {e.notes && <p className="text-xs text-gray-500">{e.notes}</p>}
+                  {e.notes && <p className="text-xs text-muted">{e.notes}</p>}
                 </div>
               </li>
             ))}

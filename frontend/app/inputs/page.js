@@ -68,7 +68,7 @@ function planColumns() {
               </Badge>
             )}
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-muted">
             {p.items.map((i) => `${i.product_name} (${i.quantity} ${i.unit})`).join(", ") ||
               "No items"}
           </div>
@@ -84,14 +84,14 @@ function planColumns() {
       key: "next",
       header: "Next action",
       render: (p) => (
-        <span className="text-xs text-gray-600">{planNextStep(p.status)}</span>
+        <span className="text-xs text-muted">{planNextStep(p.status)}</span>
       ),
     },
     {
       key: "needed",
       header: "Needed by",
       render: (p) => (
-        <div className="text-sm text-gray-700">
+        <div className="text-sm text-ink">
           {formatDate(p.needed_by)}
           {p.overdue && (
             <div>
@@ -108,7 +108,7 @@ function planColumns() {
       header: "Selected supplier",
       priority: "secondary",
       render: (p) => (
-        <span className="text-sm text-gray-700">
+        <span className="text-sm text-ink">
           {p.order_id
             ? `Order #${p.order_id}`
             : p.selected_quote_id
@@ -128,7 +128,7 @@ function planColumns() {
       header: "Quotes",
       align: "right",
       priority: "secondary",
-      render: (p) => <span className="text-sm text-gray-700">{p.quote_count}</span>,
+      render: (p) => <span className="text-sm text-ink">{p.quote_count}</span>,
     },
     {
       key: "action",
@@ -169,14 +169,14 @@ function orderColumns(country) {
     {
       key: "supplier",
       header: "Supplier",
-      render: (o) => <span className="text-sm text-gray-700">{o.supplier_name || "—"}</span>,
+      render: (o) => <span className="text-sm text-ink">{o.supplier_name || "—"}</span>,
     },
     {
       key: "total",
       header: "Total",
       align: "right",
       render: (o) => (
-        <span className="text-sm font-medium text-gray-900">
+        <span className="text-sm font-medium text-ink">
           {formatCost(o.total_cost, country)}
         </span>
       ),
@@ -205,7 +205,7 @@ function orderColumns(country) {
         o.spray_event_id || o.applied_planned_spray_id ? (
           <Badge variant="green">Linked</Badge>
         ) : (
-          <span className="text-xs text-gray-500">Not linked</span>
+          <span className="text-xs text-muted">Not linked</span>
         ),
     },
     {
@@ -213,7 +213,7 @@ function orderColumns(country) {
       header: "Placed",
       priority: "secondary",
       render: (o) => (
-        <span className="text-sm text-gray-700">{formatDate(o.created_at)}</span>
+        <span className="text-sm text-ink">{formatDate(o.created_at)}</span>
       ),
     },
     {
@@ -271,10 +271,10 @@ function InputsPage() {
     [plans, activeFilter]
   );
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
   if (!activeFarm) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         No farms yet — seed the demo data or add a pilot farm first.
       </p>
     );
@@ -292,7 +292,7 @@ function InputsPage() {
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error}
         </div>
       )}
@@ -302,7 +302,7 @@ function InputsPage() {
           <TabsTrigger value="plans">Input plans</TabsTrigger>
           <TabsTrigger value="orders">Orders</TabsTrigger>
         </TabsList>
-        <p className="mt-2 text-xs text-gray-500">
+        <p className="mt-2 text-xs text-muted">
           Draft plan → quotes requested → quotes received → quote selected →
           financing (optional) → order confirmed → delivered → applied. Supplier
           quotes and financing terms are concierge-entered; no money moves through
@@ -372,7 +372,7 @@ function InputsPage() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>
+    <Suspense fallback={<p className="text-sm text-muted">Loading…</p>}>
       <InputsPage />
     </Suspense>
   );

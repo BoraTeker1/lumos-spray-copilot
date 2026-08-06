@@ -231,17 +231,17 @@ export default function PilotImportCard({ farmId, onImported }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex overflow-hidden rounded-md border border-gray-300 text-xs">
+        <div className="inline-flex overflow-hidden rounded-control border border-line text-xs">
           <button
             type="button"
-            className={`px-2.5 py-1.5 ${mode === "csv" ? "bg-gray-900 text-white" : "bg-white text-gray-600"}`}
+            className={`px-2.5 py-1.5 ${mode === "csv" ? "bg-ink text-white" : "bg-surface text-muted"}`}
             onClick={() => { setMode("csv"); reset(); }}
           >
             CSV / paste rows
           </button>
           <button
             type="button"
-            className={`px-2.5 py-1.5 ${mode === "ai" ? "bg-gray-900 text-white" : "bg-white text-gray-600"}`}
+            className={`px-2.5 py-1.5 ${mode === "ai" ? "bg-ink text-white" : "bg-surface text-muted"}`}
             onClick={() => {
               setMode("ai");
               // Spray history is CSV-only — no AI-extraction model exists for it.
@@ -253,7 +253,7 @@ export default function PilotImportCard({ farmId, onImported }) {
           </button>
         </div>
         <select
-          className="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+          className="rounded-control border border-line px-2 py-1.5 text-xs"
           value={recordType}
           onChange={(e) => {
             setRecordType(e.target.value);
@@ -266,7 +266,7 @@ export default function PilotImportCard({ farmId, onImported }) {
         </select>
         {mode === "csv" && (
           <select
-            className="rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+            className="rounded-control border border-line px-2 py-1.5 text-xs"
             value={dateFormat}
             onChange={(e) => setDateFormat(e.target.value)}
           >
@@ -277,7 +277,7 @@ export default function PilotImportCard({ farmId, onImported }) {
         )}
         {mode === "csv" && (
           <a
-            className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
             href={api.exportUrl(`/import/templates/${recordType}.csv`)}
           >
             <FileDown className="h-3.5 w-3.5" /> Download template
@@ -285,17 +285,17 @@ export default function PilotImportCard({ farmId, onImported }) {
         )}
       </div>
 
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-muted">
         {mode === "csv" ? (
           <>
             Import real pilot records from a CSV. Everything is validated in a{" "}
-            <span className="font-medium text-gray-700">dry run first</span> — fix the
+            <span className="font-medium text-ink">dry run first</span> — fix the
             column mapping below if a header was not recognized, then confirm.
           </>
         ) : (
           <>
             Paste a PCA email/WhatsApp or upload a PDF/photo of a recommendation.{" "}
-            <span className="font-medium text-gray-700">Real AI</span> drafts rows with
+            <span className="font-medium text-ink">Real AI</span> drafts rows with
             verbatim source snippets — it extracts only what is written and never
             guesses PHI/REI/rates. You review and correct every row before import.
           </>
@@ -306,7 +306,7 @@ export default function PilotImportCard({ farmId, onImported }) {
       </p>
 
       <textarea
-        className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 font-mono text-xs"
+        className="w-full rounded-control border border-line px-2.5 py-1.5 font-mono text-xs"
         rows={5}
         placeholder={
           mode === "csv"
@@ -344,7 +344,7 @@ export default function PilotImportCard({ farmId, onImported }) {
                 {busy ? "Importing…" : `Import ${importable} valid row(s)`}
               </Button>
             )}
-            <label className="cursor-pointer text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline">
+            <label className="cursor-pointer text-xs font-medium text-muted underline-offset-2 hover:text-ink hover:underline">
               …or upload a CSV file
               <input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onCsvFile} />
             </label>
@@ -367,7 +367,7 @@ export default function PilotImportCard({ farmId, onImported }) {
                 {busy ? "Importing…" : `Import ${aiRows.length} reviewed row(s)`}
               </Button>
             )}
-            <label className="cursor-pointer text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline">
+            <label className="cursor-pointer text-xs font-medium text-muted underline-offset-2 hover:text-ink hover:underline">
               …or upload a PDF / photo
               <input
                 type="file"
@@ -378,13 +378,13 @@ export default function PilotImportCard({ farmId, onImported }) {
             </label>
           </>
         )}
-        {filename && <span className="text-[11px] text-gray-400">{filename}</span>}
+        {filename && <span className="text-[11px] text-muted">{filename}</span>}
       </div>
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-risk-fg">{error}</p>}
 
       {committed && (
-        <p className="rounded bg-green-50 px-3 py-2 text-sm text-green-700">
+        <p className="rounded bg-ok-bg px-3 py-2 text-sm text-ok-fg">
           Imported {committed.created_record_ids?.length ?? 0} record(s) (batch #
           {committed.batch?.id}), tagged{" "}
           {mode === "ai" ? "AI-extracted / imported-unverified" : "spreadsheet / imported-unverified"}.
@@ -394,13 +394,13 @@ export default function PilotImportCard({ farmId, onImported }) {
       )}
 
       {extraction && (
-        <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50/50 p-3">
-          <p className="text-xs font-medium text-blue-900">
+        <div className="space-y-2 rounded-control border border-info-line bg-info-bg/50 p-3">
+          <p className="text-xs font-medium text-info-fg">
             AI extraction ({extraction.is_mock ? "mock — set ANTHROPIC_API_KEY for real extraction" : extraction.model}
             {" · "}confidence: {extraction.overall_confidence})
           </p>
           {extraction.abstained ? (
-            <p className="text-xs text-amber-800">
+            <p className="text-xs text-warn-fg">
               The AI abstained: {extraction.abstain_reason || "input not recognized as the requested record type."}
             </p>
           ) : (
@@ -408,7 +408,7 @@ export default function PilotImportCard({ farmId, onImported }) {
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-[11px]">
                   <thead>
-                    <tr className="text-gray-500">
+                    <tr className="text-muted">
                       {aiFieldColumns.map((f) => (
                         <th key={f} className="py-1 pr-2 font-medium">{f.replace(/_/g, " ")}</th>
                       ))}
@@ -417,20 +417,20 @@ export default function PilotImportCard({ farmId, onImported }) {
                   </thead>
                   <tbody>
                     {aiRows.map((row, i) => (
-                      <tr key={i} className="border-t border-blue-100 align-top">
+                      <tr key={i} className="border-t border-info-line align-top">
                         {aiFieldColumns.map((f) => (
                           <td key={f} className="py-1 pr-2">
                             <input
-                              className="w-full min-w-20 rounded border border-gray-300 bg-white px-1 py-0.5 text-[11px]"
+                              className="w-full min-w-20 rounded border border-line bg-surface px-1 py-0.5 text-[11px]"
                               value={row[f] ?? ""}
                               onChange={(e) => editAiRow(i, f, e.target.value)}
                             />
                           </td>
                         ))}
-                        <td className="py-1 text-gray-500">
+                        <td className="py-1 text-muted">
                           {extraction.rows[i]?.source_snippet || "—"}
                           {extraction.rows[i]?.row_confidence && (
-                            <span className="ml-1 text-gray-400">
+                            <span className="ml-1 text-muted">
                               ({extraction.rows[i].row_confidence})
                             </span>
                           )}
@@ -443,30 +443,30 @@ export default function PilotImportCard({ farmId, onImported }) {
             )
           )}
           {extraction.caveats?.length > 0 && (
-            <ul className="space-y-0.5 text-[11px] text-blue-900/70">
+            <ul className="space-y-0.5 text-[11px] text-info-fg/70">
               {extraction.caveats.map((c, i) => (
                 <li key={i}>• {c}</li>
               ))}
             </ul>
           )}
-          <p className="text-[11px] text-gray-500">{extraction.disclaimer}</p>
+          <p className="text-[11px] text-muted">{extraction.disclaimer}</p>
         </div>
       )}
 
       {report && (
-        <div className="space-y-2 rounded-md border bg-gray-50 p-3">
-          <p className="text-xs font-medium text-gray-700">
+        <div className="space-y-2 rounded-control border bg-canvas p-3">
+          <p className="text-xs font-medium text-ink">
             Dry-run result: {report.importable_count} importable ·{" "}
             {report.error_count} with errors · {report.duplicate_count} duplicates ·{" "}
             {report.warning_count} with warnings
           </p>
 
           {report.parse_error && (
-            <p className="text-xs text-red-600">{report.parse_error}</p>
+            <p className="text-xs text-risk-fg">{report.parse_error}</p>
           )}
 
           {report.missing_required_columns?.length > 0 && (
-            <p className="text-xs text-red-600">
+            <p className="text-xs text-risk-fg">
               Required column(s) not mapped:{" "}
               {report.missing_required_columns.join(", ")} — correct the mapping
               below.
@@ -477,18 +477,18 @@ export default function PilotImportCard({ farmId, onImported }) {
             <div className="overflow-x-auto">
               <table className="w-full text-left text-[11px]">
                 <thead>
-                  <tr className="text-gray-500">
+                  <tr className="text-muted">
                     <th className="py-1 pr-3 font-medium">CSV column</th>
                     <th className="py-1 font-medium">Maps to</th>
                   </tr>
                 </thead>
                 <tbody>
                   {report.headers.map((h) => (
-                    <tr key={h} className="border-t border-gray-200">
+                    <tr key={h} className="border-t border-line">
                       <td className="py-1 pr-3 font-mono">{h}</td>
                       <td className="py-1">
                         <select
-                          className="rounded border border-gray-300 px-1 py-0.5 text-[11px]"
+                          className="rounded border border-line px-1 py-0.5 text-[11px]"
                           value={(mapping || report.mapping)[h] || "ignore"}
                           onChange={(e) => remap(h, e.target.value)}
                         >
@@ -509,18 +509,18 @@ export default function PilotImportCard({ farmId, onImported }) {
             <ul className="space-y-1 text-[11px]">
               {report.rows.map((r) =>
                 r.errors.length || r.warnings.length || r.duplicate_of ? (
-                  <li key={r.row_number} className="rounded bg-white px-2 py-1">
+                  <li key={r.row_number} className="rounded bg-surface px-2 py-1">
                     <span className="font-medium">Row {r.row_number}:</span>{" "}
                     {r.errors.map((e, i) => (
-                      <span key={`e${i}`} className="text-red-600">{e}. </span>
+                      <span key={`e${i}`} className="text-risk-fg">{e}. </span>
                     ))}
                     {r.duplicate_of && (
-                      <span className="text-amber-700">
+                      <span className="text-warn-fg">
                         Duplicate of {r.duplicate_of} — skipped.{" "}
                       </span>
                     )}
                     {r.warnings.map((w, i) => (
-                      <span key={`w${i}`} className="text-gray-500">{w}. </span>
+                      <span key={`w${i}`} className="text-muted">{w}. </span>
                     ))}
                   </li>
                 ) : null
@@ -529,7 +529,7 @@ export default function PilotImportCard({ farmId, onImported }) {
           )}
 
           {report.notes?.length > 0 && (
-            <ul className="space-y-0.5 text-[11px] text-gray-400">
+            <ul className="space-y-0.5 text-[11px] text-muted">
               {report.notes.map((n, i) => (
                 <li key={i}>• {n}</li>
               ))}

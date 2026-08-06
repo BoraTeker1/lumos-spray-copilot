@@ -39,12 +39,12 @@ export default function OrderDetailPage({ params }) {
 
   if (error && !order) {
     return (
-      <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
         {error}
       </div>
     );
   }
-  if (!order || !farm) return <p className="text-sm text-gray-500">Loading order…</p>;
+  if (!order || !farm) return <p className="text-sm text-muted">Loading order…</p>;
 
   const country = farm.country;
   const quote = order.selected_quote;
@@ -59,7 +59,7 @@ export default function OrderDetailPage({ params }) {
       header: "Input",
       render: (l) => (
         <div>
-          <span className="font-medium text-gray-900">{l.product_name}</span>
+          <span className="font-medium text-ink">{l.product_name}</span>
           {l.is_substitution && (
             <Badge variant="amber" className="ml-2" title={l.substitution_reason}>
               Substitution
@@ -72,7 +72,7 @@ export default function OrderDetailPage({ params }) {
       key: "qty",
       header: "Quantity",
       render: (l) => (
-        <span className="text-sm text-gray-700">
+        <span className="text-sm text-ink">
           {l.quantity} {l.unit}
         </span>
       ),
@@ -82,7 +82,7 @@ export default function OrderDetailPage({ params }) {
       header: "Unit price",
       align: "right",
       render: (l) => (
-        <span className="text-sm text-gray-700">{formatCost(l.unit_price, country)}</span>
+        <span className="text-sm text-ink">{formatCost(l.unit_price, country)}</span>
       ),
     },
     {
@@ -90,7 +90,7 @@ export default function OrderDetailPage({ params }) {
       header: "Line total",
       align: "right",
       render: (l) => (
-        <span className="text-sm font-medium text-gray-900">
+        <span className="text-sm font-medium text-ink">
           {formatCost(l.line_total, country)}
         </span>
       ),
@@ -108,7 +108,7 @@ export default function OrderDetailPage({ params }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[22px] font-semibold text-gray-900">Order #{order.id}</h1>
+            <h1 className="text-[22px] font-semibold text-ink">Order #{order.id}</h1>
             <StatusBadge kind="orderStatus" value={order.status} />
             {order.overdue && (
               <Badge variant="red">
@@ -121,7 +121,7 @@ export default function OrderDetailPage({ params }) {
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-muted">
             {order.supplier_name} · {formatCost(order.total_cost, country)} ·{" "}
             <Link
               href={`/inputs/plans/${order.input_plan_id}`}
@@ -143,12 +143,12 @@ export default function OrderDetailPage({ params }) {
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error}
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">
           <SectionCard
             title="Order lines"
@@ -170,7 +170,7 @@ export default function OrderDetailPage({ params }) {
               rows={quote?.items || []}
               rowKey={(l) => l.id}
               minWidth={520}
-              empty={<p className="text-sm text-gray-500">No lines.</p>}
+              empty={<p className="text-sm text-muted">No lines.</p>}
             />
           </SectionCard>
 
@@ -192,38 +192,38 @@ export default function OrderDetailPage({ params }) {
             >
               <dl className="space-y-1.5 text-sm">
                 <div className="flex justify-between">
-                  <dt className="text-gray-500">Provider</dt>
-                  <dd className="font-medium text-gray-900">{offer.provider_name}</dd>
+                  <dt className="text-muted">Provider</dt>
+                  <dd className="font-medium text-ink">{offer.provider_name}</dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-gray-500">Financed</dt>
-                  <dd className="font-medium text-gray-900">
+                  <dt className="text-muted">Financed</dt>
+                  <dd className="font-medium text-ink">
                     {formatCost(offer.financed_amount, country)}
                   </dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-gray-500">Down payment</dt>
-                  <dd className="font-medium text-gray-900">
+                  <dt className="text-muted">Down payment</dt>
+                  <dd className="font-medium text-ink">
                     {formatCost(offer.down_payment, country)}
                   </dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-gray-500">Total repayment</dt>
-                  <dd className="font-medium text-gray-900">
+                  <dt className="text-muted">Total repayment</dt>
+                  <dd className="font-medium text-ink">
                     {formatCost(offer.total_repayment, country)}
                   </dd>
                 </div>
                 {offer.schedule_summary && (
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Schedule</dt>
-                    <dd className="text-gray-900">{offer.schedule_summary}</dd>
+                    <dt className="text-muted">Schedule</dt>
+                    <dd className="text-ink">{offer.schedule_summary}</dd>
                   </div>
                 )}
               </dl>
-              <p className="mt-3 text-[11px] text-gray-500">{offer.disclaimer}</p>
+              <p className="mt-3 text-[11px] text-muted">{offer.disclaimer}</p>
             </SectionCard>
           )}
-          <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
+          <div className="rounded-control border border-line bg-canvas p-3 text-xs text-muted">
             Placed {formatDate(order.created_at)}
             {order.placed_by ? ` by ${order.placed_by}` : ""}. Supplier quotes are
             concierge-entered; Lumos takes no commission and never ranks suppliers.

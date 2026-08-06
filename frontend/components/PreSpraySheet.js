@@ -52,7 +52,7 @@ function LabelResolutionNote({ resolution }) {
   if (resolution.promotable && resolution.label_record) {
     const r = resolution.label_record;
     return (
-      <p className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[11px] leading-snug text-emerald-900">
+      <p className="rounded-control border border-ok-line bg-ok-bg p-2 text-[11px] leading-snug text-ok-fg">
         <span className="font-medium">Verified label found.</span> PHI and REI will come
         from it — you don&apos;t need to type them.
         {r.pre_harvest_interval_days != null && ` PHI ${r.pre_harvest_interval_days} days.`}
@@ -64,7 +64,7 @@ function LabelResolutionNote({ resolution }) {
   const reason = resolution.promotion_blocked_reason || resolution.unresolved_reason;
   if (!reason) return null;
   return (
-    <p className="rounded-md border border-gray-200 bg-gray-50 p-2 text-[11px] leading-snug text-gray-600">
+    <p className="rounded-control border border-line bg-canvas p-2 text-[11px] leading-snug text-muted">
       <span className="font-medium">No verified label for this product yet</span> — {reason}{" "}
       Enter PHI and REI below from the product label.
     </p>
@@ -83,7 +83,7 @@ const REVIEW_VARIANTS = Object.fromEntries(
 );
 
 const inputCls =
-  "w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:border-leaf-600 focus:outline-none focus:ring-1 focus:ring-leaf-600";
+  "w-full rounded-control border border-line px-2.5 py-1.5 text-sm focus:border-leaf-600 focus:outline-none focus:ring-1 focus:ring-leaf-600";
 
 // PCA review controls for one pre-spray decision (approve / edit / reject + comment).
 export function DecisionReview({ planned, onChanged }) {
@@ -121,11 +121,11 @@ export function DecisionReview({ planned, onChanged }) {
   }
 
   return (
-    <div className="mt-2 rounded-md border border-gray-200 bg-white p-2.5">
-      <div className="mb-1.5 text-xs font-semibold text-gray-700">
+    <div className="mt-2 rounded-control border border-line bg-surface p-2.5">
+      <div className="mb-1.5 text-xs font-semibold text-ink">
         PCA / agronomist review
         {planned.review_required && (
-          <span className="ml-1.5 font-normal text-blue-700">
+          <span className="ml-1.5 font-normal text-info-fg">
             required before this spray can be logged as applied
           </span>
         )}
@@ -188,7 +188,7 @@ export function DecisionReview({ planned, onChanged }) {
           Reject
         </Button>
       </div>
-      {error && <p className="mt-1.5 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-1.5 text-sm text-risk-fg">{error}</p>}
     </div>
   );
 }
@@ -234,14 +234,14 @@ export function OutcomeRecorder({ planned, onChanged }) {
 
   return (
     <div className="mt-2 space-y-1.5">
-      <div className="text-xs font-semibold text-gray-700">What actually happened?</div>
+      <div className="text-xs font-semibold text-ink">What actually happened?</div>
       <input
         className={inputCls}
         placeholder="Reason (required unless sprayed as planned)"
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />
-      <label className="block text-xs text-gray-500">
+      <label className="block text-xs text-muted">
         Outcome date (optional — defaults to today; the server rejects impossible
         chronology, e.g. an application before the intended date)
         <input
@@ -283,11 +283,11 @@ export function OutcomeRecorder({ planned, onChanged }) {
         ))}
       </div>
       {reviewGateActive && (
-        <p className="text-[11px] text-blue-700">
+        <p className="text-[11px] text-info-fg">
           Applied outcomes unlock after a PCA approves or edits this decision.
         </p>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-risk-fg">{error}</p>}
     </div>
   );
 }
@@ -301,9 +301,9 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
   const meta = OUTCOME_META[planned.decision_outcome];
 
   return (
-    <li className="rounded-lg border border-gray-200 bg-white p-3">
+    <li className="rounded-control border border-line bg-surface p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-gray-900">{planned.product_name}</span>
+        <span className="text-sm font-medium text-ink">{planned.product_name}</span>
         {meta && <Badge variant={meta.badge}>{meta.label}</Badge>}
         {reviewed && (
           <Badge variant={REVIEW_VARIANTS[planned.review_state] || "neutral"}>
@@ -316,7 +316,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
           </Badge>
         )}
       </div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-gray-500">
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
         <span>
           Intended {planned.intended_date}
           {planned.active_ingredient && ` · ${planned.active_ingredient}`}
@@ -324,7 +324,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
         </span>
         <Link
           href={`/decisions/${planned.id}`}
-          className="inline-flex items-center gap-1 font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
+          className="inline-flex items-center gap-1 font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
         >
           <FileText className="h-3 w-3" />
           Decision record
@@ -336,7 +336,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
       </div>
 
       {planned.review_comment && (
-        <p className="mt-2 text-xs text-gray-600">
+        <p className="mt-2 text-xs text-muted">
           <span className="font-medium">PCA comment{planned.reviewed_by ? ` (${planned.reviewed_by})` : ""}:</span>{" "}
           {planned.review_comment}
         </p>
@@ -344,7 +344,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
 
       {decided ? (
         <>
-          <p className="mt-2 text-xs text-gray-600">
+          <p className="mt-2 text-xs text-muted">
             <span className="font-medium">
               Recorded outcome: {RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
               {planned.outcome_product_name && ` → ${planned.outcome_product_name}`}.
@@ -352,7 +352,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
             {planned.outcome_reason && `Stated reason: ${planned.outcome_reason}`}
           </p>
           {planned.outcome === "avoided" && planned.estimated_cost != null && (
-            <p className="mt-1 rounded-md bg-green-50 p-2 text-xs text-green-900">
+            <p className="mt-1 rounded-control bg-ok-bg p-2 text-xs text-ok-fg">
               Entered application cost not spent:{" "}
               <span className="font-semibold">
                 {formatCost(planned.estimated_cost, country)}
@@ -361,7 +361,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
             </p>
           )}
           {planned.follow_up_required && (
-            <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+            <p className="mt-1 rounded-control border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
               Follow-up required ({planned.follow_up_event_count} event
               {planned.follow_up_event_count === 1 ? "" : "s"} so far) — this is not a
               confirmed result until follow-up evidence is recorded.{" "}
@@ -388,7 +388,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
 export function PlannedSprayList({ planned, onChanged, emptyText, compact = false, country }) {
   if (!planned || planned.length === 0) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         {emptyText || "No pre-spray decisions yet. Run one before the next planned application."}
       </p>
     );
@@ -559,7 +559,7 @@ export default function PreSpraySheet({ farmId, onChanged }) {
             onBlur={lookUpLabel}
           />
           <LabelResolutionNote resolution={labelResolution} />
-          <label className="block text-xs text-gray-500">
+          <label className="block text-xs text-muted">
             Intended date *
             <input
               type="date"
@@ -576,8 +576,8 @@ export default function PreSpraySheet({ farmId, onChanged }) {
             onChange={(e) => update("target_pest_or_disease", e.target.value)}
           />
 
-          <details className="rounded-md border border-gray-200 p-2.5">
-            <summary className="cursor-pointer select-none text-xs font-medium text-gray-600">
+          <details className="rounded-control border border-line p-2.5">
+            <summary className="cursor-pointer select-none text-xs font-medium text-muted">
               Compliance values — PHI, REI, active ingredient, cost, who entered them
             </summary>
             <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -626,18 +626,18 @@ export default function PreSpraySheet({ farmId, onChanged }) {
                 onChange={(e) => update("values_entered_by", e.target.value)}
               />
             </div>
-            <p className="mt-1.5 text-[11px] text-gray-400">
+            <p className="mt-1.5 text-[11px] text-muted">
               Only PCA-entered values can make a BLOCK PCA-authorized; grower-entered
               values always yield a provisional result a PCA must confirm. (Verified-label
               grounding requires label data that does not exist in Lumos yet.)
             </p>
           </details>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-risk-fg">{error}</p>}
           <Button type="submit" disabled={saving} className="w-full sm:w-auto">
             {saving ? "Checking…" : "Run the decision check"}
           </Button>
-          <p className="text-[11px] text-gray-400">
+          <p className="text-[11px] text-muted">
             Leaving PHI, REI, harvest date, or the active ingredient blank never yields an
             APPROVE — checks that can’t run escalate to PCA review.
           </p>
@@ -645,7 +645,7 @@ export default function PreSpraySheet({ farmId, onChanged }) {
 
         {lastCheck && (
           <div className="mt-4">
-            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
               Decision
             </h4>
             <ul>

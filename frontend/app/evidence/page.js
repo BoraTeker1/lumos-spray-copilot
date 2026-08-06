@@ -66,7 +66,7 @@ function ScopeMetrics({ metrics, simulated, country }) {
   return (
     <div className="space-y-4">
       {simulated && (
-        <div className="flex items-start gap-2 rounded-[10px] border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+        <div className="flex items-start gap-2 rounded-card border border-warn-line bg-warn-bg p-3 text-xs text-warn-fg">
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <p>
             SIMULATED DEMO DATA — every figure below is derived from seeded demo
@@ -104,28 +104,28 @@ function ScopeMetrics({ metrics, simulated, country }) {
           tone={metrics.compliance_conflicts_caught > 0 ? "warn" : "neutral"}
         />
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
-          <CardContent className="space-y-1 p-5 text-xs text-gray-600">
+          <CardContent className="space-y-1 p-5 text-xs text-muted">
             <div className="flex items-center justify-between">
               <span className="inline-flex items-center gap-2">
                 Estimated cost not spent {badge}
               </span>
-              <span className="text-base font-semibold text-gray-900">
+              <span className="text-base font-semibold text-ink">
                 {formatCost(metrics.estimated_chemical_cost_avoided || 0, country)}
               </span>
             </div>
-            <p className="text-[11px] text-gray-500">
+            <p className="text-[11px] text-muted">
               Entered application-cost estimates of avoided sprays — chemicals not
               applied, not a savings or yield claim; not confirmed until follow-up.
             </p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="space-y-2 p-5 text-xs text-gray-600">
+          <CardContent className="space-y-2 p-5 text-xs text-muted">
             <div className="flex items-center justify-between">
               <span className="inline-flex items-center gap-2">Follow-up completion {badge}</span>
-              <span className="font-medium text-gray-900">
+              <span className="font-medium text-ink">
                 {fu.follow_up_with_events ?? 0}/{fu.follow_up_required ?? 0}
               </span>
             </div>
@@ -216,7 +216,7 @@ export default function EvidencePage() {
       key: "date",
       header: "Date",
       render: (p) => (
-        <span className="whitespace-nowrap text-gray-700">{formatDate(p.intended_date)}</span>
+        <span className="whitespace-nowrap text-ink">{formatDate(p.intended_date)}</span>
       ),
     },
     {
@@ -224,8 +224,8 @@ export default function EvidencePage() {
       header: "Product / target",
       render: (p) => (
         <div className="min-w-0">
-          <div className="font-medium text-gray-900">{p.product_name}</div>
-          <div className="text-xs text-gray-500">{p.target_pest_or_disease || "—"}</div>
+          <div className="font-medium text-ink">{p.product_name}</div>
+          <div className="text-xs text-muted">{p.target_pest_or_disease || "—"}</div>
         </div>
       ),
     },
@@ -233,7 +233,7 @@ export default function EvidencePage() {
       key: "field",
       header: "Field",
       priority: "secondary",
-      render: (p) => <span className="text-gray-700">{p.field_block || "—"}</span>,
+      render: (p) => <span className="text-ink">{p.field_block || "—"}</span>,
     },
     {
       key: "decision",
@@ -242,7 +242,7 @@ export default function EvidencePage() {
         <div className="flex flex-col items-start gap-1">
           <StatusBadge kind="verdict" value={p.decision_outcome} />
           {p.outcome && p.outcome !== "planned" && (
-            <span className="text-[11px] text-gray-500">
+            <span className="text-[11px] text-muted">
               {RECORDED_OUTCOME_LABELS[p.outcome] || p.outcome}
             </span>
           )}
@@ -276,10 +276,10 @@ export default function EvidencePage() {
     },
   ];
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
   if (!activeFarm) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         No farms yet — seed the demo data or add a pilot farm first.
       </p>
     );
@@ -295,9 +295,8 @@ export default function EvidencePage() {
         title="Evidence & compliance"
         meta={
           <span>
-            Outcomes, documentation completeness, compliance signals, and on-demand
-            reports for {activeFarm.name}. Simulated and real records are never
-            combined.
+            Traceable outcomes, documentation state, and compliance signals for{" "}
+            {activeFarm.name}. Simulated and real records are never combined.
           </span>
         }
         actions={
@@ -323,7 +322,7 @@ export default function EvidencePage() {
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error}
         </div>
       )}
@@ -354,14 +353,14 @@ export default function EvidencePage() {
           <TabsTrigger value="demo">
             <FlaskConical className="h-4 w-4" />
             Pilot demo (simulated)
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-muted">
               {demoMetrics?.decisions_checked ?? 0}
             </span>
           </TabsTrigger>
           <TabsTrigger value="real">
             <ClipboardCheck className="h-4 w-4" />
             Real operations
-            <span className="text-xs text-gray-400">{realChecked}</span>
+            <span className="text-xs text-muted">{realChecked}</span>
           </TabsTrigger>
         </TabsList>
 
@@ -404,59 +403,78 @@ export default function EvidencePage() {
         </TabsContent>
       </Tabs>
 
-      {/* Records table — rows are the SELECTED SCOPE only; chip counts come from
-          the same predicates that filter the rows. */}
-      <SectionCard
-        title={scope === "demo" ? "Application records (simulated)" : "Application records"}
-        icon={<ListChecks />}
-        description="Each checked decision with its verdict (historical), review, and documentation state."
-      >
-        <FilterBar
-          chips={EVIDENCE_FILTERS.map((f) => ({
-            key: f.key,
-            label: f.label,
-            count: scopedRows.filter(f.match).length,
-            selected: f.key === statusFilter,
-            onClick: () => setStatusFilter(f.key),
-          }))}
-          dateRange={{ value: dateRange, onChange: setDateRange }}
+      {/* Application evidence beside the reduction measurement: the record
+          rows and the figure derived from them belong in one eyeful. */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0">
+        {/* Records table — rows are the SELECTED SCOPE only; chip counts come from
+            the same predicates that filter the rows. */}
+        <SectionCard
+          title={scope === "demo" ? "Application records (simulated)" : "Application records"}
+          icon={<ListChecks />}
+          description="Each checked decision with its verdict (historical), review, and documentation state."
         >
-          <Select
-            value={fieldFilter}
-            onChange={(e) => setFieldFilter(e.target.value)}
-            className="h-9 w-auto text-xs"
-            aria-label="Filter by field"
+          <FilterBar
+            chips={EVIDENCE_FILTERS.map((f) => ({
+              key: f.key,
+              label: f.label,
+              count: scopedRows.filter(f.match).length,
+              selected: f.key === statusFilter,
+              onClick: () => setStatusFilter(f.key),
+            }))}
+            dateRange={{ value: dateRange, onChange: setDateRange }}
           >
-            <option value="">All fields</option>
-            {fields.map((f) => (
-              <option key={f} value={f}>{f}</option>
-            ))}
-          </Select>
-        </FilterBar>
-        <DataTable
-          columns={columns}
-          rows={rows}
-          rowKey={(p) => p.id}
-          minWidth={760}
-          empty={
-            <EmptyState
-              icon={ListChecks}
-              title={
-                scopedRows.length === 0
-                  ? scope === "demo"
-                    ? "No simulated records"
-                    : "No real records yet"
-                  : "Nothing matches these filters"
-              }
-              description={
-                scopedRows.length === 0 && scope === "real"
-                  ? "Check a planned spray on real data to create the first record."
-                  : "Clear a filter to see more records."
-              }
-            />
-          }
-        />
-      </SectionCard>
+            <Select
+              value={fieldFilter}
+              onChange={(e) => setFieldFilter(e.target.value)}
+              className="h-9 w-auto text-xs"
+              aria-label="Filter by field"
+            >
+              <option value="">All fields</option>
+              {fields.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </Select>
+          </FilterBar>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(p) => p.id}
+            minWidth={760}
+            empty={
+              <EmptyState
+                icon={ListChecks}
+                title={
+                  scopedRows.length === 0
+                    ? scope === "demo"
+                      ? "No simulated records"
+                      : "No real records yet"
+                    : "Nothing matches these filters"
+                }
+                description={
+                  scopedRows.length === 0 && scope === "real"
+                    ? "Check a planned spray on real data to create the first record."
+                    : "Clear a filter to see more records."
+                }
+              />
+            }
+          />
+        </SectionCard>
+        </div>
+        <div className="min-w-0">
+        {/* Measured spray reduction — the pesticide-reduction story, front and
+            center. Its honesty gates stay: no declared baseline means no number,
+            and weak/simulated baselines render as illustrative, never a headline. */}
+        <SectionCard
+          title="Measured spray reduction"
+          icon={<ListChecks />}
+          description="Sprays vs. a grower/PCA-declared baseline. No baseline, no number; low-confidence figures are marked illustrative."
+        >
+          <ReductionCard farmId={farmId} refreshKey={`${planned.length}`} />
+        </SectionCard>
+        </div>
+      </div>
+
 
       {/* Input orders in the SAME provenance scope — demo and real never mix.
           Amounts are recorded, never compared: no savings figure exists. */}
@@ -478,7 +496,7 @@ export default function EvidencePage() {
                   >
                     Plan #{p.id}
                   </Link>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-muted">
                     {p.items.map((i) => i.product_name).join(", ")}
                   </div>
                 </div>
@@ -499,7 +517,7 @@ export default function EvidencePage() {
               header: "Quotes",
               align: "right",
               priority: "secondary",
-              render: (p) => <span className="text-sm text-gray-700">{p.quote_count}</span>,
+              render: (p) => <span className="text-sm text-ink">{p.quote_count}</span>,
             },
             {
               key: "decision",
@@ -515,7 +533,7 @@ export default function EvidencePage() {
                     #{linked.planned_spray_id}
                   </Link>
                 ) : (
-                  <span className="text-xs text-gray-500">Manual</span>
+                  <span className="text-xs text-muted">Manual</span>
                 );
               },
             },
@@ -532,7 +550,7 @@ export default function EvidencePage() {
                     Order #{p.order_id}
                   </Link>
                 ) : (
-                  <span className="text-xs text-gray-500">—</span>
+                  <span className="text-xs text-muted">—</span>
                 ),
             },
           ]}
@@ -542,7 +560,7 @@ export default function EvidencePage() {
           rowKey={(p) => p.id}
           minWidth={640}
           empty={
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted">
               {scope === "demo"
                 ? "No simulated input orders."
                 : "No real input orders yet — real procurement chains appear in the evidence export automatically."}
@@ -568,16 +586,6 @@ export default function EvidencePage() {
         </SectionCard>
       )}
 
-      {/* Measured spray reduction — the pesticide-reduction story, front and
-          center. Its honesty gates stay: no declared baseline means no number,
-          and weak/simulated baselines render as illustrative, never a headline. */}
-      <SectionCard
-        title="Measured spray reduction"
-        icon={<ListChecks />}
-        description="Sprays vs. a grower/PCA-declared baseline. No baseline, no number; low-confidence figures are marked illustrative."
-      >
-        <ReductionCard farmId={farmId} refreshKey={`${planned.length}`} />
-      </SectionCard>
 
       {/* Reports & exports — generated on demand; no stored history to misstate. */}
       <SectionCard
@@ -585,7 +593,7 @@ export default function EvidencePage() {
         icon={<Download />}
         description="Reports are generated on demand from current records; Lumos does not store report history."
       >
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {[
             {
               name: "Audit packet (JSON)",
@@ -623,11 +631,11 @@ export default function EvidencePage() {
               <Link
                 key={row.name}
                 href={row.href}
-                className="flex items-center justify-between gap-2 rounded-md border border-gray-200 p-3 text-sm hover:border-gray-400"
+                className="flex items-center justify-between gap-2 rounded-control border border-line p-3 text-sm hover:border-muted"
               >
                 <span>
-                  <span className="font-medium text-gray-900">{row.name}</span>
-                  <span className="block text-[11px] text-gray-500">{row.contents}</span>
+                  <span className="font-medium text-ink">{row.name}</span>
+                  <span className="block text-[11px] text-muted">{row.contents}</span>
                 </span>
               </Link>
             ) : (
@@ -636,13 +644,13 @@ export default function EvidencePage() {
                 href={row.href}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center justify-between gap-2 rounded-md border border-gray-200 p-3 text-sm hover:border-gray-400"
+                className="flex items-center justify-between gap-2 rounded-control border border-line p-3 text-sm hover:border-muted"
               >
                 <span>
-                  <span className="font-medium text-gray-900">{row.name}</span>
-                  <span className="block text-[11px] text-gray-500">{row.contents}</span>
+                  <span className="font-medium text-ink">{row.name}</span>
+                  <span className="block text-[11px] text-muted">{row.contents}</span>
                 </span>
-                <Download className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+                <Download className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
               </a>
             )
           )}

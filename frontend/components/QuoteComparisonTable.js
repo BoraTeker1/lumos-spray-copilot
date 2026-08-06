@@ -65,8 +65,8 @@ export default function QuoteComparisonTable({
       header: "Supplier",
       render: (q) => (
         <div className="min-w-0">
-          <div className="font-medium text-gray-900">{q.supplier_name}</div>
-          <div className="mt-0.5 space-y-0.5 text-xs text-gray-500">
+          <div className="font-medium text-ink">{q.supplier_name}</div>
+          <div className="mt-0.5 space-y-0.5 text-xs text-muted">
             {q.items.map((line) => (
               <div key={line.id} className="flex flex-wrap items-center gap-1.5">
                 <span>
@@ -81,7 +81,7 @@ export default function QuoteComparisonTable({
               </div>
             ))}
             {q.items.some((l) => l.is_substitution) && (
-              <div className="text-amber-700">
+              <div className="text-warn-fg">
                 {q.items
                   .filter((l) => l.is_substitution)
                   .map((l) => `Why: ${l.substitution_reason}`)
@@ -98,15 +98,15 @@ export default function QuoteComparisonTable({
       align: "right",
       render: (q) => (
         <div>
-          <div className="font-semibold text-gray-900">
+          <div className="font-semibold text-ink">
             {formatCost(q.total_cost, country)}
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-muted">
             {formatCost(q.items_subtotal, country)} + {formatCost(q.delivery_cost, country)}{" "}
             delivery + {formatCost(q.fees, country)} fees
           </div>
           {lowestTotal != null && (
-            <div className="text-xs text-gray-600">
+            <div className="text-xs text-muted">
               {q.total_cost === lowestTotal
                 ? "Lowest quoted total"
                 : `${formatCost(q.total_cost - lowestTotal, country)} above the lowest quoted total`}
@@ -120,9 +120,9 @@ export default function QuoteComparisonTable({
       header: "Delivery",
       priority: "secondary",
       render: (q) => (
-        <div className="text-sm text-gray-700">
+        <div className="text-sm text-ink">
           <div>{formatDate(q.expected_delivery_date)}</div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-muted">
             {AVAILABILITY_LABELS[q.availability] || q.availability}
           </div>
         </div>
@@ -132,13 +132,13 @@ export default function QuoteComparisonTable({
       key: "terms",
       header: "Cash terms",
       priority: "secondary",
-      render: (q) => <span className="text-sm text-gray-700">{q.payment_terms_cash || "—"}</span>,
+      render: (q) => <span className="text-sm text-ink">{q.payment_terms_cash || "—"}</span>,
     },
     {
       key: "expires",
       header: "Expires",
       priority: "secondary",
-      render: (q) => <span className="text-sm text-gray-700">{formatDate(q.expires_on)}</span>,
+      render: (q) => <span className="text-sm text-ink">{formatDate(q.expires_on)}</span>,
     },
     {
       key: "financing",
@@ -152,7 +152,7 @@ export default function QuoteComparisonTable({
             ))}
           </div>
         ) : (
-          <span className="text-xs text-gray-500">Cash only</span>
+          <span className="text-xs text-muted">Cash only</span>
         ),
     },
     {
@@ -196,18 +196,18 @@ export default function QuoteComparisonTable({
         }
       />
       {selecting && (
-        <div className="rounded-md border border-leaf-200 bg-leaf-50 p-3">
-          <p className="text-sm font-medium text-gray-900">
+        <div className="rounded-control border border-leaf-200 bg-leaf-50 p-3">
+          <p className="text-sm font-medium text-ink">
             Select {selecting.supplier_name} —{" "}
             {formatCost(selecting.total_cost, country)}. Why this quote?
           </p>
-          <p className="mt-0.5 text-xs text-gray-600">
+          <p className="mt-0.5 text-xs text-muted">
             The reason is recorded in the plan&apos;s audit history and the
             evidence export. It is never inferred.
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             {REASON_PRESETS.map((r) => (
-              <label key={r} className="flex items-center gap-1.5 text-xs text-gray-700">
+              <label key={r} className="flex items-center gap-1.5 text-xs text-ink">
                 <input
                   type="radio"
                   name="quote-select-reason"
@@ -217,7 +217,7 @@ export default function QuoteComparisonTable({
                 {r}
               </label>
             ))}
-            <label className="flex items-center gap-1.5 text-xs text-gray-700">
+            <label className="flex items-center gap-1.5 text-xs text-ink">
               <input
                 type="radio"
                 name="quote-select-reason"
@@ -229,7 +229,7 @@ export default function QuoteComparisonTable({
           </div>
           {preset === "custom" && (
             <textarea
-              className="mt-2 w-full rounded-md border border-gray-300 p-2 text-sm"
+              className="mt-2 w-full rounded-control border border-line p-2 text-sm"
               rows={2}
               placeholder="Your reason for selecting this quote (required)"
               value={customReason}
@@ -255,7 +255,7 @@ export default function QuoteComparisonTable({
           </div>
         </div>
       )}
-      <p className="text-[11px] text-gray-500">
+      <p className="text-[11px] text-muted">
         Quotes are concierge-entered for comparison. Lumos takes no commission and
         never ranks suppliers — sorted by transparent total cost only. &quot;Above
         the lowest quoted total&quot; compares entered quote totals (including

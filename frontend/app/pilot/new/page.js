@@ -2,10 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Droplets, Eye, Info, Sprout } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { fieldClass } from "@/components/ui/input";
-import Breadcrumbs from "@/components/Breadcrumbs";
+import PageHeader from "@/components/PageHeader";
+import SectionCard from "@/components/SectionCard";
 import SprayImportCard from "@/components/SprayImportCard";
 
 const EMPTY_SPRAY = {
@@ -81,7 +84,7 @@ export default function PilotFarmIntakePage() {
   }
 
   const input = fieldClass;
-  const label = "text-xs font-medium text-gray-600";
+  const label = "text-xs font-medium text-muted";
 
   if (createdFarm) {
     return (
@@ -90,19 +93,19 @@ export default function PilotFarmIntakePage() {
           <h1 className="text-lg font-semibold">
             {createdFarm.name} created
           </h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-muted">
             Optional: import their full spray history now — paste rows from a
             spreadsheet or upload a CSV. You can also do this later from the farm&apos;s
             Records tab.
           </p>
         </div>
-        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
           <h2 className="mb-3 font-semibold">Import spray history</h2>
           <SprayImportCard farmId={createdFarm.id} />
         </section>
         <Link
           href={`/farms/${createdFarm.id}`}
-          className="inline-block rounded-lg bg-leaf-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-leaf-800"
+          className="inline-block rounded-control bg-leaf-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-leaf-800"
         >
           Open {createdFarm.name} →
         </Link>
@@ -111,20 +114,34 @@ export default function PilotFarmIntakePage() {
   }
 
   return (
+    // ONE flat page, ONE submit. Deliberately not a wizard: this intake is a
+    // single POST, and a stepper would add flow state and gating that the
+    // request does not have.
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Pilot setup" }]} />
-      <div>
-        <h1 className="text-lg font-semibold text-gray-900">Pilot setup</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Capture a real grower&apos;s farm, their last 3 sprays, and the latest scouting
-          concern — then run their next planned spray through the decision check live. No
-          login needed.
-        </p>
+      <PageHeader
+        breadcrumbs={[{ label: "Pilot setup" }]}
+        title="Add pilot farm"
+        meta={
+          <>
+            <Badge variant="outline">Real operations intake</Badge>
+            <span>
+              Capture the farm, recent spray history, and the latest scouting concern
+              before running the next planned-spray check.
+            </span>
+          </>
+        }
+      />
+
+      <div className="flex items-start gap-2 rounded-card border border-line bg-canvas px-4 py-2.5 text-sm text-muted">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        Records entered here are operator-provided until reviewed. Regulatory values
+        are never guessed — leave a field blank if you do not have it.
       </div>
 
-      <form onSubmit={submit} className="space-y-6">
+      <form onSubmit={submit} className="space-y-4">
         {/* Farm */}
-        <section className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-2">
+        <SectionCard title="Farm details" icon={<Sprout />} size="section">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <span className={label}>Farm name *</span>
             <input className={input} required value={farm.name} onChange={(e) => setFarmField("name", e.target.value)} />
@@ -161,13 +178,18 @@ export default function PilotFarmIntakePage() {
             </select>
           </div>
         </section>
+        </SectionCard>
 
         {/* Last 3 sprays */}
-        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-3 font-semibold">Last 3 spray events</h2>
+        <SectionCard
+          title="Last 3 spray events"
+          icon={<Droplets />}
+          size="section"
+          description="Recent chemistry and timing give the rotation and interval checks something to work from."
+        >
           <div className="space-y-3">
             {sprays.map((s, i) => (
-              <div key={i} className="grid gap-2 sm:grid-cols-6">
+              <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-6">
                 <input className={input} placeholder="Product" value={s.product_name} onChange={(e) => setSpray(i, "product_name", e.target.value)} />
                 <input className={input} placeholder="Active ingredient" value={s.active_ingredient} onChange={(e) => setSpray(i, "active_ingredient", e.target.value)} />
                 <input type="date" className={input} value={s.application_date} onChange={(e) => setSpray(i, "application_date", e.target.value)} />
@@ -177,11 +199,17 @@ export default function PilotFarmIntakePage() {
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-gray-400">Leave a row blank to skip it.</p>
-        </section>
+          <p className="mt-2 text-xs text-muted">Leave a row blank to skip it.</p>
+        </SectionCard>
 
         {/* Scouting concern */}
-        <section className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-3">
+        <SectionCard
+          title="Latest scouting concern"
+          icon={<Eye />}
+          size="section"
+          description="Field evidence focuses the check on what matters right now."
+        >
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <span className={label}>Latest scouting concern</span>
             <input className={input} value={concern.text} onChange={(e) => setConcern((c) => ({ ...c, text: e.target.value }))} placeholder="gray mold on fruit, spreading" />
@@ -194,11 +222,19 @@ export default function PilotFarmIntakePage() {
             </select>
           </div>
         </section>
+        </SectionCard>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <Button type="submit" disabled={saving}>
-          {saving ? "Creating…" : "Create pilot farm"}
-        </Button>
+        {error && <p className="text-sm text-risk-fg">{error}</p>}
+        <div className="flex items-center gap-2">
+          <Button type="submit" disabled={saving}>
+            {saving ? "Creating…" : "Create pilot farm"}
+          </Button>
+          <Link href="/farms">
+            <Button type="button" variant="outline">
+              Cancel
+            </Button>
+          </Link>
+        </div>
       </form>
     </div>
   );

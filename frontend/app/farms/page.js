@@ -11,6 +11,7 @@ import {
   Plus,
   RotateCcw,
   Sprout,
+  Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatArea, formatDate } from "@/lib/format";
@@ -22,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import DataTable from "@/components/DataTable";
 import EmptyState from "@/components/EmptyState";
+import FilterBar from "@/components/FilterBar";
 import PageHeader from "@/components/PageHeader";
 import SectionCard from "@/components/SectionCard";
 import SeverityBadge from "@/components/SeverityBadge";
@@ -70,20 +72,20 @@ function DemoToolsMenu({ onReset, resetting }) {
   return (
     <details className="relative">
       <summary
-        className="flex h-10 cursor-pointer select-none items-center gap-1 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 [&::-webkit-details-marker]:hidden"
+        className="flex h-10 cursor-pointer select-none items-center gap-1 rounded-control border border-line bg-surface px-3 text-sm font-medium text-muted shadow-sm hover:bg-canvas focus:outline-none focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden"
         aria-label="Demo and admin tools"
       >
         <EllipsisVertical className="h-4 w-4" />
         Demo tools
       </summary>
-      <div className="absolute right-0 z-20 mt-1 w-64 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
-        <p className="px-2 pb-2 pt-1 text-[11px] text-gray-500">
+      <div className="absolute right-0 z-20 mt-1 w-64 rounded-control border border-line bg-surface p-2 shadow-lg">
+        <p className="px-2 pb-2 pt-1 text-[11px] text-muted">
           Demo administration — not an operational action.
         </p>
         <button
           onClick={onReset}
           disabled={resetting}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-50"
         >
           <RotateCcw className="h-4 w-4" />
           {resetting ? "Resetting…" : "Reset demo data"}
@@ -100,10 +102,23 @@ export default function FarmsPage() {
   const [error, setError] = useState(null);
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState(null);
+  const [referenceFarmIds, setReferenceFarmIds] = useState(() => new Set());
+  const [datasetScope, setDatasetScope] = useState("all"); // all | real | demo
 
   const load = useCallback(async () => {
     try {
-      const all = await api.listFarmsOverview();
+      // /farms-overview carries the urgency ranking but not `is_reference`;
+      // /farms carries `is_reference` but no ranking. Join them client-side so an
+      // operator reference farm can be labelled as one — it is not a customer,
+      // and a viewer must never read it as pilot traction.
+      const [all, base] = await Promise.all([
+        api.listFarmsOverview(),
+        api.listFarms().catch(() => []),
+      ]);
+      const referenceIds = new Set(
+        base.filter((f) => f.is_reference).map((f) => f.id)
+      );
+      setReferenceFarmIds(referenceIds);
       setFarms(all);
       const visible = all.filter((f) => !isSecondaryDemoFarm(f));
       const entries = await Promise.all(
@@ -152,18 +167,29 @@ export default function FarmsPage() {
   const visibleFarms = farms.filter((f) => !isSecondaryDemoFarm(f));
   const allDemo = farms.length > 0 && farms.every((f) => f.is_demo);
 
+  // Dataset scope. `is_demo` is the server's own per-farm derivation (a farm is
+  // demo iff it has records and all of them are demo-tagged) — not re-derived here.
+  const DATASET_SCOPES = [
+    { key: "all", label: "All", match: () => true },
+    { key: "real", label: "Real operations", match: (f) => !f.is_demo },
+    { key: "demo", label: "Simulated / test", match: (f) => f.is_demo },
+  ];
+  const activeScope =
+    DATASET_SCOPES.find((s) => s.key === datasetScope) || DATASET_SCOPES[0];
+  const scopedFarms = visibleFarms.filter(activeScope.match);
+
   const fieldColumns = (farm) => [
     {
       key: "field",
       header: "Field",
-      render: (f) => <span className="font-medium text-gray-900">{f.name}</span>,
+      render: (f) => <span className="font-medium text-ink">{f.name}</span>,
     },
     {
       key: "crop",
       header: "Crop",
       priority: "secondary",
       render: () => (
-        <span className="capitalize text-gray-700">
+        <span className="capitalize text-ink">
           {farm.crop_type?.replace(/_/g, " ") || "—"}
         </span>
       ),
@@ -179,7 +205,7 @@ export default function FarmsPage() {
             <StatusBadge kind="evidence" value={f.lead.evidence_state} />
           )
         ) : (
-          <span className="text-xs text-gray-400">No decisions</span>
+          <span className="text-xs text-muted">No decisions</span>
         ),
     },
     {
@@ -189,13 +215,13 @@ export default function FarmsPage() {
       render: (f) =>
         f.nextPlanned ? (
           <div className="min-w-0 text-sm">
-            <div className="font-medium text-gray-900">{f.nextPlanned.product_name}</div>
-            <div className="text-xs text-gray-500">
+            <div className="font-medium text-ink">{f.nextPlanned.product_name}</div>
+            <div className="text-xs text-muted">
               {formatDate(f.nextPlanned.intended_date)}
             </div>
           </div>
         ) : (
-          <span className="text-xs text-gray-400">None open</span>
+          <span className="text-xs text-muted">None open</span>
         ),
     },
     {
@@ -207,12 +233,12 @@ export default function FarmsPage() {
         ) : f.latestObs ? (
           <div className="flex items-center gap-1.5 whitespace-nowrap">
             <SeverityBadge value={f.latestObs.severity_1_to_5} />
-            <span className="text-xs text-gray-600">
+            <span className="text-xs text-muted">
               {severityLabel(f.latestObs.severity_1_to_5)} · {f.latestObs.visible_issue}
             </span>
           </div>
         ) : (
-          <span className="text-xs text-gray-400">—</span>
+          <span className="text-xs text-muted">—</span>
         ),
     },
     {
@@ -220,7 +246,7 @@ export default function FarmsPage() {
       header: "Required next action",
       priority: "secondary",
       render: (f) => (
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted">
           {f.lead && f.lead.current_next_action !== "none"
             ? nextActionLabel(f.lead.current_next_action)
             : "—"}
@@ -253,11 +279,7 @@ export default function FarmsPage() {
       <PageHeader
         breadcrumbs={[{ label: "Farms & fields" }]}
         title="Farms & fields"
-        meta={
-          <span>
-            The decision layer before the spray — ranked by what needs attention.
-          </span>
-        }
+        meta={<span>Operational status ranked by what needs attention.</span>}
         actions={
           <>
             <Link href="/pilot/new">
@@ -272,18 +294,38 @@ export default function FarmsPage() {
       />
 
       {resetError && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {resetError}
         </div>
       )}
-      {loading && <p className="text-sm text-gray-500">Loading farms…</p>}
+      {loading && <p className="text-sm text-muted">Loading farms…</p>}
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
           {error} — is the backend running on <code>http://localhost:8000</code>?
         </div>
       )}
 
-      {visibleFarms.map((farm) => {
+      {!loading && visibleFarms.length > 0 && (
+        <FilterBar
+          chips={DATASET_SCOPES.map((s) => ({
+            key: s.key,
+            label: s.label,
+            count: visibleFarms.filter(s.match).length,
+            selected: s.key === datasetScope,
+            onClick: () => setDatasetScope(s.key),
+          }))}
+        />
+      )}
+
+      {!loading && scopedFarms.length === 0 && visibleFarms.length > 0 && (
+        <EmptyState
+          icon={Sprout}
+          title="No farms in this dataset"
+          description="Switch the dataset filter above to see the other records."
+        />
+      )}
+
+      {scopedFarms.map((farm) => {
         const recs = records[farm.id] || { planned: [], observations: [], sprays: [] };
         const fields = deriveFields(recs);
         const meta = URGENCY_META[farm.urgency] || URGENCY_META.ok;
@@ -291,12 +333,12 @@ export default function FarmsPage() {
         return (
           <div key={farm.id} className="space-y-4">
             <Link href={`/farms/${farm.id}`} className="group block">
-              <Card className={`transition-colors group-hover:border-gray-400 ${meta.border}`}>
+              <Card className={`transition-colors group-hover:border-muted ${meta.border}`}>
                 <CardContent className="p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-base font-semibold text-gray-900">
+                        <span className="text-base font-semibold text-ink">
                           {farm.name}
                         </span>
                         <Badge variant={meta.variant}>{meta.label}</Badge>
@@ -306,19 +348,27 @@ export default function FarmsPage() {
                             Simulated demo data
                           </Badge>
                         )}
+                        {/* A reference farm carries real provenance but has no
+                            grower. Saying so here stops it being read as a pilot. */}
+                        {referenceFarmIds.has(farm.id) && (
+                          <Badge variant="red">
+                            <Wrench />
+                            Operator test — not a customer
+                          </Badge>
+                        )}
                       </div>
-                      <div className="mt-1 flex items-center gap-1 text-xs text-gray-500">
+                      <div className="mt-1 flex items-center gap-1 text-xs text-muted">
                         <MapPin className="h-3 w-3 shrink-0" />
                         {farm.location || "—"} · {(farm.country || "US").toUpperCase()}
                       </div>
                     </div>
-                    <div className="text-right text-xs text-gray-600">
-                      <div className="font-medium text-gray-900">{farm.next_action}</div>
-                      <div className="text-gray-500">{farm.why}</div>
+                    <div className="text-right text-xs text-muted">
+                      <div className="font-medium text-ink">{farm.next_action}</div>
+                      <div className="text-muted">{farm.why}</div>
                     </div>
                   </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-gray-600">
+                  <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted">
                     <span className="inline-flex items-center gap-1 capitalize">
                       <Sprout className="h-3 w-3" />
                       {farm.crop_type?.replace(/_/g, " ")}
@@ -333,7 +383,7 @@ export default function FarmsPage() {
                     </span>
                     <span
                       className={`inline-flex items-center gap-1 ${
-                        overdue ? "font-medium text-red-700" : ""
+                        overdue ? "font-medium text-risk-fg" : ""
                       }`}
                     >
                       <CalendarClock className="h-3 w-3" />

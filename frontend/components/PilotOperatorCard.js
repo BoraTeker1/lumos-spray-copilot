@@ -96,10 +96,10 @@ export default function PilotOperatorCard({ farmId }) {
 
   if (!hasKey) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
+      <div className="rounded-control border border-line bg-surface p-4">
         <div className="flex items-center gap-2">
-          <KeyRound className="h-4 w-4 text-gray-500" aria-hidden="true" />
-          <h3 className="text-sm font-semibold text-gray-900">Operator key required</h3>
+          <KeyRound className="h-4 w-4 text-muted" aria-hidden="true" />
+          <h3 className="text-sm font-semibold text-ink">Operator key required</h3>
         </div>
         <form onSubmit={saveKey} className="mt-3 space-y-2">
           <input
@@ -107,9 +107,9 @@ export default function PilotOperatorCard({ farmId }) {
             value={operatorKey}
             onChange={(e) => setOperatorKey(e.target.value)}
             placeholder="LUMOS_OPERATOR_KEY"
-            className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+            className="w-full rounded-control border border-line px-2 py-1.5 text-sm"
           />
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-muted">
             Held for this browser session only. These routes issue PCA credentials, so
             leaving them open would let anyone reaching this API sign recommendations
             as an authorized advisor.
@@ -125,15 +125,15 @@ export default function PilotOperatorCard({ farmId }) {
   return (
     <div className="space-y-4">
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+        <p className="rounded-control border border-risk-line bg-risk-bg p-2 text-xs text-risk-fg">
           {error}
         </p>
       )}
 
       {/* ------------------------------------------------------- credentials */}
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-semibold text-gray-900">PCA credentials</h3>
-        <p className="mt-1 text-xs text-gray-600">
+      <div className="rounded-control border border-line bg-surface p-4">
+        <h3 className="text-sm font-semibold text-ink">PCA credentials</h3>
+        <p className="mt-1 text-xs text-muted">
           Lumos does not verify licences — it records the identifier the operator
           enters and attributes decisions to it.
         </p>
@@ -143,7 +143,7 @@ export default function PilotOperatorCard({ farmId }) {
             value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
             placeholder="Name"
-            className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+            className="rounded-control border border-line px-2 py-1.5 text-sm"
           />
           <input
             value={form.license_identifier}
@@ -151,7 +151,7 @@ export default function PilotOperatorCard({ farmId }) {
               setForm({ ...form, license_identifier: e.target.value })
             }
             placeholder="Licence no."
-            className="rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+            className="rounded-control border border-line px-2 py-1.5 text-sm"
           />
           <Button
             type="submit"
@@ -163,11 +163,11 @@ export default function PilotOperatorCard({ farmId }) {
         </form>
 
         {issued?.token && (
-          <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3">
-            <p className="text-xs font-semibold text-amber-900">
+          <div className="mt-3 rounded-control border border-warn-line bg-warn-bg p-3">
+            <p className="text-xs font-semibold text-warn-fg">
               Copy this token now — it is shown once and cannot be retrieved again.
             </p>
-            <code className="mt-1 block break-all rounded bg-white p-2 text-xs">
+            <code className="mt-1 block break-all rounded bg-surface p-2 text-xs">
               {issued.token}
             </code>
           </div>
@@ -177,15 +177,15 @@ export default function PilotOperatorCard({ farmId }) {
           {creds.map((c) => (
             <li
               key={c.id}
-              className="flex items-center justify-between gap-2 rounded border border-gray-200 p-2 text-sm"
+              className="flex items-center justify-between gap-2 rounded border border-line p-2 text-sm"
             >
               <span>
                 {c.display_name}{" "}
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-muted">
                   ({c.license_identifier} · {c.token_prefix}…)
                 </span>
                 {c.revoked_at && (
-                  <span className="ml-1 text-xs text-red-600">revoked</span>
+                  <span className="ml-1 text-xs text-risk-fg">revoked</span>
                 )}
               </span>
               <span className="flex gap-1">
@@ -210,16 +210,16 @@ export default function PilotOperatorCard({ farmId }) {
             </li>
           ))}
           {creds.length === 0 && (
-            <li className="text-xs text-gray-500">No credentials issued yet.</li>
+            <li className="text-xs text-muted">No credentials issued yet.</li>
           )}
         </ul>
       </div>
 
       {/* ---------------------------------------------------------- protocol */}
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="text-sm font-semibold text-gray-900">Pilot protocol</h3>
+      <div className="rounded-control border border-line bg-surface p-4">
+        <h3 className="text-sm font-semibold text-ink">Pilot protocol</h3>
         {protocols.length === 0 ? (
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-xs text-muted">
             No protocol recorded for this farm. Assessments stay in shadow mode until a
             protocol records an unblinding date — a farm without one can never drift
             out of shadow.
@@ -227,14 +227,14 @@ export default function PilotOperatorCard({ farmId }) {
         ) : (
           <ul className="mt-2 space-y-1.5">
             {protocols.map((p) => (
-              <li key={p.id} className="rounded border border-gray-200 p-2 text-sm">
+              <li key={p.id} className="rounded border border-line p-2 text-sm">
                 <span className="font-medium">
                   {p.name} · {p.version}
                 </span>
-                <span className="ml-2 text-xs text-gray-500">
+                <span className="ml-2 text-xs text-muted">
                   {p.assignment_method} · primary metric: {p.primary_metric}
                 </span>
-                <p className="mt-0.5 text-xs text-gray-500">
+                <p className="mt-0.5 text-xs text-muted">
                   {p.unblinded_at
                     ? `Unblinded ${p.unblinded_at.slice(0, 10)}`
                     : "Blinded — the PCA sees no risk output"}
@@ -246,14 +246,14 @@ export default function PilotOperatorCard({ farmId }) {
       </div>
 
       {/* ------------------------------------------------ shadow assessments */}
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
+      <div className="rounded-control border border-line bg-surface p-4">
         <div className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-gray-500" aria-hidden="true" />
-          <h3 className="text-sm font-semibold text-gray-900">
+          <ShieldAlert className="h-4 w-4 text-muted" aria-hidden="true" />
+          <h3 className="text-sm font-semibold text-ink">
             Shadow risk assessments
           </h3>
         </div>
-        <p className="mt-1 text-xs text-gray-600">
+        <p className="mt-1 text-xs text-muted">
           Operator-only. These are absent from every PCA-facing payload, so the
           advisor&apos;s recorded decision stays an independent baseline.
           <strong className="ml-1 font-medium">
@@ -263,27 +263,27 @@ export default function PilotOperatorCard({ farmId }) {
 
         <ul className="mt-3 space-y-2">
           {assessments.map((a) => (
-            <li key={a.id} className="rounded border border-gray-200 p-2 text-sm">
+            <li key={a.id} className="rounded border border-line p-2 text-sm">
               <div className="flex items-center justify-between gap-2">
                 <StatusBadge kind="riskBand" value={a.risk_band} />
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-muted">
                   {a.model_version} · {a.computed_at?.slice(0, 16).replace("T", " ")}
                 </span>
               </div>
               {a.abstained && (a.missing_inputs || []).length > 0 && (
-                <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-xs text-gray-600">
+                <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-xs text-muted">
                   {a.missing_inputs.map((reason) => (
                     <li key={reason}>{abstainReasonLabel(reason)}</li>
                   ))}
                 </ul>
               )}
-              <p className="mt-1 text-[11px] text-gray-500">
+              <p className="mt-1 text-[11px] text-muted">
                 {a.calibration_status} · {a.local_validation_status}
               </p>
             </li>
           ))}
           {assessments.length === 0 && (
-            <li className="text-xs text-gray-500">
+            <li className="text-xs text-muted">
               No assessments computed yet.
             </li>
           )}

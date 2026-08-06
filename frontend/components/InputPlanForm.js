@@ -6,13 +6,15 @@ import { ShoppingCart } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeaderBar,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { Input, fieldClass } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -108,29 +110,33 @@ export default function InputPlanForm({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
+    // A side drawer rather than a centred dialog: this form is long, and the
+    // pinned footer keeps "Create draft plan" reachable without scrolling past
+    // the fields.
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
         <Button variant="secondary">
           <ShoppingCart />
           {triggerLabel}
         </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>New input plan</DialogTitle>
-          <DialogDescription>
+      </SheetTrigger>
+      <SheetContent padded={false}>
+        <SheetHeaderBar>
+          <SheetTitle>New input plan</SheetTitle>
+          <SheetDescription className="mt-1">
             {plannedSpray
               ? `Prefilled from decision #${plannedSpray.id}. The plan starts as a draft — submit it for quotes when it's ready.`
               : "A draft plan for what this farm expects to purchase. Submit it for quotes when it's ready."}
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-3">
+          </SheetDescription>
+        </SheetHeaderBar>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <SheetBody className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <label className="col-span-2 text-xs font-medium text-gray-600">
+            <label className="col-span-2 text-xs font-medium text-muted">
               Product *
               <Input value={form.product_name} onChange={set("product_name")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Category
               <Select value={form.category} onChange={set("category")} className="mt-1">
                 {CATEGORIES.map((c) => (
@@ -138,44 +144,44 @@ export default function InputPlanForm({
                 ))}
               </Select>
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Active ingredient
               <Input value={form.active_ingredient} onChange={set("active_ingredient")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Quantity *
               <Input type="number" min="0" step="any" value={form.quantity} onChange={set("quantity")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Unit *
               <Input value={form.unit} onChange={set("unit")} placeholder="oz, lb, gal…" className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Acres
               <Input type="number" min="0" step="any" value={form.acres} onChange={set("acres")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Needed by *
               <Input type="date" value={form.needed_by_date} onChange={set("needed_by_date")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Field / block
               <Input value={form.field_block} onChange={set("field_block")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Intended use / target
               <Input value={form.intended_use} onChange={set("intended_use")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Estimated cost
               <Input type="number" min="0" step="any" value={form.estimated_cost} onChange={set("estimated_cost")} className="mt-1" />
             </label>
-            <label className="text-xs font-medium text-gray-600">
+            <label className="text-xs font-medium text-muted">
               Requested by
               <Input value={form.requested_by} onChange={set("requested_by")} className="mt-1" />
             </label>
           </div>
-          <label className="flex items-start gap-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
+          <label className="flex items-start gap-2 rounded-control border border-line bg-canvas p-3 text-xs text-ink">
             <input
               type="checkbox"
               checked={form.financing_requested}
@@ -197,12 +203,18 @@ export default function InputPlanForm({
               className={`${fieldClass} h-16`}
             />
           )}
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <Button type="submit" disabled={saving}>
-            {saving ? "Saving…" : "Create draft plan"}
-          </Button>
+          {error && <p className="text-sm text-risk-fg">{error}</p>}
+          </SheetBody>
+          <SheetFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Create draft plan"}
+            </Button>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

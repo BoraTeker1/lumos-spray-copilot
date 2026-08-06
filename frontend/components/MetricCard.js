@@ -22,11 +22,11 @@ export default function MetricCard({
         </span>
       )}
       <div className="min-w-0 flex-1">
-        <div className="text-xs text-gray-500">{label}</div>
-        <div className="truncate text-[22px] font-semibold leading-7 text-gray-900">
+        <div className="text-meta text-muted">{label}</div>
+        <div className="tabular truncate text-[22px] font-semibold leading-7 text-ink">
           {value}
         </div>
-        {hint && <div className="truncate text-[11px] text-gray-500">{hint}</div>}
+        {hint && <div className="truncate text-[11px] leading-4 text-muted">{hint}</div>}
         {action && <div className="mt-1">{action}</div>}
       </div>
     </Card>

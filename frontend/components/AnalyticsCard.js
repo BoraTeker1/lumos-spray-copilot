@@ -18,8 +18,8 @@ export default function AnalyticsCard({ farmId, country, refreshKey, hasDocument
       .catch((err) => setError(err.message));
   }, [farmId, refreshKey]);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading analytics…</p>;
+  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (!data) return <p className="text-sm text-muted">Loading analytics…</p>;
 
   const rows = [
     { label: "Total pesticide spend (cycle)", value: formatCost(data.total_spend, country) },
@@ -41,14 +41,14 @@ export default function AnalyticsCard({ farmId, country, refreshKey, hasDocument
     <div>
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {rows.map((r) => (
-          <div key={r.label} className="rounded bg-gray-50 p-3">
-            <dt className="text-xs text-gray-500">{r.label}</dt>
+          <div key={r.label} className="rounded bg-canvas p-3">
+            <dt className="text-xs text-muted">{r.label}</dt>
             <dd className="mt-0.5 text-base font-semibold">{r.value}</dd>
           </div>
         ))}
       </dl>
 
-      <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+      <div className="mt-3 rounded-control border border-line bg-canvas p-3 text-sm text-ink">
         <span className="font-medium">
           {formatCost(data.potential_avoidable_cost, country)}
         </span>{" "}

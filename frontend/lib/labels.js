@@ -39,6 +39,37 @@ export const DECISION_OUTCOME_LABELS = {
   pca_review_required: "PCA REVIEW REQUIRED",
 };
 
+// Spray-disposition summary: the one-line answer to "so can this be sprayed?",
+// derived from the engine verdict ALONE. It adds no logic — it restates the
+// verdict the engine already issued in the words the grower actually asks in.
+//
+// The mapping is deliberately asymmetric, and must stay that way:
+//   * `block` is the only value that speaks in absolutes.
+//   * delay / inspect_first / pca_review_required all say HOLD — the engine has
+//     not cleared anything, and each carries its own server-supplied next action.
+//   * `approve` says NO ENGINE BLOCK FOUND and NEVER "spraying allowed: yes".
+//     An approve is currently never definitive (rotation and scouting checks are
+//     heuristics; prior-REI is grower-entered), so an affirmative clearance here
+//     would be a pesticide prescription the product refuses to make.
+// Call sites pair the headline with the server's `required_next_action` and,
+// for approve, with CLEARANCE_CAVEAT.
+export const DISPOSITION_SUMMARY = {
+  block: { headline: "SPRAYING ALLOWED: NO", tone: "risk" },
+  delay: { headline: "NOT CURRENTLY CLEARED — HOLD", tone: "warn" },
+  inspect_first: { headline: "NOT CURRENTLY CLEARED — HOLD", tone: "inspect" },
+  pca_review_required: { headline: "NOT CURRENTLY CLEARED — HOLD", tone: "review" },
+  approve: { headline: "NO ENGINE BLOCK FOUND", tone: "good" },
+};
+
+// Shown beside an approve headline. Says what the absence of a block does and
+// does not mean.
+export const CLEARANCE_CAVEAT =
+  "No engine block is not a clearance to spray. Confirm PHI, REI, rates and crop use against the product label with a licensed PCA / agronomist before application.";
+
+export function dispositionSummary(outcome) {
+  return DISPOSITION_SUMMARY[outcome] || DISPOSITION_SUMMARY.pca_review_required;
+}
+
 // Recorded real-world outcomes (what the humans actually did).
 export const RECORDED_OUTCOME_LABELS = {
   planned: "No outcome recorded yet",
@@ -62,12 +93,12 @@ export const REVIEW_STATE_LABELS = {
 // Shared by the dashboard cards and the farm-page header chip. Badge variants
 // come from the shared tone table; borders keep per-urgency intensity.
 const URGENCY_BORDERS = {
-  conflict: "border-red-300",
-  harvest_overdue: "border-red-300",
-  needs_review: "border-amber-300",
-  awaiting_outcome: "border-amber-200",
-  flags: "border-gray-200",
-  ok: "border-gray-200",
+  conflict: "border-risk-line",
+  harvest_overdue: "border-risk-line",
+  needs_review: "border-warn-line",
+  awaiting_outcome: "border-warn-line",
+  flags: "border-line",
+  ok: "border-line",
 };
 
 const URGENCY_LABELS = {

@@ -22,19 +22,19 @@ export default function WeatherCard({ farmId }) {
       .catch((err) => setError(err.message));
   }, [farmId]);
 
-  if (error) return <p className="text-xs text-red-600">{error}</p>;
-  if (!data) return <p className="text-xs text-gray-500">Loading weather…</p>;
+  if (error) return <p className="text-xs text-risk-fg">{error}</p>;
+  if (!data) return <p className="text-xs text-muted">Loading weather…</p>;
 
   return (
-    <div className="text-xs text-gray-600">
+    <div className="text-xs text-muted">
       <div className="flex items-center justify-between gap-2">
         <span>Disease pressure</span>
         <Badge variant={RISK_VARIANTS[data.risk_level] || "neutral"}>{data.risk_level}</Badge>
       </div>
-      <div className="mt-1.5 text-gray-500">
+      <div className="mt-1.5 text-muted">
         {data.temperature_c}°C · {data.humidity_pct}% RH · {data.rain_probability_pct}% rain
       </div>
-      <div className="mt-1.5 rounded bg-gray-50 px-2 py-1 text-[11px] text-gray-500">
+      <div className="mt-1.5 rounded bg-canvas px-2 py-1 text-[11px] text-muted">
         Simulated demo weather — not a live feed.
       </div>
     </div>

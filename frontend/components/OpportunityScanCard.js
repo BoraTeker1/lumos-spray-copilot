@@ -19,10 +19,10 @@ import { History } from "lucide-react";
 // number here must never acquire a caption that a slide could quote as a reduction.
 
 const BAND_STYLES = {
-  low: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  moderate: "bg-amber-50 text-amber-700 border-amber-200",
-  high: "bg-rose-50 text-rose-700 border-rose-200",
-  abstain: "bg-gray-50 text-gray-600 border-gray-200",
+  low: "bg-ok-bg text-ok-fg border-ok-line",
+  moderate: "bg-warn-bg text-warn-fg border-warn-line",
+  high: "bg-risk-bg text-risk-fg border-risk-line",
+  abstain: "bg-canvas text-muted border-line",
 };
 
 const EMPTY_FORM = { farm_id: "", block_id: "", dates: "" };
@@ -89,7 +89,7 @@ export default function OpportunityScanCard() {
     >
       <div className="flex flex-col gap-4">
         <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-          <label className="flex flex-col text-xs text-gray-600">
+          <label className="flex flex-col text-xs text-muted">
             Farm id
             <input
               value={form.farm_id}
@@ -98,7 +98,7 @@ export default function OpportunityScanCard() {
               required
             />
           </label>
-          <label className="flex flex-col text-xs text-gray-600">
+          <label className="flex flex-col text-xs text-muted">
             Block id
             <input
               value={form.block_id}
@@ -107,7 +107,7 @@ export default function OpportunityScanCard() {
               required
             />
           </label>
-          <label className="flex flex-1 flex-col text-xs text-gray-600">
+          <label className="flex flex-1 flex-col text-xs text-muted">
             Scheduled spray dates (from the partner&rsquo;s records)
             <input
               value={form.dates}
@@ -122,28 +122,28 @@ export default function OpportunityScanCard() {
           </Button>
         </form>
 
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted">
           Snapshots are <span className="font-mono">retrospective_reconstruction</span>,
           not point-in-time — backfilled records carry an ingest-time{" "}
           <span className="font-mono">recorded_at</span>, so a true replay of a past
           season admits nothing at all.
         </p>
 
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="text-xs text-risk-fg">{error}</p>}
 
         {scans === null ? (
-          <p className="text-sm text-gray-500">Loading…</p>
+          <p className="text-sm text-muted">Loading…</p>
         ) : scans.length === 0 ? (
-          <p className="text-sm text-gray-500">No scans yet.</p>
+          <p className="text-sm text-muted">No scans yet.</p>
         ) : (
           <ul className="flex flex-col gap-4">
             {scans.map((scan) => (
-              <li key={scan.id} className="border-l-2 border-gray-200 pl-3">
+              <li key={scan.id} className="border-l-2 border-line pl-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs text-gray-700">
+                  <span className="font-mono text-xs text-ink">
                     #{scan.id} farm {scan.farm_id} · block {scan.block_id}
                   </span>
-                  <span className="text-xs text-gray-500">
+                  <span className="text-xs text-muted">
                     {scan.dates_scanned} dates · {scan.assessed_count} assessed
                   </span>
                 </div>
@@ -151,7 +151,7 @@ export default function OpportunityScanCard() {
                 {/* Reasons first and unconditional — see the note at the top. */}
                 {scan.reason_counts &&
                   Object.keys(scan.reason_counts).length > 0 && (
-                    <ul className="mt-1 text-xs text-gray-600">
+                    <ul className="mt-1 text-xs text-muted">
                       {Object.entries(scan.reason_counts)
                         .sort((a, b) => b[1] - a[1])
                         .map(([reason, count]) => (
@@ -172,7 +172,7 @@ export default function OpportunityScanCard() {
 
                 {/* Server-owned, rendered verbatim. This card adds no wording. */}
                 {scan.cannot_conclude && (
-                  <ul className="mt-2 text-[11px] text-gray-500">
+                  <ul className="mt-2 text-[11px] text-muted">
                     {Object.entries(scan.cannot_conclude).map(([metric, why]) => (
                       <li key={metric}>
                         <span className="font-mono">{metric}</span>: {why}

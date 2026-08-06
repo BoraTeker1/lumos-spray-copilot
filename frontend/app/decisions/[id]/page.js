@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Printer } from "lucide-react";
+import { ArrowLeft, Info, Printer } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,11 +25,14 @@ import AiBriefCard from "@/components/AiBriefCard";
 import InputPlanForm from "@/components/InputPlanForm";
 import {
   AUTHORITY_SOURCE_LABELS,
+  CLEARANCE_CAVEAT,
   RECORDED_OUTCOME_LABELS,
   REVIEW_STATE_LABELS,
   decisionAuthorityLabel,
+  dispositionSummary,
   isProvisionalAuthority,
 } from "@/lib/labels";
+import { tone } from "@/lib/tones";
 import { formatArea, formatCost, formatDate } from "@/lib/format";
 
 // Section numbers are allocated in render order rather than hardcoded: two of
@@ -43,9 +46,9 @@ function makeCounter() {
 function Section({ number, title, children }) {
   return (
     <section className="break-inside-avoid">
-      <h2 className="mb-2 flex items-center gap-2 border-b border-gray-200 pb-1.5 text-sm font-semibold text-gray-900">
+      <h2 className="mb-2 flex items-center gap-2 border-b border-line pb-1.5 text-sm font-semibold text-ink">
         {number != null && (
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-gray-300 text-[11px] font-semibold text-gray-600">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-line text-[11px] font-semibold text-muted">
             {number}
           </span>
         )}
@@ -59,8 +62,8 @@ function Section({ number, title, children }) {
 function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-3 py-0.5 text-sm">
-      <span className="text-gray-500">{label}</span>
-      <span className="text-right font-medium text-gray-900">{value ?? "—"}</span>
+      <span className="text-muted">{label}</span>
+      <span className="text-right font-medium text-ink">{value ?? "—"}</span>
     </div>
   );
 }
@@ -89,6 +92,50 @@ const DISPOSITION_LABELS = {
   rescout: "Re-scout first",
   insufficient_evidence: "Insufficient evidence",
 };
+
+// "So can it be sprayed?" — the verdict restated as the question a grower asks.
+//
+// This panel has NO logic of its own: the headline is a pure lookup on
+// decision_outcome (lib/labels.js DISPOSITION_SUMMARY), the next line is the
+// server's required_next_action verbatim, and the two rows below read
+// server-derived state. It can never render an affirmative clearance — an
+// approve reads "NO ENGINE BLOCK FOUND" and carries the label/PCA caveat,
+// because an approve in this engine is never definitive.
+function DispositionSummary({ planned }) {
+  const disp = dispositionSummary(planned.decision_outcome);
+  const t = tone(disp.tone);
+  const isApprove = planned.decision_outcome === "approve";
+  return (
+    <div className="rounded-card border border-line bg-surface p-4">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+        Spray disposition
+      </div>
+      <div className={`mt-1.5 text-base font-bold leading-tight ${t.text}`}>
+        {disp.headline}
+      </div>
+      <p className="mt-1.5 text-meta text-muted">{planned.required_next_action}</p>
+      {isApprove && (
+        <p className="mt-2 border-t border-line pt-2 text-[11px] leading-snug text-muted">
+          {CLEARANCE_CAVEAT}
+        </p>
+      )}
+      <dl className="mt-3 space-y-1.5 border-t border-line pt-3 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-muted">Inspection required</dt>
+          <dd className="font-medium text-ink">
+            {planned.decision_outcome === "inspect_first" ? "Yes" : "No"}
+          </dd>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-muted">PCA review</dt>
+          <dd className="font-medium text-ink">
+            {REVIEW_STATE_LABELS[planned.review_state] || planned.review_state}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
 
 const FOLLOW_UP_TYPES = [
   { value: "scouting_observation", label: "Scouting observation" },
@@ -148,33 +195,33 @@ function FollowUpForm({ plannedId, onAdded }) {
 
   const needsProduct = ["actual_application", "rescue_application"].includes(form.event_type);
   return (
-    <form onSubmit={submit} className="no-print mt-2 space-y-2 rounded-lg border bg-gray-50 p-3">
-      <p className="text-xs font-medium text-gray-700">
+    <form onSubmit={submit} className="no-print mt-2 space-y-2 rounded-control border bg-canvas p-3">
+      <p className="text-xs font-medium text-ink">
         Add follow-up event (append-only — events are never edited or deleted)
       </p>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <select className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.event_type} onChange={set("event_type")}>
+        <select className="rounded-control border border-line px-2 py-1 text-xs" value={form.event_type} onChange={set("event_type")}>
           {FOLLOW_UP_TYPES.map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
-        <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.observed_at} onChange={set("observed_at")} />
+        <input type="date" className="rounded-control border border-line px-2 py-1 text-xs" value={form.observed_at} onChange={set("observed_at")} />
         {form.event_type === "scouting_observation" && (
-          <input type="number" min="0" max="5" placeholder="Severity (1-5)" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.severity} onChange={set("severity")} />
+          <input type="number" min="0" max="5" placeholder="Severity (1-5)" className="rounded-control border border-line px-2 py-1 text-xs" value={form.severity} onChange={set("severity")} />
         )}
         {needsProduct && (
-          <input placeholder="Product applied" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.actual_product} onChange={set("actual_product")} />
+          <input placeholder="Product applied" className="rounded-control border border-line px-2 py-1 text-xs" value={form.actual_product} onChange={set("actual_product")} />
         )}
-        <input type="number" step="0.01" placeholder="Cost (optional)" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.cost} onChange={set("cost")} />
+        <input type="number" step="0.01" placeholder="Cost (optional)" className="rounded-control border border-line px-2 py-1 text-xs" value={form.cost} onChange={set("cost")} />
         {["harvest_outcome", "yield_quality_outcome"].includes(form.event_type) && (
           <>
-            <select className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.yield_impact} onChange={set("yield_impact")}>
+            <select className="rounded-control border border-line px-2 py-1 text-xs" value={form.yield_impact} onChange={set("yield_impact")}>
               <option value="">Yield impact: unknown</option>
               <option value="positive">Yield: positive</option>
               <option value="neutral">Yield: neutral</option>
               <option value="negative">Yield: negative</option>
             </select>
-            <select className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.quality_impact} onChange={set("quality_impact")}>
+            <select className="rounded-control border border-line px-2 py-1 text-xs" value={form.quality_impact} onChange={set("quality_impact")}>
               <option value="">Quality impact: unknown</option>
               <option value="positive">Quality: positive</option>
               <option value="neutral">Quality: neutral</option>
@@ -182,13 +229,13 @@ function FollowUpForm({ plannedId, onAdded }) {
             </select>
           </>
         )}
-        <input placeholder="Entered by" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.entered_by} onChange={set("entered_by")} />
+        <input placeholder="Entered by" className="rounded-control border border-line px-2 py-1 text-xs" value={form.entered_by} onChange={set("entered_by")} />
       </div>
-      <textarea rows={2} placeholder="Evidence notes (what was actually seen/done)" className="w-full rounded-lg border border-gray-300 px-2 py-1 text-xs" value={form.evidence_notes} onChange={set("evidence_notes")} />
+      <textarea rows={2} placeholder="Evidence notes (what was actually seen/done)" className="w-full rounded-control border border-line px-2 py-1 text-xs" value={form.evidence_notes} onChange={set("evidence_notes")} />
       <Button type="submit" size="sm" disabled={busy}>
         {busy ? "Saving…" : "Append event"}
       </Button>
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-risk-fg">{error}</p>}
     </form>
   );
 }
@@ -229,8 +276,8 @@ export default function DecisionRecordPage({ params }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!planned || !farm) return <p className="text-sm text-gray-500">Loading decision record…</p>;
+  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (!planned || !farm) return <p className="text-sm text-muted">Loading decision record…</p>;
 
   const payload = planned.decision_payload || {};
   const rules = payload.rules || [];
@@ -260,13 +307,10 @@ export default function DecisionRecordPage({ params }) {
 
       {/* Page header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">{planned.product_name}</h1>
-          <p className="mt-0.5 text-xs text-gray-500">
-            Pre-spray decision record #{planned.id} · {farm.name} · intended{" "}
-            {formatDate(planned.intended_date)} · generated by Lumos Spray Copilot
-          </p>
-        </div>
+        <p className="text-meta text-muted">
+          Pre-spray decision record #{planned.id} · {farm.name} · intended{" "}
+          {formatDate(planned.intended_date)} · generated by Lumos Spray Copilot
+        </p>
         <div className="no-print flex items-center gap-2">
           <Button type="button" size="sm" variant="secondary" onClick={() => window.print()}>
             <Printer />
@@ -275,59 +319,109 @@ export default function DecisionRecordPage({ params }) {
         </div>
       </div>
 
-      {/* Verdict banner */}
-      <div className={`rounded-xl border p-4 ${meta.box}`}>
-        <div className="flex flex-wrap items-start gap-3">
-          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${meta.dot}`}>
-            <OutcomeIcon className="h-5 w-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className={`text-base font-bold ${meta.text}`}>
-              {showProvisionalPrefix ? `PROVISIONAL ${meta.label}` : meta.label}
-            </div>
-            <p className={`mt-0.5 text-sm ${meta.text}`}>
-              {topRule ? topRule.detail : "All checks passed from entered records."}
-            </p>
-            <p className="mt-1 text-xs text-gray-600">
-              Next action: {planned.required_next_action}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {/* The verdict above is the immutable historical decision; these say
-                  what (if anything) is still owed right now. */}
-              <StatusBadge kind="workflow" value={planned.workflow_state} />
-              <StatusBadge kind="evidence" value={planned.evidence_state} />
-              <Badge variant={provisional ? "amber" : "green"}>
-                {decisionAuthorityLabel(planned.decision_authority)}
-              </Badge>
-              <Badge variant="outline">confidence: {planned.decision_confidence}</Badge>
-              <Badge variant="outline">{rules.length} checks run</Badge>
-              {isDemo && <Badge variant="outline">Simulated demo record</Badge>}
+      {/* Verdict banner. The verdict is the immutable historical decision; the
+          disposition panel beside it restates that verdict as the question a
+          grower actually asks, and adds no logic of its own. */}
+      <div className={`rounded-card border p-5 ${meta.box}`}>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <div className="flex gap-3.5">
+            <span
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${meta.dot}`}
+            >
+              <OutcomeIcon className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div
+                className={`text-[11px] font-semibold uppercase tracking-wider ${meta.text}`}
+              >
+                {showProvisionalPrefix ? `Provisional ${meta.label}` : meta.label}
+              </div>
+              <h1 className="mt-1 text-title font-semibold text-ink">
+                {planned.product_name}
+              </h1>
+              <p className={`mt-1.5 text-sm font-medium ${meta.text}`}>
+                {topRule ? topRule.detail : "All checks passed from entered records."}
+              </p>
+              <p className="mt-2 text-meta text-muted">
+                {[
+                  planned.field_block,
+                  planned.target_pest_or_disease,
+                  `planned ${formatDate(planned.intended_date)}`,
+                  planned.rate_amount != null && planned.rate_unit
+                    ? `${planned.rate_amount} ${planned.rate_unit}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                {/* The verdict above is the immutable historical decision; these say
+                    what (if anything) is still owed right now. */}
+                <StatusBadge kind="workflow" value={planned.workflow_state} />
+                <StatusBadge kind="evidence" value={planned.evidence_state} />
+                <Badge variant={provisional ? "amber" : "green"}>
+                  {decisionAuthorityLabel(planned.decision_authority)}
+                </Badge>
+                <Badge variant="outline">confidence: {planned.decision_confidence}</Badge>
+                <Badge variant="outline">{rules.length} checks run</Badge>
+                {isDemo && <Badge variant="outline">Simulated demo record</Badge>}
+              </div>
+              {/* Says who decided. The engine is deterministic rules; the AI
+                  features in this product never issue a verdict. */}
+              <p className="mt-3 flex items-start gap-1.5 text-meta text-muted">
+                <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+                Verdict source: deterministic rule engine. AI did not issue this verdict.
+              </p>
             </div>
           </div>
+
+          <DispositionSummary planned={planned} />
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+      {/* What happened after the check. Separated from the verdict on purpose:
+          the verdict is a fact about one moment and never changes, while the
+          outcome is a later, different fact. */}
+      {decided && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-card border border-line bg-surface px-4 py-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted">Outcome:</span>
+            <StatusBadge kind="outcome" value={planned.outcome} />
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted">Follow-up evidence:</span>
+            <StatusBadge kind="evidence" value={planned.evidence_state} />
+          </div>
+          {/* basis-full below lg: given a flex-1 with no basis, this sentence
+              shrinks to one word per line on a phone. */}
+          <p className="min-w-0 flex-1 basis-full text-meta text-muted lg:basis-auto lg:text-right">
+            This historical decision remains {meta.label}. Anything applied instead was
+            checked separately.
+          </p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_320px]">
         {/* ------------------------------------------------ printable record */}
-        <div className="rounded-xl border border-gray-200 bg-white p-6 print:border-0 print:p-0">
+        <div className="rounded-card border border-line bg-surface p-6 print:border-0 print:p-0">
           <div className="space-y-5">
             <Section number={step()} title="Decision rationale — checks performed">
               <ul className="space-y-2">
                 {rules.map((r) => (
                   <li key={r.rule_id} className="text-sm">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className={r.triggered ? "font-semibold text-red-800" : "font-medium text-gray-900"}>
+                      <span className={r.triggered ? "font-semibold text-risk-fg" : "font-medium text-ink"}>
                         {r.triggered ? "⚠" : "✓"} {r.name}
                       </span>
-                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
+                      <span className="rounded bg-draft-bg px-1.5 py-0.5 text-[10px] text-muted">
                         {AUTHORITY_SOURCE_LABELS[r.source_authority] || r.source_authority} ·{" "}
                         {r.verification_status}
                         {r.entered_by ? ` · ${r.entered_by}` : ""}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-xs text-gray-700">{r.detail}</p>
+                    <p className="mt-0.5 text-xs text-ink">{r.detail}</p>
                     {r.calculation && (
-                      <p className="mt-0.5 font-mono text-[11px] text-gray-500">
+                      <p className="mt-0.5 font-mono text-[11px] text-muted">
                         {r.calculation}
                       </p>
                     )}
@@ -335,7 +429,7 @@ export default function DecisionRecordPage({ params }) {
                 ))}
               </ul>
               {payload.authority_basis && (
-                <p className="mt-2 text-xs text-gray-600">{payload.authority_basis}</p>
+                <p className="mt-2 text-xs text-muted">{payload.authority_basis}</p>
               )}
             </Section>
 
@@ -356,7 +450,7 @@ export default function DecisionRecordPage({ params }) {
                 />
               </div>
               {planned.harvest_date_changed_since_check && (
-                <p className="mt-1.5 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                <p className="mt-1.5 rounded border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
                   The farm&apos;s expected harvest date has changed since this check ran —
                   the calculations in this record use the harvest date entered at check
                   time. Re-run the check before relying on this decision.
@@ -364,7 +458,7 @@ export default function DecisionRecordPage({ params }) {
               )}
 
               {planned.label_reference_stale && (
-                <p className="mt-1.5 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                <p className="mt-1.5 rounded border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
                   The pesticide label this check was run against has since been revised —
                   the calculations in this record use the label values on record at check
                   time. Re-run the check against the current label before relying on this
@@ -374,8 +468,8 @@ export default function DecisionRecordPage({ params }) {
 
               {(payload.missing_information || []).length > 0 && (
                 <div className="mt-3">
-                  <h3 className="text-xs font-semibold text-gray-900">Missing information</h3>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-700">
+                  <h3 className="text-xs font-semibold text-ink">Missing information</h3>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink">
                     {payload.missing_information.map((m, i) => (
                       <li key={i}>{m}</li>
                     ))}
@@ -388,14 +482,14 @@ export default function DecisionRecordPage({ params }) {
                   examined, not just what passed. */}
               {(payload.not_evaluated || []).length > 0 && (
                 <div className="mt-3">
-                  <h3 className="text-xs font-semibold text-gray-900">
+                  <h3 className="text-xs font-semibold text-ink">
                     Not evaluated ({payload.not_evaluated.length})
                   </h3>
-                  <p className="mt-0.5 text-[11px] text-gray-600">
+                  <p className="mt-0.5 text-[11px] text-muted">
                     These checks did not run. Each states why — none was guessed or
                     simulated.
                   </p>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-700">
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink">
                     {payload.not_evaluated.map((c) => (
                       <li key={c.check_id || c.check}>
                         <span className="font-medium">{c.check}</span> — {c.reason}
@@ -407,13 +501,13 @@ export default function DecisionRecordPage({ params }) {
 
               {inputValues.length > 0 && (
                 <div className="mt-3">
-                  <h3 className="text-xs font-semibold text-gray-900">
+                  <h3 className="text-xs font-semibold text-ink">
                     Input provenance (field-level, append-only)
                   </h3>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-[11px]">
                       <thead>
-                        <tr className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                        <tr className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                           <th className="py-1 pr-3">Field</th>
                           <th className="py-1 pr-3">Value</th>
                           <th className="py-1 pr-3">Source</th>
@@ -430,7 +524,7 @@ export default function DecisionRecordPage({ params }) {
                             return (
                               <tr
                                 key={v.id}
-                                className={`border-t border-gray-100 ${superseded ? "text-gray-400 line-through" : ""}`}
+                                className={`border-t border-line ${superseded ? "text-muted line-through" : ""}`}
                               >
                                 <td className="py-1 pr-3 font-mono">{v.field_name}</td>
                                 <td className="py-1 pr-3">
@@ -451,7 +545,7 @@ export default function DecisionRecordPage({ params }) {
                       </tbody>
                     </table>
                   </div>
-                  <p className="mt-1 text-[11px] text-gray-400">
+                  <p className="mt-1 text-[11px] text-muted">
                     Corrections append a superseding row — original values are kept,
                     struck through, never overwritten. Imported values stay
                     &quot;imported, unverified&quot; until a PCA verifies them.
@@ -473,12 +567,12 @@ export default function DecisionRecordPage({ params }) {
                 />
               </div>
               {planned.review_comment && (
-                <p className="mt-1 text-sm text-gray-700">
+                <p className="mt-1 text-sm text-ink">
                   <span className="font-medium">Comment:</span> {planned.review_comment}
                 </p>
               )}
               {planned.pca_next_action && (
-                <p className="mt-1 rounded bg-blue-50 p-2 text-sm text-blue-900">
+                <p className="mt-1 rounded bg-info-bg p-2 text-sm text-info-fg">
                   <span className="font-semibold">PCA guidance:</span> {planned.pca_next_action}
                 </p>
               )}
@@ -486,7 +580,7 @@ export default function DecisionRecordPage({ params }) {
 
             {dispositions.length > 0 && (
               <Section number={step()} title="PCA pilot decision (Botrytis deferral)">
-                <p className="mb-2 text-xs text-gray-500">
+                <p className="mb-2 text-xs text-muted">
                   The licensed advisor&apos;s judgement about this scheduled
                   application, recorded separately from the compliance check above and
                   from what was ultimately done. Append-only: a change supersedes the
@@ -500,8 +594,8 @@ export default function DecisionRecordPage({ params }) {
                     return (
                       <li
                         key={d.id}
-                        className={`rounded border border-gray-200 p-2 text-sm ${
-                          isSuperseded ? "text-gray-400" : "text-gray-800"
+                        className={`rounded border border-line p-2 text-sm ${
+                          isSuperseded ? "text-muted" : "text-ink"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -509,12 +603,12 @@ export default function DecisionRecordPage({ params }) {
                             {DISPOSITION_LABELS[d.disposition] || d.disposition}
                             {isSuperseded && " (superseded)"}
                           </span>
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-muted">
                             {d.decided_at?.slice(0, 16).replace("T", " ")}
                           </span>
                         </div>
                         <p className="mt-1">{d.rationale}</p>
-                        <p className="mt-1 text-[11px] text-gray-500">
+                        <p className="mt-1 text-[11px] text-muted">
                           Credential #{d.pca_credential_id} · inputs digest{" "}
                           {d.snapshot_digest_at_decision?.slice(0, 12)}…
                         </p>
@@ -540,12 +634,12 @@ export default function DecisionRecordPage({ params }) {
                 )}
               </div>
               {planned.outcome_reason && (
-                <p className="mt-1 text-sm text-gray-700">
+                <p className="mt-1 text-sm text-ink">
                   <span className="font-medium">Stated reason:</span> {planned.outcome_reason}
                 </p>
               )}
               {planned.outcome === "avoided" && planned.estimated_cost != null && (
-                <p className="mt-1.5 rounded bg-green-50 p-2 text-sm text-green-900">
+                <p className="mt-1.5 rounded bg-ok-bg p-2 text-sm text-ok-fg">
                   Entered application cost not spent:{" "}
                   <span className="font-semibold">
                     {formatCost(planned.estimated_cost, farm.country)}
@@ -553,7 +647,7 @@ export default function DecisionRecordPage({ params }) {
                   {farm.greenhouse_area != null && (
                     <> · planned across {formatArea(farm.greenhouse_area, farm.country)}</>
                   )}
-                  <span className="text-xs text-green-800">
+                  <span className="text-xs text-ok-fg">
                     {" "}
                     (entered estimate; yield impact not yet known or measured)
                   </span>
@@ -566,36 +660,36 @@ export default function DecisionRecordPage({ params }) {
                 <ol className="space-y-1.5">
                   {auditEvents.map((e) => (
                     <li key={e.id} className="text-xs">
-                      <span className="font-mono text-gray-400">
+                      <span className="font-mono text-muted">
                         {e.created_at?.slice(0, 16).replace("T", " ")}
                       </span>{" "}
-                      <span className="font-semibold text-gray-900">
+                      <span className="font-semibold text-ink">
                         {e.event_type.replace(/_/g, " ")}
                       </span>
-                      {e.actor && <span className="text-gray-600"> · {e.actor}</span>}
+                      {e.actor && <span className="text-muted"> · {e.actor}</span>}
                       {e.event_type === "reviewed" && e.after?.review_action && (
-                        <span className="text-gray-600"> · action: {e.after.review_action}</span>
+                        <span className="text-muted"> · action: {e.after.review_action}</span>
                       )}
                       {e.event_type === "input_value_superseded" && e.after && (
-                        <span className="text-gray-600">
+                        <span className="text-muted">
                           {" "}· {e.after.field}: {String(e.after.from)} → {String(e.after.to)}
                         </span>
                       )}
                       {e.before?.decision_outcome &&
                         e.after?.decision_outcome &&
                         e.before.decision_outcome !== e.after.decision_outcome && (
-                          <span className="text-blue-700">
+                          <span className="text-info-fg">
                             {" "}· decision re-ran: {e.before.decision_outcome} →{" "}
                             {e.after.decision_outcome}
                           </span>
                         )}
                       {e.rationale && (
-                        <p className="ml-4 text-gray-500">“{e.rationale}”</p>
+                        <p className="ml-4 text-muted">“{e.rationale}”</p>
                       )}
                     </li>
                   ))}
                 </ol>
-                <p className="mt-1 text-[11px] text-gray-400">
+                <p className="mt-1 text-[11px] text-muted">
                   Append-only: every state change is recorded with its prior state; no
                   event is ever edited or deleted.
                 </p>
@@ -604,7 +698,7 @@ export default function DecisionRecordPage({ params }) {
 
             <Section number={step()} title="Follow-up timeline">
               {planned.follow_up_required && followUps.length === 0 && (
-                <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                <p className="rounded border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
                   Follow-up required: this outcome ({planned.outcome.replace(/_/g, " ")})
                   is NOT a confirmed result until follow-up evidence is recorded here.
                 </p>
@@ -613,18 +707,18 @@ export default function DecisionRecordPage({ params }) {
                 <ol className="mt-1 space-y-1.5">
                   {followUps.map((e) => (
                     <li key={e.id} className="text-xs">
-                      <span className="font-mono text-gray-400">{e.observed_at}</span>{" "}
-                      <span className="font-semibold text-gray-900">
+                      <span className="font-mono text-muted">{e.observed_at}</span>{" "}
+                      <span className="font-semibold text-ink">
                         {e.event_type.replace(/_/g, " ")}
                       </span>
                       {e.severity != null && (
-                        <span className="text-gray-600"> · severity {e.severity}</span>
+                        <span className="text-muted"> · severity {e.severity}</span>
                       )}
                       {e.actual_product && (
-                        <span className="text-gray-600"> · {e.actual_product}</span>
+                        <span className="text-muted"> · {e.actual_product}</span>
                       )}
                       {e.cost != null && (
-                        <span className="text-gray-600">
+                        <span className="text-muted">
                           {" "}· {formatCost(e.cost, farm.country)}
                         </span>
                       )}
@@ -632,20 +726,20 @@ export default function DecisionRecordPage({ params }) {
                         <Badge variant="red" className="ml-1">rescue required</Badge>
                       )}
                       {(e.yield_impact || e.quality_impact) && (
-                        <span className="text-gray-600">
+                        <span className="text-muted">
                           {" "}· yield: {e.yield_impact || "unknown"} · quality:{" "}
                           {e.quality_impact || "unknown"}
                         </span>
                       )}
                       {e.evidence_notes && (
-                        <p className="ml-4 text-gray-500">{e.evidence_notes}</p>
+                        <p className="ml-4 text-muted">{e.evidence_notes}</p>
                       )}
                     </li>
                   ))}
                 </ol>
               )}
               {followUps.length === 0 && !planned.follow_up_required && (
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted">
                   No follow-up events recorded{planned.outcome === "planned" ? " — record the real-world outcome first" : ""}.
                 </p>
               )}
@@ -655,7 +749,7 @@ export default function DecisionRecordPage({ params }) {
             </Section>
 
             <Section title="Disclaimers">
-              <ul className="space-y-1 text-[11px] leading-snug text-gray-500">
+              <ul className="space-y-1 text-[11px] leading-snug text-muted">
                 <li>
                   {payload.disclaimer ||
                     "PHI and REI checks use values entered by the user and are not independently verified against the current pesticide label."}
@@ -676,8 +770,8 @@ export default function DecisionRecordPage({ params }) {
 
         {/* ------------------------------------------- interactive right rail */}
         <div className="no-print space-y-4">
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-gray-900">Planned application</h2>
+          <div className="rounded-card border border-line bg-surface p-4">
+            <h2 className="text-sm font-semibold text-ink">Planned application</h2>
             <div className="mt-2 space-y-0.5">
               <Row label="Product" value={planned.product_name} />
               <Row label="Active ingredient" value={planned.active_ingredient} />
@@ -692,8 +786,8 @@ export default function DecisionRecordPage({ params }) {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-gray-900">Review workflow</h2>
+          <div className="rounded-card border border-line bg-surface p-4">
+            <h2 className="text-sm font-semibold text-ink">Review workflow</h2>
             <div className="mt-2 space-y-0.5">
               <Row
                 label="Review status"
@@ -714,18 +808,18 @@ export default function DecisionRecordPage({ params }) {
               />
             </div>
             {!decided && (
-              <div className="mt-2 border-t border-gray-100 pt-2">
+              <div className="mt-2 border-t border-line pt-2">
                 {!reviewed && <DecisionReview planned={planned} onChanged={loadAll} />}
                 <OutcomeRecorder planned={planned} onChanged={loadAll} />
               </div>
             )}
             {planned.current_next_action === "record_follow_up" && (
-              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+              <p className="mt-2 rounded-control border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
                 Follow-up evidence is due — append the real-world evidence in the
                 follow-up timeline on the left.
               </p>
             )}
-            <p className="mt-3 text-[11px] leading-snug text-gray-500">
+            <p className="mt-3 text-[11px] leading-snug text-muted">
               Decision support only. Confirm the current product label and PCA guidance
               before application.
             </p>
@@ -737,8 +831,8 @@ export default function DecisionRecordPage({ params }) {
 
           <AiBriefCard plannedId={planned.id} />
 
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-gray-900">Inputs & finance</h2>
+          <div className="rounded-card border border-line bg-surface p-4">
+            <h2 className="text-sm font-semibold text-ink">Inputs & finance</h2>
             {(() => {
               const links = planned.procurement_links || [];
               const active = links.filter((l) => l.plan_status !== "cancelled");
@@ -749,7 +843,7 @@ export default function DecisionRecordPage({ params }) {
                 return (
                   <div className="mt-1 space-y-2">
                     {active.map((l) => (
-                      <div key={l.input_plan_id} className="text-xs text-gray-600">
+                      <div key={l.input_plan_id} className="text-xs text-muted">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Link
                             href={`/inputs/plans/${l.input_plan_id}`}
@@ -778,12 +872,12 @@ export default function DecisionRecordPage({ params }) {
               if (planned.procurement_eligible) {
                 return (
                   <>
-                    <p className="mt-1 text-xs text-gray-500">
+                    <p className="mt-1 text-xs text-muted">
                       This decision is cleared for procurement — build an input plan
                       and request supplier quotes for the product it authorizes.
                     </p>
                     {cancelled.length > 0 && (
-                      <p className="mt-1 text-xs text-gray-500">
+                      <p className="mt-1 text-xs text-muted">
                         {cancelled
                           .map((l) => `Previous plan #${l.input_plan_id} was cancelled`)
                           .join("; ")}
@@ -801,7 +895,7 @@ export default function DecisionRecordPage({ params }) {
                 );
               }
               return (
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-xs text-muted">
                   Not eligible for procurement:{" "}
                   {planned.outcome === "avoided"
                     ? "the recorded outcome is avoided — nothing should be purchased for it."
@@ -815,7 +909,7 @@ export default function DecisionRecordPage({ params }) {
 
           <Link
             href={`/farms/${planned.farm_id}?tab=planned`}
-            className="block rounded-xl border border-gray-200 bg-white p-3 text-center text-sm font-medium text-gray-700 shadow-sm transition-colors hover:border-gray-400"
+            className="block rounded-card border border-line bg-surface p-3 text-center text-sm font-medium text-ink shadow-sm transition-colors hover:border-muted"
           >
             Back to {farm.name}
           </Link>

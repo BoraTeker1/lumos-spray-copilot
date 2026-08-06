@@ -122,7 +122,7 @@ export default function SprayEventForm({ farmId, onCreated }) {
           value={form.treated_acres}
           onChange={(e) => update("treated_acres", e.target.value)}
         />
-        <label className="text-xs text-gray-500">
+        <label className="text-xs text-muted">
           Application date *
           <input
             type="date"
@@ -161,7 +161,7 @@ export default function SprayEventForm({ farmId, onCreated }) {
         value={form.notes}
         onChange={(e) => update("notes", e.target.value)}
       />
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-risk-fg">{error}</p>}
       <button
         type="submit"
         disabled={saving}

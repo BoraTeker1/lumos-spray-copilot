@@ -55,13 +55,13 @@ export default function WeeklyReport({ farmId }) {
           )}
         </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-risk-fg">{error}</p>}
       {text && (
         <textarea
           readOnly
           value={text}
           rows={12}
-          className="w-full rounded border bg-white p-3 font-mono text-xs"
+          className="w-full rounded border bg-surface p-3 font-mono text-xs"
         />
       )}
     </div>

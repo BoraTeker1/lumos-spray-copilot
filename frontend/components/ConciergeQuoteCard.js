@@ -17,7 +17,7 @@ const POSTABLE_EVENTS = [
   "cancelled", "exception_reported",
 ];
 
-const labelCls = "block text-xs font-medium text-gray-600";
+const labelCls = "block text-xs font-medium text-muted";
 
 // Concierge entry for supplier quotes, indicative financing offers, and order
 // lifecycle events (Phase 1 has no supplier portal — Lumos staff transcribe).
@@ -165,12 +165,12 @@ export default function ConciergeQuoteCard({ farmId, country }) {
   return (
     <div className="space-y-6">
       {status && <p className="text-sm text-leaf-700">{status}</p>}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-risk-fg">{error}</p>}
 
       <form onSubmit={submitQuote} className="space-y-3">
-        <h3 className="text-sm font-semibold text-gray-900">Enter supplier quote</h3>
+        <h3 className="text-sm font-semibold text-ink">Enter supplier quote</h3>
         {quotablePlans.length === 0 ? (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted">
             No open RFQs on this farm (a plan must be submitted for quotes first).
           </p>
         ) : (
@@ -226,12 +226,12 @@ export default function ConciergeQuoteCard({ farmId, country }) {
                     <Input value={quote.entered_by} onChange={(e) => setQuote({ ...quote, entered_by: e.target.value })} className="mt-1" />
                   </label>
                 </div>
-                <div className="space-y-2 rounded-md border border-gray-200 p-3">
+                <div className="space-y-2 rounded-control border border-line p-3">
                   {selectedPlan.items.map((item) => (
                     <div key={item.id} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                      <div className="text-xs text-gray-700 sm:col-span-1">
+                      <div className="text-xs text-ink sm:col-span-1">
                         <div className="font-medium">{item.product_name}</div>
-                        <div className="text-gray-500">{item.quantity} {item.unit}</div>
+                        <div className="text-muted">{item.quantity} {item.unit}</div>
                       </div>
                       <label className={labelCls}>
                         Unit price *
@@ -257,16 +257,16 @@ export default function ConciergeQuoteCard({ farmId, country }) {
         )}
       </form>
 
-      <form onSubmit={submitOffer} className="space-y-3 border-t border-gray-100 pt-4">
-        <h3 className="text-sm font-semibold text-gray-900">
+      <form onSubmit={submitOffer} className="space-y-3 border-t border-line pt-4">
+        <h3 className="text-sm font-semibold text-ink">
           Enter indicative financing offer
         </h3>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted">
           Manually collected terms only — never a credit decision, and only
           possible when the grower requested financing on the plan.
         </p>
         {!selectedPlan || planQuotes.length === 0 ? (
-          <p className="text-sm text-gray-500">Pick a plan with quotes above first.</p>
+          <p className="text-sm text-muted">Pick a plan with quotes above first.</p>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -322,14 +322,14 @@ export default function ConciergeQuoteCard({ farmId, country }) {
         )}
       </form>
 
-      <form onSubmit={submitOrderEvent} className="space-y-3 border-t border-gray-100 pt-4">
-        <h3 className="text-sm font-semibold text-gray-900">Append order event</h3>
-        <p className="text-xs text-gray-500">
+      <form onSubmit={submitOrderEvent} className="space-y-3 border-t border-line pt-4">
+        <h3 className="text-sm font-semibold text-ink">Append order event</h3>
+        <p className="text-xs text-muted">
           Append-only lifecycle events. “Input applied” is not postable here — it
           requires the explicit application link on the order page.
         </p>
         {orders.length === 0 ? (
-          <p className="text-sm text-gray-500">No orders on this farm yet.</p>
+          <p className="text-sm text-muted">No orders on this farm yet.</p>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

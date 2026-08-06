@@ -33,16 +33,16 @@ export default function ActivityTimeline({ sprays = [], observations = [], count
   const shown = limit ? items.slice(0, limit) : items;
 
   if (shown.length === 0) {
-    return <p className="text-sm text-gray-500">No sprays or scouting notes recorded yet.</p>;
+    return <p className="text-sm text-muted">No sprays or scouting notes recorded yet.</p>;
   }
 
   return (
-    <ol className="relative space-y-0 border-l border-gray-200 pl-5">
+    <ol className="relative space-y-0 border-l border-line pl-5">
       {shown.map((item) => (
         <li key={item.id} className="relative pb-4 last:pb-0">
           <span
             className={`absolute -left-[27px] top-0.5 flex h-5 w-5 items-center justify-center rounded-full ring-4 ring-white ${
-              item.type === "spray" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"
+              item.type === "spray" ? "bg-info-bg text-info-fg" : "bg-draft-bg text-muted"
             }`}
           >
             {item.type === "spray" ? (
@@ -54,10 +54,10 @@ export default function ActivityTimeline({ sprays = [], observations = [], count
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="truncate text-sm font-medium text-gray-900">{item.title}</span>
+                <span className="truncate text-sm font-medium text-ink">{item.title}</span>
                 {item.severity != null && <SeverityBadge value={item.severity} />}
               </div>
-              <div className="text-xs text-gray-500">
+              <div className="text-xs text-muted">
                 {formatDate(item.date)}
                 {item.meta && ` · ${item.meta}`}
                 {" · "}
@@ -65,7 +65,7 @@ export default function ActivityTimeline({ sprays = [], observations = [], count
               </div>
             </div>
             {item.right && (
-              <span className="shrink-0 text-sm font-medium text-gray-700">{item.right}</span>
+              <span className="shrink-0 text-sm font-medium text-ink">{item.right}</span>
             )}
           </div>
         </li>

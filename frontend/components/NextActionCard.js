@@ -18,7 +18,7 @@ export default function NextActionCard({ action }) {
   const cls = `${t.box} ${t.text}`;
   const Icon = meta.Icon;
   return (
-    <div className={`rounded-xl border p-3.5 ${cls}`}>
+    <div className={`rounded-card border p-3.5 ${cls}`}>
       <div className="text-[11px] font-medium uppercase tracking-wide opacity-70">
         Highest-priority action
       </div>

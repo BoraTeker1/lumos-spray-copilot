@@ -17,10 +17,10 @@ import { Layers } from "lucide-react";
 // refuses a non-MVP domain outright. This view just makes the state visible.
 
 const STATUS_STYLES = {
-  implemented: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  requires_credential: "bg-amber-50 text-amber-700 border-amber-200",
-  not_implemented: "bg-gray-50 text-gray-600 border-gray-200",
-  deferred_to_finance_phase: "bg-rose-50 text-rose-700 border-rose-200",
+  implemented: "bg-ok-bg text-ok-fg border-ok-line",
+  requires_credential: "bg-warn-bg text-warn-fg border-warn-line",
+  not_implemented: "bg-canvas text-muted border-line",
+  deferred_to_finance_phase: "bg-risk-bg text-risk-fg border-risk-line",
 };
 
 const STATUS_LABELS = {
@@ -60,14 +60,14 @@ export default function DomainRegistryTable() {
   if (error) {
     return (
       <SectionCard title="Data domains" icon={<Layers />}>
-        <p className="text-sm text-red-600">{error}</p>
+        <p className="text-sm text-risk-fg">{error}</p>
       </SectionCard>
     );
   }
   if (!data) {
     return (
       <SectionCard title="Data domains" icon={<Layers />}>
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-muted">Loading…</p>
       </SectionCard>
     );
   }
@@ -83,10 +83,10 @@ export default function DomainRegistryTable() {
   const renderDomain = (domain) => (
     <tr key={domain.key} className="border-b last:border-b-0 align-top">
       <td className="py-2 pr-3">
-        <div className="text-sm font-medium text-gray-900">{domain.title}</div>
-        <div className="text-xs text-gray-500">{domain.rationale}</div>
+        <div className="text-sm font-medium text-ink">{domain.title}</div>
+        <div className="text-xs text-muted">{domain.rationale}</div>
         {domain.guardrail_ref && (
-          <div className="mt-1 text-xs text-rose-700">
+          <div className="mt-1 text-xs text-risk-fg">
             Deferred by ENGINEERING_GUIDELINES.md {domain.guardrail_section}:{" "}
             <span className="font-mono">&ldquo;{domain.guardrail_ref}&rdquo;</span>
           </div>
@@ -96,18 +96,18 @@ export default function DomainRegistryTable() {
         {(sourcesByDomain[domain.key] || []).map((source) => (
           <div key={source.source_key} className="mb-1 last:mb-0">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-gray-700">
+              <span className="font-mono text-xs text-ink">
                 {source.source_key}
               </span>
               <StatusChip status={source.status} />
             </div>
             {source.blocker && (
-              <div className="text-xs text-gray-500">{source.blocker}</div>
+              <div className="text-xs text-muted">{source.blocker}</div>
             )}
           </div>
         ))}
         {!sourcesByDomain[domain.key] && (
-          <span className="text-xs text-gray-400">no source declared</span>
+          <span className="text-xs text-muted">no source declared</span>
         )}
       </td>
     </tr>
@@ -122,20 +122,20 @@ export default function DomainRegistryTable() {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-left">
           <thead>
-            <tr className="border-b text-xs uppercase tracking-wide text-gray-500">
+            <tr className="border-b text-xs uppercase tracking-wide text-muted">
               <th className="py-2 pr-3 font-medium">Domain</th>
               <th className="py-2 pl-3 font-medium">Sources</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td colSpan={2} className="pt-3 pb-1 text-xs font-semibold text-gray-600">
+              <td colSpan={2} className="pt-3 pb-1 text-xs font-semibold text-muted">
                 In scope
               </td>
             </tr>
             {mvp.map(renderDomain)}
             <tr>
-              <td colSpan={2} className="pt-4 pb-1 text-xs font-semibold text-rose-700">
+              <td colSpan={2} className="pt-4 pb-1 text-xs font-semibold text-risk-fg">
                 Deferred — declared, not built
               </td>
             </tr>

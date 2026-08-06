@@ -7,10 +7,10 @@ import { formatCost } from "@/lib/format";
 // One labelled metric tile.
 function Metric({ label, value, hint }) {
   return (
-    <div className="rounded-lg border bg-white p-3">
-      <div className="text-xs text-gray-500">{label}</div>
+    <div className="rounded-control border bg-surface p-3">
+      <div className="text-xs text-muted">{label}</div>
       <div className="mt-0.5 text-lg font-semibold">{value}</div>
-      {hint && <div className="text-[11px] text-gray-400">{hint}</div>}
+      {hint && <div className="text-[11px] text-muted">{hint}</div>}
     </div>
   );
 }
@@ -41,8 +41,8 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
     }
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading pilot evidence…</p>;
+  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (!data) return <p className="text-sm text-muted">Loading pilot evidence…</p>;
 
   const reviewSummary = `${data.pca_approved_count} approved · ${data.pca_pending_count} pending · ${data.pca_changes_requested_count} changes`;
   const avoidable =
@@ -58,13 +58,13 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
             href={`${API_BASE_URL}/farms/${farmId}/audit-packet`}
             target="_blank"
             rel="noreferrer"
-            className="rounded border px-2 py-1 hover:border-gray-400"
+            className="rounded border px-2 py-1 hover:border-muted"
           >
             View audit packet
           </a>
           <button
             onClick={copyPacket}
-            className="rounded border px-2 py-1 hover:border-gray-400"
+            className="rounded border px-2 py-1 hover:border-muted"
           >
             {copied ? "Copied" : "Copy audit packet"}
           </button>
@@ -97,7 +97,7 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
       </div>
 
       {data.evidence_summary?.length > 0 && (
-        <ul className="mt-3 space-y-1 text-sm text-gray-700">
+        <ul className="mt-3 space-y-1 text-sm text-ink">
           {data.evidence_summary.map((line, i) => (
             <li key={i} className="flex gap-2">
               <span className="text-leaf">•</span>
@@ -107,7 +107,7 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
         </ul>
       )}
 
-      <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+      <p className="mt-3 rounded bg-warn-bg px-3 py-2 text-xs text-warn-fg">
         This is <strong>pilot evidence</strong> — a descriptive record of what was logged. It is
         <strong> not</strong> a guarantee of pesticide reduction, not a compliance/legal
         guarantee, and never an autonomous spray instruction. Real reduction must be measured

@@ -4,10 +4,10 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 
 const STATUS_STYLES = {
-  pending: "bg-gray-100 text-gray-700",
-  approved: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-  edited: "bg-blue-100 text-blue-800",
+  pending: "bg-draft-bg text-ink",
+  approved: "bg-ok-bg text-ok-fg",
+  rejected: "bg-risk-bg text-risk-fg",
+  edited: "bg-info-bg text-info-fg",
 };
 
 // Agronomist review controls for a single recommendation:
@@ -37,10 +37,10 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
   }
 
   const status = recommendation.agronomist_status;
-  const statusCls = STATUS_STYLES[status] || "bg-gray-100 text-gray-700";
+  const statusCls = STATUS_STYLES[status] || "bg-draft-bg text-ink";
 
   return (
-    <div className="mt-4 rounded-md border bg-white/60 p-3">
+    <div className="mt-4 rounded-control border bg-surface/60 p-3">
       <div className="mb-2 flex items-center gap-2">
         <span className="text-sm font-medium">PCA / agronomist review</span>
         <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusCls}`}>
@@ -60,7 +60,7 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
             <button
               onClick={() => apply({ agronomist_status: "edited", recommendation_text: draft })}
               disabled={saving}
-              className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded bg-info-fg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               Save edited guidance
             </button>
@@ -88,21 +88,21 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
             <button
               onClick={() => apply({ agronomist_status: "approved" })}
               disabled={saving}
-              className="rounded bg-green-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               Approve
             </button>
             <button
               onClick={() => setEditing(true)}
               disabled={saving}
-              className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded bg-info-fg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               Edit recommendation
             </button>
             <button
               onClick={() => apply({ agronomist_status: "rejected" })}
               disabled={saving}
-              className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded bg-risk-fg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
               Reject
             </button>
@@ -119,8 +119,8 @@ export default function AgronomistReview({ recommendation, onUpdated }) {
         </>
       )}
 
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-      <p className="mt-2 text-xs text-gray-500">
+      {error && <p className="mt-2 text-sm text-risk-fg">{error}</p>}
+      <p className="mt-2 text-xs text-muted">
         Only <span className="font-medium">approved</span> or{" "}
         <span className="font-medium">edited</span> guidance is shared with the grower in
         the weekly report.

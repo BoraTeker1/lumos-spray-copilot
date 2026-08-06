@@ -1,23 +1,29 @@
 import { cn } from "@/lib/utils";
 
 // Status badge — soft-tinted pill. Green = verified positive states only;
-// amber/red = actionable review states; blue = informational (PCA review,
-// changed product); neutral/outline for everything else.
+// amber/orange/red = actionable review states; purple = a licensed human still
+// has to sign; blue = informational; neutral/outline for everything else.
+//
+// The KEYS keep their historical color names so the ~45 existing call sites
+// (many of them dynamic lookups) need no edits; the values behind them resolve
+// through the semantic token pairs in tailwind.config.js.
 const VARIANTS = {
-  neutral: "bg-gray-100 text-gray-600 ring-gray-200",
-  green: "bg-leaf-50 text-leaf-700 ring-green-200",
-  amber: "bg-amber-50 text-amber-800 ring-amber-200",
-  red: "bg-red-50 text-red-700 ring-red-200",
-  blue: "bg-blue-50 text-blue-700 ring-blue-200",
-  outline: "bg-white text-gray-600 ring-gray-300",
+  neutral: "bg-draft-bg text-draft-fg ring-draft-line",
+  green: "bg-ok-bg text-ok-fg ring-ok-line",
+  amber: "bg-warn-bg text-warn-fg ring-warn-line",
+  inspect: "bg-inspect-bg text-inspect-fg ring-inspect-line",
+  red: "bg-risk-bg text-risk-fg ring-risk-line",
+  blue: "bg-info-bg text-info-fg ring-info-line",
+  purple: "bg-review-bg text-review-fg ring-review-line",
+  outline: "bg-surface text-muted ring-line",
 };
 
 export function Badge({ className, variant = "neutral", ...props }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset [&_svg]:size-3 [&_svg]:shrink-0",
-        VARIANTS[variant],
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold leading-4 ring-1 ring-inset [&_svg]:size-3 [&_svg]:shrink-0",
+        VARIANTS[variant] || VARIANTS.neutral,
         className
       )}
       {...props}
