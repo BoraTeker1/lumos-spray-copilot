@@ -77,7 +77,20 @@ Do **NOT** build any of the following unless the user explicitly instructs it in
   quotes + INDICATIVE financing offers + orders, see §5). Still NOT allowed: a public supplier
   marketplace/portal/catalog, real payments, real lending, automated underwriting, credit
   scoring, money movement of any kind, revenue-sharing, commission-based quote ranking.
-- revenue-sharing / credit / money movement
+- ~~revenue-sharing / credit / money movement~~ — **guardrail partially lifted
+  (2026-08-07)**: an explicit instruction admitted the eight deferred finance/market
+  domains and the full three-layer build. Credit **scoring**, **underwriting**,
+  **collateral valuation**, **insurance coverage matching**, **covenant monitoring**,
+  **commodity pricing** and **hedge coverage** are now built as decision modules —
+  each pure, each reading an EMPTY transcription source, each returning
+  `Result | Refusal`. See §5, `FINANCE_LAYER.md`, `TRANSCRIPTION_TASKS.md`.
+  **Still NOT allowed, and unchanged by that lift:** money movement of any kind (no
+  payments, disbursement, repayment collection, or computed amortisation — hence no
+  structured APR anywhere, only the lender's verbatim cost sentence); revenue-sharing;
+  a Lumos-authored scorecard, credit policy, advance rate or covenant threshold; an
+  `approved` underwriting outcome (the strongest affirmative is `conditions_met`);
+  an estimated insurance premium; and any recommendation to take, increase or close a
+  market position. Those last two are structural — there is no field to put them in.
 - ~~drones / IoT / sensors / hardware / weather-station hookups~~ — **guardrail
   partially lifted (2026-08-05)**: a climate **ingestion adapter** for CIMIS (a public
   CA state weather API) is now built, see §5 and `DATA_PLATFORM.md`. Still NOT allowed:
@@ -110,6 +123,60 @@ LLM weekly summaries and photo upload are Milestone-3 ideas — also gated, not 
 ## 5. Product Features Already Built
 
 Backend + frontend both implement:
+
+- **The full three-layer build (2026-08-07)** — advisory breadth, finance, and market
+  layers, on an explicit instruction to implement the whole business idea. **Full
+  contract in `FINANCE_LAYER.md`; the worklist is `TRANSCRIPTION_TASKS.md`.**
+  - **The governing pattern, and the only reason this was safe to build: every new
+    model ships with its coefficient table EMPTY and returns `Result | Refusal`.**
+    Generalised from `label_table.py` (shipped empty for a month) and
+    `botrytis_thresholds.py` (still `None`) into `app/transcription.py`. A `Citation`
+    is frozen/kw-only with **no defaults** for document/publisher/section/snippet/
+    transcribed_by, so an uncited row raises at import. `app/refusal.py` adds the
+    stable `code` the two older private `Refusal(reason)` types lacked — prose cannot
+    be matched on by a test, a payload consumer, or a readiness surface.
+  - **Domain admission is recorded, not silent.** `ingest/domains.py` gained
+    `PHASE_ADMITTED`: an admitted domain MUST name its `empty_source` module and its
+    `surviving_constraint`, both enforced in `__post_init__`. `COMPUTABLE_DOMAINS =
+    MVP ∪ ADMITTED` is what `features.base.register()` now gates on. The deferral
+    machinery is **kept, not deleted** — it is how the next domain gets deferred, and
+    `test_the_deferred_boundary_machinery_survives_an_empty_deferred_set` proves it
+    still works while unused. New source status `awaiting_transcription`: a fourth
+    kind of gap meaning *go find a document*, not *go find an API key*. `can_fetch`
+    is False, so pipeline inertness is unchanged.
+  - **Agronomy (Phase 2):** `soil.py`, `fertilization.py`, `seed_selection.py`,
+    `irrigation.py`, `land_selection.py` + 4 empty sources + 4 abstaining features in
+    `features/agronomy.py`. `land_selection` is the **first consumer** of
+    `LandParcel`/`TenureRight`/`FieldParcelOverlap`, which had zero references outside
+    `models.py`. Its load-bearing refusal: an absent `effective_to` means *held
+    indefinitely* for ownership and *nobody recorded it* for a lease — conflating them
+    would claim land is held through a horizon nobody has evidence for.
+  - **Finance (Phase 4):** `credit_scoring.py`, `underwriting.py`, `collateral.py`,
+    `insurance.py`, `monitoring.py`. Scoring is **all-or-nothing on inputs** — a
+    scorecard is a weighted sum, so a missing factor scores zero and the total reads as
+    a *worse borrower*, not an incomplete one. Underwriting has **no `approved`**, and
+    an unevaluated rule yields `referred_to_human` rather than being folded into a pass.
+    Monitoring's `standing` has three values because "nothing checked" must never render
+    as "compliant". Collateral refuses an unrated asset because there is **no safe
+    default** — 100% understates lender exposure, 0% denies held collateral.
+  - **Market (Phase 5):** `pricing.py` refuses outside a freshness window with **no
+    last-known-value fallback** (a stale price and a fresh one look identical on
+    screen); `hedging.py` records positions taken elsewhere and reports coverage, with
+    advice *inexpressible* — there is no field for it, the same technique
+    `disease_risk.RiskAssessment` uses for spray prescriptions.
+  - **Cross-layer (Phase 6):** `farm_profile.py` + `GET /farms/{id}/profile`
+    (grower-facing) and `GET /internal/transcription-status` (the operator worklist,
+    generated from the domain registry so it cannot drift). The profile abstains **per
+    field** and computes no overall score; its one cross-layer computation is
+    `gaps_by_owner` — which missing thing blocks which layer, and whether a grower or
+    an operator can fix it. **Nothing was added to the PCA-facing decision surface**,
+    pinned by test, or the shadow study's blinding breaks.
+  - **Verified on today's data: every layer refuses, and every gap is operator-owned.**
+    Each model checks its source before farm data, so with all eight sources empty **no
+    amount of grower data entry unblocks anything.** Pinned by
+    `test_every_gap_today_is_an_operator_transcription_gap`.
+  - **It is NOT validation.** Capability rose across three layers; buyer evidence did
+    not. This is the FIFTH cycle of capability-up / evidence-flat. §3/§11 unchanged.
 
 - **Historical opportunity scan — pilot ladder Stage 2 (2026-08-06)** — replays a past
   season's scheduled spray dates and reports what the versioned rule read on each.

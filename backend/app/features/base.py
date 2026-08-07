@@ -132,7 +132,7 @@ def register(spec: FeatureSpec) -> FeatureSpec:
             f"{spec.name}: unknown entity_type {spec.entity_type!r}; "
             f"expected one of {ENTITY_TYPES}"
         )
-    if spec.domain not in domains.MVP_DOMAINS:
+    if spec.domain not in domains.COMPUTABLE_DOMAINS:
         domain = domains.DOMAINS_BY_KEY.get(spec.domain)
         citation = (
             f" ENGINEERING_GUIDELINES.md {domain.guardrail_section} still forbids it: "
@@ -141,8 +141,8 @@ def register(spec: FeatureSpec) -> FeatureSpec:
             else " That domain is not declared at all."
         )
         raise FeatureError(
-            f"{spec.name}: domain {spec.domain!r} is not an MVP domain, so this "
-            f"feature may not be registered.{citation}"
+            f"{spec.name}: domain {spec.domain!r} is neither an MVP domain nor an "
+            f"admitted one, so this feature may not be registered.{citation}"
         )
     if spec.key in REGISTRY:
         raise FeatureError(f"{spec.key} is already registered")

@@ -67,6 +67,62 @@ def test_pilot_farm_intake_creates_farm_sprays_and_scouting(client):
     assert len(obs) == 1 and obs[0]["severity_1_to_5"] == 4
 
 
+# --------------------------------------------- Intake captures the baseline
+# Reduction is unmeasurable without a baseline, and until intake asked for one no
+# real farm in this system had ever had one — so `compute_reduction` had never
+# returned a number for anybody. These three tests pin the cold-start path.
+def test_intake_without_a_baseline_still_creates_the_farm(client):
+    """A baseline is optional: a farm without one is valid, it just cannot measure."""
+    resp = client.post("/pilot/farms", json={"name": "No Baseline Ranch"})
+    assert resp.status_code == 201
+    fid = resp.json()["id"]
+
+    assert client.get(f"/farms/{fid}/spray-baseline").json() is None
+    reduction = client.get(f"/farms/{fid}/reduction").json()
+    assert reduction["baseline_expected_sprays"] is None
+    assert reduction["reduction_pct"] is None
+
+
+def test_intake_captures_the_spray_baseline(client):
+    resp = client.post("/pilot/farms", json={
+        "name": "Baseline Ranch",
+        "spray_baseline": {
+            "method": "stated_cadence",
+            "cadence_days": 7,
+            "declared_by": "Grower, at intake",
+        },
+    })
+    assert resp.status_code == 201
+    fid = resp.json()["id"]
+
+    baseline = client.get(f"/farms/{fid}/spray-baseline").json()
+    assert baseline["method"] == "stated_cadence"
+    assert baseline["cadence_days"] == 7
+    assert baseline["declared_by"] == "Grower, at intake"
+
+
+def test_an_intake_baseline_carries_real_provenance_not_demo(client):
+    """The load-bearing assertion.
+
+    `SprayBaseline` is one of the models `ensure_demo_real_separation` reads to decide
+    whether a farm is a demo farm, so a baseline defaulting to "demo"/"simulated"
+    would silently mistag a real pilot farm — the same class of bug §8 records for
+    the spray/scouting create schemas. It would also fail reduction's
+    `_TRUSTED_CONFIDENCE` gate, making the figure permanently "illustrative".
+    """
+    resp = client.post("/pilot/farms", json={
+        "name": "Provenance Ranch",
+        "spray_baseline": {"method": "stated_cadence", "cadence_days": 10},
+    })
+    baseline = client.get(f"/farms/{resp.json()['id']}/spray-baseline").json()
+
+    assert baseline["data_source"] == "grower_interview"
+    assert baseline["data_confidence"] == "user_provided"
+
+    from app import reduction
+    assert baseline["data_confidence"] in reduction._TRUSTED_CONFIDENCE
+
+
 def test_pilot_farm_intake_without_extras(client):
     resp = client.post("/pilot/farms", json={"name": "Bare Farm", "country": "US"})
     assert resp.status_code == 201

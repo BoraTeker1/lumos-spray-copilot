@@ -1,20 +1,35 @@
 """The seventeen data domains, and which of them this product is allowed to compute.
 
 All seventeen are DECLARED here because the platform's shape is a real thing a reader
-should be able to see. Nine are in the MVP. Eight are deferred to a finance phase that
-does not exist, and each of those names the `ENGINEERING_GUIDELINES.md` clause that defers it.
+should be able to see. Nine are MVP. The other eight — the finance and market domains —
+were deferred until **2026-08-07**, when they were ADMITTED by explicit instruction to
+build the full three-layer product.
 
-Declaring must be provably not building, or this file is just a promise. Three
-mechanisms enforce that, and none of them is prose:
+Admission is not the same as permission to invent. Each admitted domain must name the
+EMPTY transcription source that governs it, and the numbers in those sources arrive only
+by a human transcribing a primary document. The structure is built; the coefficients are
+absent; every model over them refuses rather than defaults. `app/transcription.py`
+explains the pattern and `TRANSCRIPTION_TASKS.md` lists what remains to be read.
 
-1. `tests/test_ingest_registry.py::test_no_future_finance_domain_owns_an_implementable_source`
-   — a source under a future-finance domain must have status `deferred_to_finance_phase`.
-2. `features.base.register()` refuses a spec whose domain is not in `MVP_DOMAINS`, so
-   `debt_service_capacity` and its friends cannot be registered, let alone computed.
+Declaring must be provably not building, or this file is just a promise. Four mechanisms
+enforce that, and none of them is prose:
+
+1. `tests/test_ingest_registry.py::test_no_deferred_domain_owns_an_implementable_source`
+   — a source under a still-deferred domain must have status `deferred_to_finance_phase`.
+2. `features.base.register()` refuses a spec whose domain is not in `COMPUTABLE_DOMAINS`,
+   so a feature in a domain nobody admitted cannot be registered, let alone computed.
 3. `tests/test_ingest_registry.py::test_every_deferred_domain_cites_the_clause_that_defers_it`
    — each `guardrail_ref` must still appear in the cited `ENGINEERING_GUIDELINES.md` section, which
    catches drift in EITHER direction: a guardrail quietly reworded, or a domain quietly
-   un-deferred.
+   un-deferred. Still live for whatever remains deferred.
+4. `tests/test_ingest_registry.py::test_every_admitted_domain_names_an_empty_source`
+   — each admitted domain's `empty_source` must import and meet the transcription
+   contract. This is the mechanism that makes "we built the structure, not the numbers"
+   checkable rather than asserted.
+
+Note what admission did NOT lift, recorded on each domain as `surviving_constraint`:
+money movement, hardware, commission-based ranking, and inventing any number that belongs
+in a transcription source.
 
 Framework-free (stdlib only).
 """
@@ -24,6 +39,18 @@ from dataclasses import dataclass
 
 PHASE_MVP = "mvp"
 PHASE_FUTURE_FINANCE = "future_finance"
+# Admitted 2026-08-07 by explicit instruction: structure built, sources empty.
+PHASE_ADMITTED = "admitted"
+
+# The instruction that admitted the finance and market domains. Recorded once and
+# referenced by each admitted domain, so there is exactly one place to read what was
+# authorised and when.
+ADMISSION = (
+    "2026-08-07 — explicit session instruction to implement the full three-layer "
+    "business idea (advisory + procurement + finance), using the empty-source pattern: "
+    "real structure and workflows, coefficient tables shipped EMPTY, every model "
+    "returning Result | Refusal rather than a fabricated number."
+)
 
 # The two ENGINEERING_GUIDELINES.md sections a deferral may cite. §4 is the hard-guardrail list; §3 is
 # the standing "stop building product unless a validation need requires it" conclusion,
@@ -40,9 +67,14 @@ class Domain:
     rationale: str
     guardrail_ref: str | None = None
     guardrail_section: str | None = None
+    # Admitted domains only. `empty_source` is the dotted path of the transcription
+    # module that governs the domain; `surviving_constraint` is what admission did NOT
+    # authorise, recorded next to the admission so the two cannot drift apart.
+    empty_source: str | None = None
+    surviving_constraint: str | None = None
 
     def __post_init__(self):
-        if self.phase not in (PHASE_MVP, PHASE_FUTURE_FINANCE):
+        if self.phase not in (PHASE_MVP, PHASE_FUTURE_FINANCE, PHASE_ADMITTED):
             raise ValueError(f"{self.key}: unknown phase {self.phase!r}")
         # A deferral without a citation is an opinion. Requiring the quote is what lets
         # mechanism (3) detect the day someone deletes the guardrail and forgets this.
@@ -58,8 +90,28 @@ class Domain:
                 )
         elif self.guardrail_ref:
             raise ValueError(
-                f"{self.key}: an MVP domain must not carry a guardrail citation; "
-                f"it reads as though the domain were forbidden"
+                f"{self.key}: a non-deferred domain must not carry a guardrail "
+                f"citation; it reads as though the domain were forbidden"
+            )
+
+        # An admitted domain without an empty source is just an un-deferred one — the
+        # exact outcome the empty-source pattern exists to prevent. Requiring both
+        # fields here is what stops "we built the finance layer" from quietly becoming
+        # "we invented the finance layer's numbers".
+        if self.phase == PHASE_ADMITTED:
+            if not self.empty_source:
+                raise ValueError(
+                    f"{self.key}: an admitted domain must name the EMPTY transcription "
+                    "source that governs it, so its emptiness is checkable"
+                )
+            if not self.surviving_constraint:
+                raise ValueError(
+                    f"{self.key}: an admitted domain must record what admission did "
+                    "NOT authorise"
+                )
+        elif self.empty_source:
+            raise ValueError(
+                f"{self.key}: only an admitted domain carries an empty_source"
             )
 
     def as_payload(self) -> dict:
@@ -70,6 +122,8 @@ class Domain:
             "rationale": self.rationale,
             "guardrail_ref": self.guardrail_ref,
             "guardrail_section": self.guardrail_section,
+            "empty_source": self.empty_source,
+            "surviving_constraint": self.surviving_constraint,
         }
 
 
@@ -129,64 +183,119 @@ _MVP = (
 )
 
 # ---------------------------------------------------------------------------
-# The eight deferred domains. Every one of these is a thing the user asked for
-# and a thing this product may not do yet. The citation is the reason.
+# The eight admitted domains (2026-08-07). Each was deferred until the instruction
+# recorded in ADMISSION; each now names the EMPTY source that governs it and the
+# constraint that admission did not lift.
 # ---------------------------------------------------------------------------
-_FUTURE_FINANCE = (
+_ADMITTED = (
     Domain(
-        "financing", "Financing", PHASE_FUTURE_FINANCE,
-        "Indicative offers exist in the procurement module; actual lending does not.",
-        guardrail_ref="real lending", guardrail_section=SECTION_GUARDRAILS,
+        "financing", "Financing", PHASE_ADMITTED,
+        "Indicative offers already existed in the procurement module. This admits the "
+        "lender's published product catalogue they can be checked against.",
+        empty_source="app.financing_terms",
+        surviving_constraint=(
+            "No money movement: no disbursement, no repayment collection, no computed "
+            "amortisation. Cost stays the lender's own verbatim sentence, never a rate "
+            "this system derives a schedule from."
+        ),
     ),
     Domain(
-        "credit_scoring", "Credit scoring", PHASE_FUTURE_FINANCE,
-        "Scoring a grower from their farm data is the single most tempting thing to "
-        "build on this substrate and the most clearly forbidden.",
-        guardrail_ref="credit scoring", guardrail_section=SECTION_GUARDRAILS,
+        "credit_scoring", "Credit scoring", PHASE_ADMITTED,
+        "Scoring a grower from farm data is the most tempting thing to build on this "
+        "substrate; the scorecard is therefore transcribed from a lender, never designed "
+        "here. Lumos executes a scorecard auditably; it does not author one.",
+        empty_source="app.scorecard_table",
+        surviving_constraint=(
+            "No Lumos-authored weights, factors or bands. A feature that abstains "
+            "abstains the whole score — partial scoring reads as a lower score, not an "
+            "incomplete one."
+        ),
     ),
     Domain(
-        "underwriting", "Underwriting", PHASE_FUTURE_FINANCE,
-        "Point-in-time correctness makes underwriting technically feasible here, which "
-        "is precisely why the guardrail matters more, not less.",
-        guardrail_ref="automated underwriting", guardrail_section=SECTION_GUARDRAILS,
+        "underwriting", "Underwriting", PHASE_ADMITTED,
+        "Point-in-time correctness makes an auditable underwriting trail genuinely "
+        "valuable here — which is exactly why the policy must come from the lender.",
+        empty_source="app.underwriting_rules",
+        surviving_constraint=(
+            "No Lumos-authored credit policy, and no outcome named 'approved': the "
+            "strongest affirmative result is that a transcribed policy's conditions "
+            "were met."
+        ),
     ),
     Domain(
-        "insurance", "Insurance", PHASE_FUTURE_FINANCE,
-        "Pricing a policy from yield and weather history is underwriting wearing a "
-        "different word.",
-        guardrail_ref="automated underwriting", guardrail_section=SECTION_GUARDRAILS,
+        "insurance", "Insurance", PHASE_ADMITTED,
+        "Whether a farm's operational records satisfy a policy's evidence requirements "
+        "is a real, checkable question growers currently answer by hand at claim time.",
+        empty_source="app.insurance_products",
+        surviving_constraint=(
+            "No premium estimation. Pricing a policy from yield and weather history is "
+            "underwriting wearing a different word; coverage terms are matched, never "
+            "priced."
+        ),
     ),
     Domain(
-        "collateralization", "Collateralization", PHASE_FUTURE_FINANCE,
-        "Valuing a standing crop as collateral requires moving money against it.",
-        guardrail_ref="money movement of any kind", guardrail_section=SECTION_GUARDRAILS,
+        "collateralization", "Collateralization", PHASE_ADMITTED,
+        "Registering and valuing collateral is decision support. The advance rate that "
+        "turns an asset into a credit line belongs to the lender.",
+        empty_source="app.collateral_valuation",
+        surviving_constraint=(
+            "No default advance rate — there is no safe default, since a missing rate "
+            "defaulted either way misstates exposure silently. No perfecting of a "
+            "security interest and no money moved against it."
+        ),
     ),
     Domain(
-        "hedging", "Hedging", PHASE_FUTURE_FINANCE,
-        "Positions are money movement by definition.",
-        guardrail_ref="money movement of any kind", guardrail_section=SECTION_GUARDRAILS,
+        "hedging", "Hedging", PHASE_ADMITTED,
+        "Recording positions a grower took elsewhere lets the platform describe their "
+        "real exposure instead of ignoring it.",
+        empty_source="app.futures_curve",
+        surviving_constraint=(
+            "Nothing executes and nothing is advised: no broker connection, no orders, "
+            "and no outcome that recommends taking or closing a position — that is "
+            "regulated investment advice, and the outcome enum makes it inexpressible."
+        ),
     ),
     Domain(
-        "pricing", "Pricing", PHASE_FUTURE_FINANCE,
-        "Ranking or pricing supplier offers is the commission-shaped failure the "
-        "procurement module was explicitly built to avoid.",
-        guardrail_ref="commission-based quote ranking", guardrail_section=SECTION_GUARDRAILS,
+        "pricing", "Pricing", PHASE_ADMITTED,
+        "A reported price series lets a grower time a sale. Distinct from ranking "
+        "supplier offers, which remains forbidden.",
+        empty_source="app.price_series",
+        surviving_constraint=(
+            "No commission-based ranking of supplier quotes — quotes stay in entry "
+            "order. No stale price served as current: a point outside the freshness "
+            "window refuses rather than falling back to the last known value."
+        ),
     ),
     Domain(
-        "monitoring", "Collateral & portfolio monitoring", PHASE_FUTURE_FINANCE,
-        "Lender-facing monitoring of many farms is a different product with a "
-        "different buyer, and no validation evidence points at it.",
-        guardrail_ref="Stop building product unless a validation need directly requires it",
-        guardrail_section=SECTION_STRATEGY,
+        "monitoring", "Collateral & portfolio monitoring", PHASE_ADMITTED,
+        "The append-only, point-in-time-correct substrate makes covenant checking "
+        "verifiable in a way a spreadsheet is not.",
+        empty_source="app.monitoring_covenants",
+        surviving_constraint=(
+            "No Lumos-authored covenant thresholds — a threshold determines breach, and "
+            "breach has consequences. An empty schedule reports 'nothing checked', "
+            "never 'compliant'."
+        ),
     ),
 )
 
-DOMAINS: tuple[Domain, ...] = _MVP + _FUTURE_FINANCE
+# Still deferred: nothing. Kept as a declared, enforced-empty tuple rather than deleted,
+# because mechanisms (1) and (3) are the machinery for deferring the NEXT domain, and
+# deleting them would mean rebuilding that discipline from scratch under pressure.
+_FUTURE_FINANCE: tuple[Domain, ...] = ()
+
+DOMAINS: tuple[Domain, ...] = _MVP + _ADMITTED + _FUTURE_FINANCE
 
 DOMAINS_BY_KEY: dict[str, Domain] = {d.key: d for d in DOMAINS}
 
 MVP_DOMAINS: frozenset[str] = frozenset(d.key for d in _MVP)
+ADMITTED_DOMAINS: frozenset[str] = frozenset(d.key for d in _ADMITTED)
 FUTURE_FINANCE_DOMAINS: frozenset[str] = frozenset(d.key for d in _FUTURE_FINANCE)
+
+# What `features.base.register()` gates on. Separate from MVP_DOMAINS so the two
+# admission routes stay legible: a domain in the original MVP, or one admitted by the
+# instruction in ADMISSION.
+COMPUTABLE_DOMAINS: frozenset[str] = MVP_DOMAINS | ADMITTED_DOMAINS
 
 
 def get(key: str) -> Domain:
@@ -201,6 +310,19 @@ def get(key: str) -> Domain:
 
 def is_mvp(key: str) -> bool:
     return key in MVP_DOMAINS
+
+
+def is_computable(key: str) -> bool:
+    """May a feature be registered in this domain? MVP or admitted, both count."""
+    return key in COMPUTABLE_DOMAINS
+
+
+def empty_sources() -> list[tuple[str, str]]:
+    """(domain key, dotted module path) for every domain governed by a transcription
+    source. Consumed by the registry test and by the TRANSCRIPTION_TASKS.md generator,
+    so the handoff doc cannot drift from what the code actually declares.
+    """
+    return [(d.key, d.empty_source) for d in DOMAINS if d.empty_source]
 
 
 def as_payload() -> list[dict]:

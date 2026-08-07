@@ -162,7 +162,8 @@ export const api = {
   // AI review brief for one decision (on-demand; never changes the decision).
   generateAiBrief: (plannedId) =>
     request(`/planned-sprays/${plannedId}/ai-brief`, { method: "POST" }),
-  getAiCalibration: () => request("/internal/ai-calibration"),
+  getAiCalibration: () =>
+    request("/internal/ai-calibration", { headers: operatorHeaders() }),
 
   // ------------------------------------------------------------ label library
   listPesticideProducts: () =>
@@ -301,7 +302,11 @@ export const api = {
     }),
 
   // Demo reset (refused with 409 unless the whole DB is demo/simulated data)
-  resetDemo: () => request("/internal/demo/reset", { method: "POST" }),
+  resetDemo: () =>
+    request("/internal/demo/reset", {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
 
   // Reduction measurement
   getReduction: (farmId) => request(`/farms/${farmId}/reduction`),
@@ -320,6 +325,7 @@ export const api = {
   importPilotData: (farmId, data) =>
     request(`/internal/farms/${farmId}/pilot-import`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
   getPilotCaseStudy: (farmId) => request(`/farms/${farmId}/pilot-case-study`),
@@ -328,7 +334,8 @@ export const api = {
   trackEvent: (data) => {
     request("/pilot-events", { method: "POST", body: JSON.stringify(data) }).catch(() => {});
   },
-  getInstrumentation: () => request("/internal/instrumentation"),
+  getInstrumentation: () =>
+    request("/internal/instrumentation", { headers: operatorHeaders() }),
 
   // Pilot feedback & intake
   listPilotFeedback: () => request("/pilot-feedback"),
@@ -391,18 +398,24 @@ export const api = {
   createSupplierQuote: (planId, data) =>
     request(`/internal/input-plans/${planId}/quotes`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
   withdrawSupplierQuote: (quoteId) =>
-    request(`/internal/supplier-quotes/${quoteId}/withdraw`, { method: "POST" }),
+    request(`/internal/supplier-quotes/${quoteId}/withdraw`, {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
   createFinancingOffer: (quoteId, data) =>
     request(`/internal/supplier-quotes/${quoteId}/financing-offers`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
   addOrderEvent: (orderId, data) =>
     request(`/internal/orders/${orderId}/events`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
 

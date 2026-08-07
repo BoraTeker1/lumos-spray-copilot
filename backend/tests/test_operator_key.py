@@ -9,6 +9,9 @@ this file.
 This is a deployment interlock, not auth infrastructure — no login, no session, no
 password, no user table.
 """
+import re
+from pathlib import Path
+
 import pytest
 
 from app import operator_key
@@ -128,3 +131,58 @@ def test_key_comparison_is_constant_time():
 
     source = inspect.getsource(operator_key.denial_reason)
     assert "compare_digest" in source
+
+
+# ------------------------------------------------------- frontend header wiring
+# A Python test reading a JavaScript file, deliberately: pytest is the only test
+# harness in this repo, and the gap this covers is invisible to every other test
+# here. `test_every_internal_route_is_gated` enumerates routes from the app, so it
+# passes whether or not any client remembers to send the header — the backend is
+# correct and the caller is broken. That is exactly how eight /internal calls in
+# lib/api.js shipped without operatorHeaders(): concierge pilot import, the usage
+# funnel, AI calibration and the whole procurement concierge UI 403'd on any
+# deployment holding real data, which is precisely the deployment where the key is
+# mandatory to boot (`assert_safe_for_serving`). The demo worked, so nobody saw it.
+API_CLIENT = Path(__file__).resolve().parents[2] / "frontend" / "lib" / "api.js"
+
+
+def _call_expressions(source: str) -> list[str]:
+    """Every `request(...)` / `fetch(...)` expression, by paren balancing.
+
+    Balancing is naive about parens inside strings — acceptable here because no URL
+    or literal in this file contains one, and the sanity assertion below fails loudly
+    if that ever stops being true rather than silently scanning nothing.
+    """
+    spans: list[str] = []
+    for match in re.finditer(r"\b(?:request|fetch)\(", source):
+        depth = 0
+        for i in range(match.end() - 1, len(source)):
+            if source[i] == "(":
+                depth += 1
+            elif source[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append(source[match.start(): i + 1])
+                    break
+    return spans
+
+
+def test_every_internal_call_in_the_api_client_sends_the_operator_key():
+    source = API_CLIENT.read_text()
+    calls = _call_expressions(source)
+    assert len(calls) > 50, (
+        f"only parsed {len(calls)} call expressions from {API_CLIENT.name} — the "
+        "extraction is broken, not the client"
+    )
+
+    internal = [c for c in calls if "/internal" in c]
+    assert len(internal) >= 20, (
+        f"only found {len(internal)} /internal calls — extraction is broken"
+    )
+
+    missing = [c for c in internal if "operatorHeaders()" not in c]
+    assert not missing, (
+        "these /internal calls in frontend/lib/api.js do not send "
+        f"{operator_key.KEY_HEADER}, so they 403 on any deployment holding real "
+        "data:\n\n" + "\n\n".join(missing)
+    )

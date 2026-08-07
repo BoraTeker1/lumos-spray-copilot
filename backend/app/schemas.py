@@ -1163,6 +1163,36 @@ class Recommendation(BaseModel):
     agronomist_comment: str | None = None
 
 
+# --------------------------------------------------------------- Spray baseline
+# Defined above the pilot intake because PilotFarmIntake embeds SprayBaselineCreate:
+# the baseline is captured during onboarding, not bolted on afterwards.
+BaselineMethod = Literal["stated_cadence", "prior_period", "calendar_program"]
+CalendarProgram = Literal[
+    "weekly", "every_10_days", "biweekly", "every_3_weeks", "monthly"
+]
+
+
+class SprayBaselineCreate(BaseModel):
+    """A grower/PCA-declared baseline to measure reduction against (one per farm)."""
+    method: BaselineMethod
+    cadence_days: int | None = Field(default=None, gt=0)
+    season_spray_count: int | None = Field(default=None, gt=0)
+    baseline_period_start: date | None = None
+    baseline_period_end: date | None = None
+    calendar_program: CalendarProgram | None = None
+    data_source: DataSource = "grower_interview"
+    data_confidence: DataConfidence = "user_provided"
+    declared_by: str | None = None
+    notes: str | None = None
+
+
+class SprayBaseline(SprayBaselineCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    created_at: datetime
+
+
 # ---------------------------------------------------------------- Pilot intake
 class PilotSprayEvent(BaseModel):
     """A spray line in the pilot-farm intake bundle (all fields optional but product)."""
@@ -1186,6 +1216,15 @@ class PilotFarmIntake(BaseModel):
     spray_events: list[PilotSprayEvent] = Field(default_factory=list)
     scouting_concern: str | None = None
     scouting_severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
+    # Captured at intake because reduction is unmeasurable without it, and asking a
+    # grower "how often did you spray last season?" is a 20-second question during
+    # onboarding and an awkward one six weeks later. Optional: a farm with no baseline
+    # is still a valid farm, it just cannot produce a reduction figure — compute_reduction
+    # returns its "No baseline captured yet" empty result rather than guessing.
+    # Declared here rather than defaulted: `SprayBaselineCreate.data_confidence` is
+    # "user_provided", which is in reduction._TRUSTED_CONFIDENCE, so an intake-captured
+    # baseline can back a headline figure. That is only honest because a human typed it.
+    spray_baseline: SprayBaselineCreate | None = None
 
 
 # ----------------------------------------------------- Concierge pilot import
@@ -1237,34 +1276,6 @@ class PcaPolicyCreate(BaseModel):
 
 
 class PcaPolicy(PcaPolicyCreate):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    farm_id: int
-    created_at: datetime
-
-
-# --------------------------------------------------------------- Spray baseline
-BaselineMethod = Literal["stated_cadence", "prior_period", "calendar_program"]
-CalendarProgram = Literal[
-    "weekly", "every_10_days", "biweekly", "every_3_weeks", "monthly"
-]
-
-
-class SprayBaselineCreate(BaseModel):
-    """A grower/PCA-declared baseline to measure reduction against (one per farm)."""
-    method: BaselineMethod
-    cadence_days: int | None = Field(default=None, gt=0)
-    season_spray_count: int | None = Field(default=None, gt=0)
-    baseline_period_start: date | None = None
-    baseline_period_end: date | None = None
-    calendar_program: CalendarProgram | None = None
-    data_source: DataSource = "grower_interview"
-    data_confidence: DataConfidence = "user_provided"
-    declared_by: str | None = None
-    notes: str | None = None
-
-
-class SprayBaseline(SprayBaselineCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
     farm_id: int

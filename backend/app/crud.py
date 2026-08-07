@@ -2424,6 +2424,18 @@ def create_pilot_farm(db: Session, data: schemas.PilotFarmIntake) -> models.Farm
             data_confidence="user_provided",
         ))
 
+    # The baseline is the denominator of every reduction figure this farm will ever
+    # report. Captured here because `compute_reduction` returns its empty result
+    # without one, and until now nothing in the onboarding flow asked for it — which
+    # is why no real farm in this system has ever produced a reduction number.
+    # Constructed directly rather than via set_spray_baseline() to stay inside this
+    # function's single transaction; the demo/real guard is unnecessary on a farm
+    # created three statements ago with no records of any other provenance.
+    if data.spray_baseline is not None:
+        db.add(models.SprayBaseline(
+            farm_id=farm.id, **data.spray_baseline.model_dump()
+        ))
+
     db.commit()
     db.refresh(farm)
     return farm
@@ -3870,3 +3882,85 @@ def sync_transcribed_labels(db: Session) -> schemas.LabelSyncResult:
 
     db.commit()
     return schemas.LabelSyncResult(**result, notes=notes)
+
+
+# ---------------------------------------------------------------------------
+# Cross-layer profile inputs (2026-08-07).
+#
+# The layers admitted this cycle read farm data through these accessors. Several return
+# nothing today because no table holds what they ask for, and each says so rather than
+# pretending otherwise — the models downstream then refuse with `no_data_for_farm`,
+# which is the honest state and exactly what `/farms/{id}/profile` is meant to surface.
+#
+# Deliberately NOT silently returning [] with no explanation: a reader tracing why the
+# credit layer refuses needs to land on the reason, not on an empty query.
+# ---------------------------------------------------------------------------
+def feature_results_for_farm(db: Session, farm_id: int) -> dict:
+    """name -> stored FeatureValue, shaped like a `FeatureResult` for the model layer.
+
+    Real: `feature_values` is populated by the recompute worker. The returned objects
+    expose `.value`, `.abstained` and `.reasons`, which is the whole contract
+    `credit_scoring` and `monitoring` depend on — they never see an ORM row's other
+    columns, so a schema change here cannot reach a scoring decision.
+
+    An abstained stored row (value IS NULL, reasons non-empty) stays abstained through
+    this conversion. That is the entire point: the abstention must survive the trip from
+    the worker to the scorecard, or a missing input silently becomes a zero.
+    """
+    out = {}
+    for row in list_feature_values_for_farm(db, farm_id):
+        out[row.name] = SimpleNamespace(
+            value=row.value,
+            abstained=row.value is None,
+            reasons=list(row.reasons or []),
+        )
+    return out
+
+
+def list_soil_readings(db: Session, farm_id: int) -> list:
+    """Soil test readings for a farm.
+
+    EMPTY TODAY: no table stores lab analyte results. A soil report arrives as a
+    document (`storage.KIND_SOIL_TEST` exists) and nobody has built the transcription
+    path from that document to structured readings. `soil.interpret` therefore refuses
+    with `no_data_for_farm`, which is accurate — the farm may well have soil tests, in
+    a PDF nothing has read.
+    """
+    return []
+
+
+def expected_yield_tonnes(db: Session, farm_id: int):
+    """Expected harvest for the current crop cycle, in tonnes.
+
+    NONE TODAY: `CropCycle` carries area and dates but no expected-yield column, and
+    `crop_cycles` holds zero rows. `fertilization.budget` refuses rather than assuming a
+    default yield, because removal scales linearly with it — a default would invent the
+    answer rather than approximate it.
+    """
+    return None
+
+
+def primary_variety(db: Session, farm_id: int):
+    """The variety planted on this farm, if one is recorded.
+
+    Reads `CropCycle.variety_name`, the one variety field that exists. Returns None when
+    there is no crop cycle — `seed_selection` then refuses rather than guessing a
+    variety, and a guessed variety would pull the wrong trial's resistance ratings.
+    """
+    row = db.scalars(
+        select(models.CropCycle)
+        .where(models.CropCycle.farm_id == farm_id)
+        .order_by(models.CropCycle.id.desc())
+    ).first()
+    return getattr(row, "variety_name", None) if row is not None else None
+
+
+def list_collateral_assets(db: Session, farm_id: int) -> list:
+    """Registered collateral assets for a farm.
+
+    EMPTY TODAY: no table registers assets as collateral. `LandParcel` and `TenureRight`
+    describe the legal units that collateral attaches to, but nothing records an
+    assessed value against them. `collateral.value_assets` refuses — correctly, since
+    there is also no transcribed advance rate to apply if there were.
+    """
+    return []

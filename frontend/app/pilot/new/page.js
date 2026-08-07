@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Droplets, Eye, Info, Sprout } from "lucide-react";
+import { Droplets, Eye, Gauge, Info, Sprout } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,17 @@ export default function PilotFarmIntakePage() {
   });
   const [sprays, setSprays] = useState([{ ...EMPTY_SPRAY }, { ...EMPTY_SPRAY }, { ...EMPTY_SPRAY }]);
   const [concern, setConcern] = useState({ text: "", severity: "" });
+  // The reduction denominator. Asked here because it is a 20-second question during
+  // onboarding and an awkward one six weeks later — and without it the farm can never
+  // report a reduction figure at all.
+  const [baseline, setBaseline] = useState({
+    method: "",
+    cadence_days: "",
+    season_spray_count: "",
+    calendar_program: "",
+    baseline_period_start: "",
+    baseline_period_end: "",
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -55,6 +66,34 @@ export default function PilotFarmIntakePage() {
     };
   }
 
+  // Only the fields the chosen method actually uses are sent — a cadence left over
+  // from switching method must not travel with a prior_period baseline.
+  function cleanBaseline() {
+    if (!baseline.method) return null;
+    const b = {
+      method: baseline.method,
+      declared_by: "Grower, at intake",
+      cadence_days: null,
+      season_spray_count: null,
+      calendar_program: null,
+      baseline_period_start: null,
+      baseline_period_end: null,
+    };
+    if (baseline.method === "stated_cadence") {
+      if (baseline.cadence_days === "") return null;
+      b.cadence_days = Number(baseline.cadence_days);
+    } else if (baseline.method === "calendar_program") {
+      if (!baseline.calendar_program) return null;
+      b.calendar_program = baseline.calendar_program;
+    } else if (baseline.method === "prior_period") {
+      if (baseline.season_spray_count === "") return null;
+      b.season_spray_count = Number(baseline.season_spray_count);
+      b.baseline_period_start = baseline.baseline_period_start || null;
+      b.baseline_period_end = baseline.baseline_period_end || null;
+    }
+    return b;
+  }
+
   async function submit(e) {
     e.preventDefault();
     setSaving(true);
@@ -72,6 +111,7 @@ export default function PilotFarmIntakePage() {
         spray_events: sprays.map(cleanSpray).filter(Boolean),
         scouting_concern: concern.text || null,
         scouting_severity_1_to_5: concern.severity === "" ? null : Number(concern.severity),
+        spray_baseline: cleanBaseline(),
       };
       const created = await api.createPilotFarm(payload);
       // Stay on this page: offer the full spray-history import before opening the farm.
@@ -200,6 +240,108 @@ export default function PilotFarmIntakePage() {
             ))}
           </div>
           <p className="mt-2 text-xs text-muted">Leave a row blank to skip it.</p>
+        </SectionCard>
+
+        {/* Spray baseline — the reduction denominator */}
+        <SectionCard
+          title="Spray baseline"
+          icon={<Gauge />}
+          size="section"
+          description="What their normal programme looks like, in their words. Without this, Lumos cannot report a reduction figure for this farm at all — it has nothing to measure against."
+        >
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <span className={label}>How do they describe it?</span>
+              <select
+                className={input}
+                value={baseline.method}
+                onChange={(e) => setBaseline((b) => ({ ...b, method: e.target.value }))}
+              >
+                <option value="">Skip for now</option>
+                <option value="stated_cadence">They spray every N days</option>
+                <option value="calendar_program">A named calendar programme</option>
+                <option value="prior_period">A count from a past season</option>
+              </select>
+            </div>
+
+            {baseline.method === "stated_cadence" && (
+              <div>
+                <span className={label}>Every how many days?</span>
+                <input
+                  type="number"
+                  min="1"
+                  className={input}
+                  value={baseline.cadence_days}
+                  onChange={(e) => setBaseline((b) => ({ ...b, cadence_days: e.target.value }))}
+                  placeholder="7"
+                />
+              </div>
+            )}
+
+            {baseline.method === "calendar_program" && (
+              <div>
+                <span className={label}>Which programme?</span>
+                <select
+                  className={input}
+                  value={baseline.calendar_program}
+                  onChange={(e) =>
+                    setBaseline((b) => ({ ...b, calendar_program: e.target.value }))
+                  }
+                >
+                  <option value="">—</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="every_10_days">Every 10 days</option>
+                  <option value="biweekly">Every 2 weeks</option>
+                  <option value="every_3_weeks">Every 3 weeks</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            )}
+
+            {baseline.method === "prior_period" && (
+              <>
+                <div>
+                  <span className={label}>Sprays in that period</span>
+                  <input
+                    type="number"
+                    min="1"
+                    className={input}
+                    value={baseline.season_spray_count}
+                    onChange={(e) =>
+                      setBaseline((b) => ({ ...b, season_spray_count: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <span className={label}>Period start</span>
+                  <input
+                    type="date"
+                    className={input}
+                    value={baseline.baseline_period_start}
+                    onChange={(e) =>
+                      setBaseline((b) => ({ ...b, baseline_period_start: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <span className={label}>Period end</span>
+                  <input
+                    type="date"
+                    className={input}
+                    value={baseline.baseline_period_end}
+                    onChange={(e) =>
+                      setBaseline((b) => ({ ...b, baseline_period_end: e.target.value }))
+                    }
+                  />
+                </div>
+              </>
+            )}
+          </section>
+          <p className="mt-2 text-xs text-muted">
+            Recorded as the grower&apos;s own statement, not a Lumos estimate. An early or
+            weak figure is still reported as illustrative until enough real sprays are
+            logged against it.
+          </p>
         </SectionCard>
 
         {/* Scouting concern */}

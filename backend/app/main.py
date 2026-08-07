@@ -16,6 +16,14 @@ from app import (
     ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction,
     label_extraction, llm, models, operator_key, pca_authority, schemas, vision,
 )
+# The layers admitted on 2026-08-07. Every one of these ships with an EMPTY transcription
+# source, so each entry point below returns a Refusal until someone reads a document —
+# see app/transcription.py and TRANSCRIPTION_TASKS.md.
+from app import (
+    collateral, credit_scoring, farm_profile, fertilization, hedging, insurance,
+    irrigation, land_selection, monitoring, pricing, seed_selection, soil, transcription,
+)
+from app.ingest import domains as ingest_domains
 from app.analytics import compute_cost_analytics
 # Imported for its side effect: registering the feature specs and their job handlers.
 from app import features as _features  # noqa: F401
@@ -2446,6 +2454,111 @@ def internal_jobs(
             for job in recent
         ],
     }
+
+
+# ------------------------------------------------- Transcription + cross-layer profile
+@app.get("/internal/transcription-status", tags=["internal"])
+def internal_transcription_status():
+    """INTERNAL: every EMPTY transcription source, and the document that would fill it.
+
+    The operator-facing counterpart to the eight admitted domains. Each source module
+    ships empty by design (see `app/transcription.py`), so this endpoint is the worklist:
+    it answers "what must someone go and read for the finance layer to produce anything",
+    which is a procurement-and-reading task, not a build task.
+
+    Generated from `domains.empty_sources()` rather than a hand-kept list, so a domain
+    admitted later cannot be forgotten here — the same reason the operator key middleware
+    gates on a path prefix rather than a route list.
+    """
+    statuses = [
+        transcription.status_of(module_path, title=ingest_domains.get(key).title)
+        for key, module_path in ingest_domains.empty_sources()
+    ]
+    return {
+        "admission": ingest_domains.ADMISSION,
+        "sources": [s.as_payload() for s in statuses],
+        "populated_count": sum(1 for s in statuses if s.populated),
+        "total_count": len(statuses),
+        "note": (
+            "A source is filled by transcribing a primary document WITH its citation, "
+            "never by recalling a plausible value. Every model over an empty source "
+            "returns a refusal naming the reason — that is the designed state, not a bug."
+        ),
+    }
+
+
+@app.get("/farms/{farm_id}/profile", tags=["farms"])
+def farm_cross_layer_profile(farm_id: int, db: Session = Depends(get_db)):
+    """Every layer's view of one farm, side by side, each computed or refused.
+
+    Grower-facing and deliberately NOT under `/internal`, for the same reason as
+    `/data-readiness`: "why can't this product tell me anything about X" is a question
+    that belongs to the person whose farm it is.
+
+    Deliberately NOT added to the PCA-facing decision surface. The Botrytis shadow study
+    depends on the reviewing PCA not seeing model output, and a cross-layer card on
+    `/decisions/{id}` would break the blinding.
+
+    On today's data nearly every layer refuses, and `blocking_gaps` — grouped by whether
+    a grower or an operator can unblock it — is the useful payload. That grouping is the
+    one genuinely cross-layer computation here; there is no overall score, because an
+    average across layers that mostly abstain is meaningless rather than merely rough.
+    """
+    farm = _require_farm(db, farm_id)
+    crop = farm.crop_type or "unknown"
+
+    # Each layer supplies its own result or its own refusal. Nothing is invented to fill
+    # a gap, and a layer that cannot answer says which document or record would let it.
+    views = [
+        (
+            farm_profile.LAYER_OPERATIONS, "Soil",
+            soil.interpret(crud.list_soil_readings(db, farm_id), crop=crop),
+        ),
+        (
+            farm_profile.LAYER_ADVISORY, "Nutrient budget",
+            fertilization.budget(
+                crop=crop,
+                expected_yield_tonnes=crud.expected_yield_tonnes(db, farm_id),
+                nutrients=("nitrogen", "potassium"),
+            ),
+        ),
+        (
+            farm_profile.LAYER_ADVISORY, "Variety traits",
+            seed_selection.traits_for(
+                variety=crud.primary_variety(db, farm_id) or "unknown", crop=crop
+            ),
+        ),
+        (
+            farm_profile.LAYER_FINANCE, "Credit score",
+            credit_scoring.score(
+                features=crud.feature_results_for_farm(db, farm_id),
+                as_of=clock.current_datetime(),
+            ),
+        ),
+        (
+            farm_profile.LAYER_FINANCE, "Collateral",
+            collateral.value_assets(
+                crud.list_collateral_assets(db, farm_id),
+                currency="USD" if farm.country == "US" else "TRY",
+            ),
+        ),
+        (
+            farm_profile.LAYER_FINANCE, "Covenant standing",
+            monitoring.evaluate(
+                features=crud.feature_results_for_farm(db, farm_id),
+                as_of=clock.current_datetime(),
+            ),
+        ),
+        (
+            farm_profile.LAYER_MARKET, "Reported price",
+            pricing.latest(
+                commodity=crop, market=farm.location or "unknown",
+                as_of=clock.current_date(), max_age_days=7,
+            ),
+        ),
+    ]
+
+    return farm_profile.build(farm_id=farm_id, views=views).as_payload()
 
 
 @app.get("/internal/ingestion/sources", tags=["internal"])
