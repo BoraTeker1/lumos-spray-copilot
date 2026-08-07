@@ -191,6 +191,22 @@ Backend + frontend both implement:
     initially absent from `SupplierQuoteItemCreate`, which would have made the catalogue
     decorative exactly as `epa_reg_no` once did — now pinned by a schema-reachability
     test and an end-to-end catalogue→quote→dispersion test.
+  - **Finance persistence (third pass, same day):** `CreditAssessment`,
+    `UnderwritingDecision`, `CollateralAsset`, `MonitoringSnapshot`,
+    `CoverageAssessment` — all **append-only**, migration `e5f5523df75d`.
+    `Score.inputs_digest` finally has somewhere to live. **The invariant is outcome XOR
+    refusal, and a REFUSAL IS STORED** (`crud._outcome_columns` is the single
+    enforcement point): with no scorecard transcribed every row is a refusal, and a
+    history reading "could not score, on these dates" is materially different from an
+    empty one — storing only successes makes the record set survivorship-biased.
+    Scorecard identity is recorded **per row**, not referenced, so an assessment stays
+    readable against the card as it was when it ran. No PUT/PATCH/DELETE exists on any
+    of them, pinned by a route-table test. `CollateralAsset` gives
+    `crud.list_collateral_assets` real data (it returned `[]` before) and is in
+    `_FARM_RECORD_MODELS` so a demo farm cannot accumulate real-looking security —
+    which desynced the P0 backfill's table list, resolved by `ADDED_AFTER_BACKFILL` in
+    `tests/test_schema_migrations.py` rather than by editing a migration that has
+    already run.
   - **It is NOT validation.** Capability rose across three layers; buyer evidence did
     not. This is the FIFTH cycle of capability-up / evidence-flat. §3/§11 unchanged.
 

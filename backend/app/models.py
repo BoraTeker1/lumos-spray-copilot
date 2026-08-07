@@ -2570,3 +2570,183 @@ class RfqTransmission(Base):
     detail: Mapped[str | None] = mapped_column(Text)
     requested_by: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+# ---------------------------------------------------------------------------
+# Finance persistence (2026-08-07, third pass).
+#
+# The decision models existed and computed on read, so nothing survived the request.
+# `credit_scoring.Score.inputs_digest` was built to answer "what did you know when you
+# declined me" — a question with legal weight — and had nowhere to live.
+#
+# THE INVARIANT ACROSS ALL FOUR ASSESSMENT TABLES: a row records EITHER an outcome OR a
+# refusal, never both and never neither. `refusal_code IS NULL` iff the assessment
+# produced a result. This is the same construction as `FeatureValue` storing an
+# abstention as `value IS NULL` + non-empty `reasons`, and it exists for the same
+# reason: a refusal is a real event about a real farm on a real date, and dropping it
+# would leave a borrower unable to see that no assessment was even possible.
+#
+# All four are APPEND-ONLY. There is no update path and no delete path. A reassessment
+# is a new row at a new `as_of`; a correction to an input produces a new row too. What
+# a lender or a grower saw on a date must stay recoverable.
+# ---------------------------------------------------------------------------
+class CreditAssessment(Base):
+    """One executed scorecard, or one recorded refusal to score. Append-only.
+
+    `inputs_digest` is the point-in-time guarantee: recomputing at the same `as_of` must
+    reproduce it, exactly as `FeatureValue.inputs_digest` does. A digest that moves is
+    proof an input became visible that should not have been — and here that means an
+    assessment was made on information the farm did not have at the time.
+    """
+    __tablename__ = "credit_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    # Which scorecard ran. Recorded per row rather than referenced, because a scorecard
+    # is transcribed from a lender document that may be re-transcribed later — and an
+    # assessment must stay readable against the card as it was when it ran.
+    scorecard_lender: Mapped[str | None] = mapped_column(String(200))
+    scorecard_name: Mapped[str | None] = mapped_column(String(200))
+    scorecard_version: Mapped[str | None] = mapped_column(String(60))
+
+    total: Mapped[float | None] = mapped_column(Float)
+    minimum_score: Mapped[float | None] = mapped_column(Float)
+    maximum_score: Mapped[float | None] = mapped_column(Float)
+    inputs_digest: Mapped[str | None] = mapped_column(String(64), index=True)
+    factors: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    assessed_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class UnderwritingDecision(Base):
+    """One policy evaluation, or one recorded refusal. Append-only.
+
+    `outcome` is never "approved" — the vocabulary is conditions_met /
+    conditions_not_met / referred_to_human, and there is no column here that could
+    carry an approval. Storing the evaluation does not turn it into one.
+    """
+    __tablename__ = "underwriting_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    # The assessment this was evaluated against, when one backed it.
+    credit_assessment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_assessments.id"), index=True
+    )
+
+    policy_lender: Mapped[str | None] = mapped_column(String(200))
+    policy_version: Mapped[str | None] = mapped_column(String(60))
+    outcome: Mapped[str | None] = mapped_column(String(40), index=True)
+    rules: Mapped[list | None] = mapped_column(JSON)
+    # Kept as their own columns, not derived from `rules` at read time: the count of
+    # conditions that could not be tested is the number most likely to be quietly
+    # dropped from a summary, and it is the one that must not be.
+    failed_rule_ids: Mapped[list | None] = mapped_column(JSON)
+    not_evaluated_rule_ids: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    decided_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CollateralAsset(Base):
+    """A registered asset. An INPUT, unlike the three assessment tables.
+
+    Append-only with a supersede chain rather than an update, matching every other
+    correctable record here: a revaluation is a new row superseding the old one, so what
+    an asset was assessed at when a decision referenced it stays recoverable.
+
+    `assessed_value` is nullable on purpose — an asset can be registered before anyone
+    values it, and `collateral.value_assets` refuses on it rather than assuming. The
+    valuation basis is required whenever a value is present, because 60% of an insured
+    value and 60% of a market estimate are different numbers.
+    """
+    __tablename__ = "collateral_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    collateral_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    assessed_value: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    valuation_basis: Mapped[str | None] = mapped_column(String(200))
+    valued_on: Mapped[date | None] = mapped_column(Date)
+    # The legal unit the asset attaches to, when it is land-backed.
+    land_parcel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("land_parcels.id"), index=True
+    )
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("collateral_assets.id"), index=True
+    )
+    registered_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class MonitoringSnapshot(Base):
+    """Covenant standing at one moment, or a recorded refusal. Append-only.
+
+    `standing` carries the three-value vocabulary from `monitoring.py` — good_standing /
+    in_breach / unknown — and `unknown` is reachable and common. A two-value column here
+    would have forced "nothing checked" into whichever value was the default, and the
+    one that reads well is compliant.
+    """
+    __tablename__ = "monitoring_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    lender: Mapped[str | None] = mapped_column(String(200))
+    facility_reference: Mapped[str | None] = mapped_column(String(120))
+    standing: Mapped[str | None] = mapped_column(String(40), index=True)
+    covenants: Mapped[list | None] = mapped_column(JSON)
+    breached_covenant_ids: Mapped[list | None] = mapped_column(JSON)
+    unevaluated_covenant_ids: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CoverageAssessment(Base):
+    """One insurance coverage match, or a recorded refusal. Append-only.
+
+    Carries no premium and has no column that could hold one — coverage is matched here,
+    never priced. The valuable column is `missing_evidence`: telling a grower today which
+    claim evidence they do not have beats discovering it at claim time, months later.
+    """
+    __tablename__ = "coverage_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    crop: Mapped[str | None] = mapped_column(String(80))
+    peril: Mapped[str | None] = mapped_column(String(80))
+    products: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    assessed_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)

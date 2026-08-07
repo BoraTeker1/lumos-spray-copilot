@@ -12,9 +12,10 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import (
-    backtest, clock, crop_aliases, csv_import, decision_status, disease_risk,
-    label_data, label_table, models, pca_authority, procurement_analytics,
-    procurement_status, rfq_transport, risk_snapshot, schemas, target_aliases,
+    backtest, clock, credit_scoring, crop_aliases, csv_import, decision_status,
+    disease_risk, insurance, label_data, label_table, models, monitoring,
+    pca_authority, procurement_analytics, procurement_status, refusal, rfq_transport,
+    risk_snapshot, schemas, target_aliases, underwriting,
 )
 from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -2579,6 +2580,12 @@ _FARM_RECORD_MODELS = (
     # label_data.promotable_to_authoritative refuses to promote from one. That is what
     # stops a demo decision from ever showing a label-grounded verdict.
     models.ProductLabelVerification,
+    # A collateral asset is an operator-entered INPUT carrying a currency value, so it
+    # falls under the same rule: a demo farm must not accumulate assets that look like
+    # real security. The four assessment tables are OUTPUTS and are not listed — they
+    # inherit whatever the farm already is, and adding them would let an assessment
+    # decide a farm's demo-ness rather than the other way round.
+    models.CollateralAsset,
 )
 
 
@@ -3956,14 +3963,28 @@ def primary_variety(db: Session, farm_id: int):
 
 
 def list_collateral_assets(db: Session, farm_id: int) -> list:
-    """Registered collateral assets for a farm.
+    """LIVE registered collateral assets for a farm.
 
-    EMPTY TODAY: no table registers assets as collateral. `LandParcel` and `TenureRight`
-    describe the legal units that collateral attaches to, but nothing records an
-    assessed value against them. `collateral.value_assets` refuses — correctly, since
-    there is also no transcribed advance rate to apply if there were.
+    Backed by `collateral_assets` as of 2026-08-07 — this returned `[]` with a docstring
+    explaining that no table existed. Superseded rows are excluded: a revaluation
+    appends, so including both would double-count the same asset in a collateral total.
     """
-    return []
+    superseded = {
+        a.supersedes_id
+        for a in db.scalars(
+            select(models.CollateralAsset)
+            .where(models.CollateralAsset.farm_id == farm_id)
+        )
+        if a.supersedes_id is not None
+    }
+    return [
+        a for a in db.scalars(
+            select(models.CollateralAsset)
+            .where(models.CollateralAsset.farm_id == farm_id)
+            .order_by(models.CollateralAsset.id)
+        )
+        if a.id not in superseded
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -4127,3 +4148,208 @@ def price_dispersion_for_plan(db: Session, plan_id: int):
                 quote_id=quote.id,
             ))
     return procurement_analytics.build_report(lines)
+
+
+# ---------------------------------------------------------------------------
+# Finance persistence (2026-08-07, third pass).
+#
+# Every `record_*` below runs the pure model and stores WHATEVER it returned — a result
+# or a refusal. Storing only successes would make the record set a survivorship-biased
+# view of a farm: "we assessed you three times" when in truth we tried nine and could
+# not answer six. A borrower asking why they were declined is entitled to see the six.
+# ---------------------------------------------------------------------------
+def _outcome_columns(result) -> dict:
+    """Split a `Result | Refusal` into the two mutually exclusive column groups.
+
+    The single point where the append-only tables' invariant can be violated, so it is
+    the single place that decides: a row carries an outcome or a refusal, never both.
+    Mirrors `FeatureResult.__post_init__` doing the same job for abstentions.
+    """
+    if isinstance(result, refusal.Refusal):
+        return {"refusal_code": result.code, "refusal_detail": result.detail}
+    return {"refusal_code": None, "refusal_detail": None}
+
+
+def record_credit_assessment(
+    db: Session, farm_id: int, *, as_of=None, assessed_by: str | None = None
+) -> models.CreditAssessment:
+    """Run the transcribed scorecard against this farm's features and store the result.
+
+    Stores the refusal too — with no scorecard transcribed, that is what every row says
+    today, and a farm's assessment history reading "could not score: no scorecard
+    supplied" is materially different from that history being empty.
+    """
+    moment = as_of or clock.current_datetime()
+    result = credit_scoring.score(
+        features=feature_results_for_farm(db, farm_id), as_of=moment
+    )
+
+    row = models.CreditAssessment(
+        farm_id=farm_id, as_of=moment, assessed_by=assessed_by,
+        **_outcome_columns(result),
+    )
+    if not isinstance(result, refusal.Refusal):
+        row.scorecard_lender = result.lender
+        row.scorecard_name = result.scorecard_name
+        row.scorecard_version = result.scorecard_version
+        row.total = result.total
+        row.minimum_score = result.minimum_score
+        row.maximum_score = result.maximum_score
+        row.inputs_digest = result.inputs_digest
+        row.factors = [f.as_payload() for f in result.factors]
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_credit_assessments(db: Session, farm_id: int) -> list[models.CreditAssessment]:
+    """Newest first. Append-only, so this is the full history including refusals."""
+    return list(
+        db.scalars(
+            select(models.CreditAssessment)
+            .where(models.CreditAssessment.farm_id == farm_id)
+            .order_by(models.CreditAssessment.as_of.desc(), models.CreditAssessment.id.desc())
+        )
+    )
+
+
+def record_underwriting_decision(
+    db: Session, farm_id: int, *, as_of=None, exposure_amount: float | None = None,
+    evidence_keys=(), decided_by: str | None = None,
+) -> models.UnderwritingDecision:
+    """Evaluate the transcribed policy and store the outcome.
+
+    Reads the latest SCORED assessment rather than the latest row: a refusal carries no
+    total, and passing None would make a minimum-score rule report `not_evaluated` when
+    a real score may exist one row further back.
+    """
+    moment = as_of or clock.current_datetime()
+    scored = next(
+        (a for a in list_credit_assessments(db, farm_id) if a.total is not None), None
+    )
+    result = underwriting.assess(
+        as_of=moment,
+        score_total=scored.total if scored else None,
+        exposure_amount=exposure_amount,
+        evidence_keys=evidence_keys,
+        features=feature_results_for_farm(db, farm_id),
+    )
+
+    row = models.UnderwritingDecision(
+        farm_id=farm_id, as_of=moment, decided_by=decided_by,
+        credit_assessment_id=scored.id if scored else None,
+        **_outcome_columns(result),
+    )
+    if not isinstance(result, refusal.Refusal):
+        row.policy_lender = result.lender
+        row.policy_version = result.policy_version
+        row.outcome = result.outcome
+        row.rules = [r.as_payload() for r in result.rules]
+        row.failed_rule_ids = [r.rule_id for r in result.failed]
+        row.not_evaluated_rule_ids = [r.rule_id for r in result.not_evaluated]
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_underwriting_decisions(db: Session, farm_id: int) -> list[models.UnderwritingDecision]:
+    return list(
+        db.scalars(
+            select(models.UnderwritingDecision)
+            .where(models.UnderwritingDecision.farm_id == farm_id)
+            .order_by(
+                models.UnderwritingDecision.as_of.desc(),
+                models.UnderwritingDecision.id.desc(),
+            )
+        )
+    )
+
+
+def register_collateral_asset(db: Session, farm_id: int, data) -> models.CollateralAsset:
+    """Register or revalue an asset. Append-only: a revaluation supersedes, never edits."""
+    payload = data.model_dump()
+    asset = models.CollateralAsset(farm_id=farm_id, **payload)
+    ensure_demo_real_separation(db, farm_id, asset)
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return asset
+
+
+def record_monitoring_snapshot(
+    db: Session, farm_id: int, *, as_of=None
+) -> models.MonitoringSnapshot:
+    """Evaluate the transcribed covenant schedule and store the standing."""
+    moment = as_of or clock.current_datetime()
+    result = monitoring.evaluate(
+        features=feature_results_for_farm(db, farm_id), as_of=moment
+    )
+
+    row = models.MonitoringSnapshot(
+        farm_id=farm_id, as_of=moment, **_outcome_columns(result)
+    )
+    if not isinstance(result, refusal.Refusal):
+        row.lender = result.lender
+        row.facility_reference = result.facility_reference
+        row.standing = result.standing
+        row.covenants = [c.as_payload() for c in result.covenants]
+        row.breached_covenant_ids = [c.covenant_id for c in result.breached]
+        row.unevaluated_covenant_ids = [c.covenant_id for c in result.unevaluated]
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_monitoring_snapshots(db: Session, farm_id: int) -> list[models.MonitoringSnapshot]:
+    return list(
+        db.scalars(
+            select(models.MonitoringSnapshot)
+            .where(models.MonitoringSnapshot.farm_id == farm_id)
+            .order_by(
+                models.MonitoringSnapshot.as_of.desc(),
+                models.MonitoringSnapshot.id.desc(),
+            )
+        )
+    )
+
+
+def record_coverage_assessment(
+    db: Session, farm_id: int, *, crop: str, peril: str, evidence_keys=(),
+    as_of=None, assessed_by: str | None = None,
+) -> models.CoverageAssessment:
+    """Match transcribed insurance products against this farm and store the result."""
+    moment = as_of or clock.current_datetime()
+    result = insurance.assess_coverage(
+        crop=crop, peril=peril, available_evidence=evidence_keys
+    )
+
+    row = models.CoverageAssessment(
+        farm_id=farm_id, as_of=moment, crop=crop, peril=peril,
+        assessed_by=assessed_by, **_outcome_columns(result),
+    )
+    if not isinstance(result, refusal.Refusal):
+        row.products = [m.as_payload() for m in result.matches]
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_coverage_assessments(db: Session, farm_id: int) -> list[models.CoverageAssessment]:
+    return list(
+        db.scalars(
+            select(models.CoverageAssessment)
+            .where(models.CoverageAssessment.farm_id == farm_id)
+            .order_by(
+                models.CoverageAssessment.as_of.desc(),
+                models.CoverageAssessment.id.desc(),
+            )
+        )
+    )

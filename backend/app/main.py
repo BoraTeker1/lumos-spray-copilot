@@ -2457,6 +2457,140 @@ def internal_jobs(
     }
 
 
+# ------------------------------------------------------- Finance persistence
+# Recording an assessment is an operator act (it is a consequential record about a real
+# person's farm), so the POSTs are operator-gated. READING a farm's own assessment
+# history is grower-facing — "why was I declined" is their question, and the refusal
+# rows are the part they most need to see.
+@app.post("/internal/farms/{farm_id}/credit-assessments", status_code=201,
+          tags=["internal"])
+def internal_record_credit_assessment(
+    farm_id: int, assessed_by: str | None = None, db: Session = Depends(get_db)
+):
+    """INTERNAL: run the transcribed scorecard and STORE the result — or the refusal.
+
+    With no scorecard transcribed this stores a refusal every time, which is the point:
+    "could not score, no scorecard supplied, on this date" is a materially different
+    history from an empty one, and it is the record that protects both sides.
+    """
+    _require_farm(db, farm_id)
+    row = crud.record_credit_assessment(db, farm_id, assessed_by=assessed_by)
+    return schemas.CreditAssessment.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/credit-assessments", tags=["finance"])
+def farm_credit_assessments(farm_id: int, db: Session = Depends(get_db)):
+    """A farm's full assessment history, newest first, INCLUDING refusals.
+
+    Append-only: nothing here was ever edited or deleted, so what a lender saw on a
+    given date stays recoverable. `inputs_digest` is what makes that checkable rather
+    than merely claimed.
+    """
+    _require_farm(db, farm_id)
+    return [
+        schemas.CreditAssessment.model_validate(a)
+        for a in crud.list_credit_assessments(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/underwriting-decisions", status_code=201,
+          tags=["internal"])
+def internal_record_underwriting_decision(
+    farm_id: int, payload: schemas.UnderwritingRequest, db: Session = Depends(get_db)
+):
+    """INTERNAL: evaluate the transcribed policy and store the outcome.
+
+    The outcome is never "approved" — there is no such value in the vocabulary and no
+    column that could hold one. Storing an evaluation does not make it a commitment.
+    """
+    _require_farm(db, farm_id)
+    row = crud.record_underwriting_decision(
+        db, farm_id, exposure_amount=payload.exposure_amount,
+        evidence_keys=payload.evidence_keys, decided_by=payload.decided_by,
+    )
+    return schemas.UnderwritingDecision.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/underwriting-decisions", tags=["finance"])
+def farm_underwriting_decisions(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return [
+        schemas.UnderwritingDecision.model_validate(d)
+        for d in crud.list_underwriting_decisions(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/collateral", status_code=201, tags=["internal"])
+def internal_register_collateral(
+    farm_id: int, payload: schemas.CollateralAssetCreate, db: Session = Depends(get_db)
+):
+    """INTERNAL: register or revalue a collateral asset.
+
+    Append-only: pass `supersedes_id` to revalue, which keeps what the asset was
+    assessed at when an earlier decision referenced it.
+    """
+    _require_farm(db, farm_id)
+    row = crud.register_collateral_asset(db, farm_id, payload)
+    return schemas.CollateralAsset.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/collateral", tags=["finance"])
+def farm_collateral(farm_id: int, db: Session = Depends(get_db)):
+    """LIVE assets only — superseded rows are excluded so a revaluation cannot
+    double-count the same asset in a total."""
+    _require_farm(db, farm_id)
+    return [
+        schemas.CollateralAsset.model_validate(a)
+        for a in crud.list_collateral_assets(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/monitoring-snapshots", status_code=201,
+          tags=["internal"])
+def internal_record_monitoring_snapshot(farm_id: int, db: Session = Depends(get_db)):
+    """INTERNAL: evaluate the covenant schedule and store the standing.
+
+    `standing` is three-valued, and `unknown` is the common answer. A farm with an
+    unevaluated covenant is NOT in good standing — nobody looked at all of it.
+    """
+    _require_farm(db, farm_id)
+    row = crud.record_monitoring_snapshot(db, farm_id)
+    return schemas.MonitoringSnapshot.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/monitoring-snapshots", tags=["finance"])
+def farm_monitoring_snapshots(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return [
+        schemas.MonitoringSnapshot.model_validate(s)
+        for s in crud.list_monitoring_snapshots(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/coverage-assessments", status_code=201,
+          tags=["internal"])
+def internal_record_coverage_assessment(
+    farm_id: int, payload: schemas.CoverageAssessmentRequest,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL: match transcribed insurance products and store the result. No premium."""
+    _require_farm(db, farm_id)
+    row = crud.record_coverage_assessment(
+        db, farm_id, crop=payload.crop, peril=payload.peril,
+        evidence_keys=payload.evidence_keys, assessed_by=payload.assessed_by,
+    )
+    return schemas.CoverageAssessment.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/coverage-assessments", tags=["finance"])
+def farm_coverage_assessments(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return [
+        schemas.CoverageAssessment.model_validate(c)
+        for c in crud.list_coverage_assessments(db, farm_id)
+    ]
+
+
 # ------------------------------------------------------------------- Marketplace
 # Supplier and catalogue registration is operator work (concierge, like quote entry),
 # so it sits under /internal. Dispersion and transmission history are grower-facing:

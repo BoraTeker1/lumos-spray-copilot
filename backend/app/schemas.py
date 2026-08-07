@@ -1922,3 +1922,122 @@ class RfqTransmission(BaseModel):
     detail: str | None = None
     requested_by: str | None = None
     created_at: datetime
+
+
+# ------------------------------------------------------- Finance persistence
+# Every assessment schema carries BOTH the outcome fields and the refusal fields, all
+# optional, because a stored row is one or the other. No schema here has a field that
+# could hold an approval, a premium, a rate or a disbursement.
+class CollateralAssetCreate(BaseModel):
+    """Register or revalue a collateral asset. Append-only: revaluation supersedes."""
+    collateral_type: Literal[
+        "standing_crop", "harvested_inventory", "equipment", "land", "receivable"
+    ]
+    currency: str = Field(min_length=3, max_length=3)
+    description: str | None = None
+    assessed_value: float | None = Field(default=None, gt=0)
+    valuation_basis: str | None = None
+    valued_on: date | None = None
+    land_parcel_id: int | None = None
+    supersedes_id: int | None = None
+    registered_by: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+    @model_validator(mode="after")
+    def _value_requires_a_basis(self):
+        """60% of an insured value and 60% of a market estimate are different numbers."""
+        if self.assessed_value is not None and not (self.valuation_basis or "").strip():
+            raise ValueError(
+                "valuation_basis is required whenever assessed_value is given: an "
+                "advance rate assumes a basis, and applying one to a value from a "
+                "different basis is wrong in a way the output would not show"
+            )
+        return self
+
+
+class CollateralAsset(CollateralAssetCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    created_at: datetime
+
+
+class CreditAssessment(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    scorecard_lender: str | None = None
+    scorecard_name: str | None = None
+    scorecard_version: str | None = None
+    total: float | None = None
+    minimum_score: float | None = None
+    maximum_score: float | None = None
+    inputs_digest: str | None = None
+    factors: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    assessed_by: str | None = None
+    created_at: datetime
+
+
+class UnderwritingDecision(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    credit_assessment_id: int | None = None
+    policy_lender: str | None = None
+    policy_version: str | None = None
+    outcome: str | None = None
+    rules: list | None = None
+    failed_rule_ids: list | None = None
+    not_evaluated_rule_ids: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    decided_by: str | None = None
+    created_at: datetime
+
+
+class UnderwritingRequest(BaseModel):
+    exposure_amount: float | None = Field(default=None, gt=0)
+    evidence_keys: list[str] = Field(default_factory=list)
+    decided_by: str | None = None
+
+
+class MonitoringSnapshot(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    lender: str | None = None
+    facility_reference: str | None = None
+    standing: str | None = None
+    covenants: list | None = None
+    breached_covenant_ids: list | None = None
+    unevaluated_covenant_ids: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    created_at: datetime
+
+
+class CoverageAssessmentRequest(BaseModel):
+    crop: str
+    peril: str
+    evidence_keys: list[str] = Field(default_factory=list)
+    assessed_by: str | None = None
+
+
+class CoverageAssessment(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    crop: str | None = None
+    peril: str | None = None
+    products: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    assessed_by: str | None = None
+    created_at: datetime

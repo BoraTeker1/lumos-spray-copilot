@@ -95,13 +95,9 @@ depends on the reviewing PCA not seeing model output; a cross-layer card on
 Being explicit, because the gap between "the model exists" and "a pilot can use it" is
 exactly the delivery-gap failure §5 of `ENGINEERING_GUIDELINES.md` records:
 
-- **No persistence for the new layers.** There is no `CreditAssessment`,
-  `UnderwritingDecision`, `CollateralRegistration`, `InsurancePolicy` or
-  `PortfolioMonitoringSnapshot` table. Results are computed on read and not stored, so
-  there is no append-only history of what was assessed when. **This must exist before
-  any real assessment is shown to a counterparty** — "what did you know when you declined
-  me" is a question with legal weight, and `credit_scoring.Score.inputs_digest` was built
-  to answer it but currently has nowhere to live.
+- ~~No persistence for the new layers.~~ **Built 2026-08-07 (third pass)** —
+  `CreditAssessment`, `UnderwritingDecision`, `CollateralAsset`, `MonitoringSnapshot`
+  and `CoverageAssessment`, all append-only. See §8 below.
 - ~~No marketplace persistence.~~ **Built 2026-08-07 (second pass)** — `Supplier`,
   `SupplierProduct` (the catalogue, which finally gives `InputProduct` its first
   reference), `RfqTransmission`, plus `supplier_id` on quotes and `input_product_id` on
@@ -194,3 +190,68 @@ had the identical failure mode ENGINEERING_GUIDELINES.md §5 records for `epa_re
 `input_product_id` on the quote-item schema, no line could ever be catalogued and the
 whole layer would be decorative. **That gap was in fact present** on the first pass of
 this build and caught by writing the end-to-end test.
+
+---
+
+## 8. Finance persistence (added 2026-08-07, third pass)
+
+The decision models computed on read, so nothing survived the request.
+`credit_scoring.Score.inputs_digest` was built to answer *"what did you know when you
+declined me"* — a question with legal weight — and had nowhere to live. Five append-only
+tables, migration `e5f5523df75d`.
+
+| Table | Kind | Notes |
+|---|---|---|
+| `CreditAssessment` | output | One executed scorecard, or one recorded refusal. Carries `inputs_digest` and the scorecard identity **per row**. |
+| `UnderwritingDecision` | output | `outcome` is never `approved`; `not_evaluated_rule_ids` is its own column. |
+| `CollateralAsset` | **input** | Append-only with a supersede chain. Gives `crud.list_collateral_assets` real data — it returned `[]` with an explanatory docstring until now. |
+| `MonitoringSnapshot` | output | `standing` is three-valued; `unknown` is reachable and common. |
+| `CoverageAssessment` | output | No premium column exists. `missing_evidence` is the valuable field. |
+
+### The invariant: outcome XOR refusal, and refusals are stored
+
+`refusal_code IS NULL` **iff** the assessment produced a result — the same construction
+as `FeatureValue` storing an abstention as `value IS NULL` + non-empty `reasons`.
+Enforced in one place, `crud._outcome_columns`, which is the only point it could be
+violated.
+
+**Storing the refusal is the design, not an accident.** With no scorecard transcribed,
+every row today is a refusal. A farm's history reading *"could not score: no scorecard
+supplied, on these dates"* is materially different from that history being empty:
+
+- Storing only successes makes the record set a **survivorship-biased** view of a farm —
+  "we assessed you three times" when in truth we tried nine and could not answer six.
+- A borrower asking why they were declined is entitled to see that no assessment was
+  even possible.
+
+### Append-only, by construction
+
+No `PUT`, `PATCH` or `DELETE` route exists on any of the four assessment resources —
+pinned by `test_assessments_have_no_update_or_delete_route`, which enumerates the live
+route table rather than trusting a convention. A revaluation of a collateral asset
+**supersedes** rather than edits, and `list_collateral_assets` excludes superseded rows
+so a revaluation cannot double-count the same asset in a total.
+
+### What is recorded per row, and why
+
+The **scorecard identity** (`scorecard_lender`/`name`/`version`) is stored on each
+assessment rather than referenced. A scorecard is transcribed from a lender document that
+may be re-transcribed later; an assessment must stay readable against the card **as it
+was when it ran**. The same reasoning `ProductLabelRecord` uses for append-only label
+revisions.
+
+### Gating
+
+`POST` is operator-gated — recording an assessment is a consequential act about a real
+person's farm. `GET` is **grower-facing**: "why was I declined" is their question, and
+the refusal rows are the part they most need to see.
+
+### A drift the migration tests caught
+
+Adding `CollateralAsset` to `crud._FARM_RECORD_MODELS` (so a demo farm cannot accumulate
+assets that look like real security) desynced the P0 backfill migration's table list.
+The fix was **not** to edit that migration: it has already run on real databases, and
+`collateral_assets` did not exist at its revision, so replaying it would fail on a
+missing table. `ADDED_AFTER_BACKFILL` in `tests/test_schema_migrations.py` records the
+exemption explicitly, with a reason, and a second test guards the exemption list itself
+from going stale.

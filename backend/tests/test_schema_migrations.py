@@ -104,6 +104,20 @@ def _backfill_module():
     return module
 
 
+# Farm-record models created AFTER the backfill revision `d4c9129576bd`.
+#
+# The backfill cannot scan a table that did not exist when it ran — replaying it would
+# fail on a missing table — and editing a migration that has already run on real
+# databases would make the code lie about what happened. So a later model is exempt,
+# but only explicitly: adding a name here is a deliberate act with a stated reason,
+# which keeps the guard live for the case it was written for.
+ADDED_AFTER_BACKFILL = {
+    # 2026-08-07. Created three revisions after the backfill, and needs none: the
+    # entity spine already exists by the time any collateral asset can be registered.
+    "collateral_assets",
+}
+
+
 def test_the_backfill_scans_exactly_the_farm_record_models():
     """Adding a model to `_FARM_RECORD_MODELS` must not silently bypass the backfill.
 
@@ -112,11 +126,23 @@ def test_the_backfill_scans_exactly_the_farm_record_models():
     that makes the duplication safe.
     """
     module = _backfill_module()
-    assert set(module.FARM_RECORD_TABLES) == {
-        model.__tablename__ for model in crud._FARM_RECORD_MODELS
-    }, (
-        "the backfill's FARM_RECORD_TABLES has drifted from crud._FARM_RECORD_MODELS — "
-        "update alembic/versions/d4c9129576bd_p0_backfill_spine_from_farms.py"
+    current = {model.__tablename__ for model in crud._FARM_RECORD_MODELS}
+
+    assert set(module.FARM_RECORD_TABLES) == current - ADDED_AFTER_BACKFILL, (
+        "the backfill's FARM_RECORD_TABLES has drifted from crud._FARM_RECORD_MODELS. "
+        "If the new model predates the backfill revision, update "
+        "alembic/versions/d4c9129576bd_p0_backfill_spine_from_farms.py. If it was added "
+        "later, add its table to ADDED_AFTER_BACKFILL above WITH a reason — a later "
+        "table cannot be scanned by an earlier migration."
+    )
+
+
+def test_the_backfill_exemptions_are_all_real_farm_record_models():
+    """Guards the exemption list: a stale name here would silently weaken the check."""
+    current = {model.__tablename__ for model in crud._FARM_RECORD_MODELS}
+    assert ADDED_AFTER_BACKFILL <= current, (
+        f"{ADDED_AFTER_BACKFILL - current} is exempted from the backfill check but is "
+        "no longer a farm-record model at all — remove it from ADDED_AFTER_BACKFILL"
     )
 
 
