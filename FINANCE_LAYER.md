@@ -102,10 +102,12 @@ exactly the delivery-gap failure §5 of `ENGINEERING_GUIDELINES.md` records:
   any real assessment is shown to a counterparty** — "what did you know when you declined
   me" is a question with legal weight, and `credit_scoring.Score.inputs_digest` was built
   to answer it but currently has nowhere to live.
-- **No marketplace persistence.** `Supplier`, a catalog wired to the orphaned
-  `InputProduct` table, and `RfqTransmission` were planned and not built. Procurement
-  remains the concierge workflow described in §5 of `ENGINEERING_GUIDELINES.md`: no suppliers, no
-  catalog, no transmission.
+- ~~No marketplace persistence.~~ **Built 2026-08-07 (second pass)** — `Supplier`,
+  `SupplierProduct` (the catalogue, which finally gives `InputProduct` its first
+  reference), `RfqTransmission`, plus `supplier_id` on quotes and `input_product_id` on
+  quote lines. See §7 below. What remains unbuilt there: no supplier-facing portal, and
+  no transport actually sends (`rfq_transport.describe()` reports `can_send: false` on
+  every deployment).
 - **No frontend for any of it.** `/soil`, `/fertilization`, `/finance`, `/market` do not
   exist. The two routes above are reachable only via the API.
 - **No collateral or soil input path.** `crud.list_collateral_assets` and
@@ -129,3 +131,66 @@ it is a lending partner, an insurer, and a few afternoons of reading.
 
 Still zero pilots. Still zero customer decisions. `DESIGN_PARTNER_SPRINT.md` remains the
 unstarted work that actually matters.
+
+---
+
+## 7. The marketplace layer (added 2026-08-07, second pass)
+
+Procurement existed before this as a concierge workflow: an operator typed a supplier's
+name as free text on each quote, and nothing linked one quote's `Switch 62.5WG` to
+another's `Switch 62.5 WG`. Three tables turn that into a marketplace.
+
+| Table | What it is |
+|---|---|
+| `Supplier` | A supplier as an entity. `SupplierQuote.supplier_name` is **kept and still authoritative** for what was entered; `supplier_id` is the structured link beside it — the same discipline as `SprayEvent.treated_acres` + `treated_area_unit`. Nullable, so a quote from an unregistered supplier still goes in rather than being blocked or attached to a guess. |
+| `SupplierProduct` | The catalogue. **The first reference `InputProduct` has ever had** — it sat in `models.py` since the entity-spine phase with zero callers. Carries **no price**: a price belongs to a quote, at a moment, for a quantity; on a catalogue row it is a list price nobody quoted that goes stale invisibly. |
+| `RfqTransmission` | Append-only record of an RFQ being sent. One row per intended recipient, **always** — including when nothing was sent. |
+
+### Why the catalogue is the point
+
+`procurement_analytics.build_report` groups price observations by **catalogue id, never
+by name**. Grouping free text would report three spellings of one product as three
+products with no spread each — which reads as *"prices are consistent"* when the truth is
+*"we failed to group them"*. Unlinked lines are counted and excluded, and the count is
+surfaced in the payload rather than swallowed, so the report never hides its own blind
+spot.
+
+`catalog_key` normalises casing and whitespace and **nothing else** — the same
+exact-or-nothing rule as `target_aliases` and `crop_aliases`. Fuzzy-matching a fungicide
+to a similar trade name is how a grower compares the price of two different chemistries.
+
+### What "better buying power" means here, precisely
+
+Price **dispersion**: how much the same catalogued product varied between the suppliers
+who actually quoted it. Three refusals guard the three ways a spread can lie — fewer than
+two quotes (zero spread reads as a competitive market), mixed units (needs a per-product
+density `label_data.convert_rate` already refuses to invent), and mixed currency (needs an
+FX rate with a date this system does not hold).
+
+**Not** a saving, and **not** a recommended supplier. A grower may have good reasons to
+buy above the lowest quote, and calling the difference a saving assumes they did not.
+Observations stay in entry order; sorting by price would make it a ranking in everything
+but name, and the no-ranking policy is a commitment about Lumos's incentives, not a UI
+preference.
+
+### RFQ transmission is real, recorded, and inert
+
+`rfq_transport.describe()` copies the `ingest/cimis.py` contract exactly: the caller asks
+before acting, so a deployment with no transport configured is inert **by construction**
+and cannot email a real supplier by accident. Every row today reads
+`skipped_no_transport`, which is the truthful record that an RFQ exists and did not leave
+the building — previously that state was invisible, and a grower asking why nobody quoted
+had nothing to look at.
+
+Email transport is declared and **deliberately still unimplemented**: a defect there
+emails real suppliers on a real grower's behalf, so the client should be written against
+live credentials by someone who can test it end to end.
+
+### Reachability
+
+`test_the_catalog_link_is_reachable_from_the_quote_entry_schema` and
+`test_a_catalogued_quote_line_enters_the_dispersion_end_to_end` exist because this layer
+had the identical failure mode ENGINEERING_GUIDELINES.md §5 records for `epa_reg_no`: without
+`input_product_id` on the quote-item schema, no line could ever be catalogued and the
+whole layer would be decorative. **That gap was in fact present** on the first pass of
+this build and caught by writing the end-to-end test.

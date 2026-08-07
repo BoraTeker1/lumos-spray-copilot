@@ -394,6 +394,40 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  // ------------------------------------------------------------- marketplace
+  // Suppliers and the product catalogue. Without these the concierge form can only
+  // send free text, every quote line lands unlinked, and price dispersion reports
+  // 100% unlinked forever — the catalogue would be decorative.
+  listSuppliers: (includeInactive = false) =>
+    request(`/internal/suppliers${includeInactive ? "?include_inactive=true" : ""}`, {
+      headers: operatorHeaders(),
+    }),
+  createSupplier: (data) =>
+    request("/internal/suppliers", {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  listInputProducts: () =>
+    request("/internal/input-products", { headers: operatorHeaders() }),
+  createInputProduct: (data) =>
+    request("/internal/input-products", {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  // Grower-facing: what suppliers quoted, and whether anyone was actually contacted.
+  getPriceDispersion: (planId) =>
+    request(`/input-plans/${planId}/price-dispersion`),
+  getRfqTransport: () => request("/rfq-transport"),
+  listRfqTransmissions: (planId) =>
+    request(`/input-plans/${planId}/transmissions`),
+  transmitRfq: (planId, data) =>
+    request(`/input-plans/${planId}/transmit-rfq`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   // Concierge entry points (internal operator tooling, /internal page only)
   createSupplierQuote: (planId, data) =>
     request(`/internal/input-plans/${planId}/quotes`, {

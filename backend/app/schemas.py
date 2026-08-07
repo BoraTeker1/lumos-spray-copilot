@@ -1428,6 +1428,13 @@ class SupplierQuoteItemCreate(BaseModel):
     """One quoted line answering one requested input-plan item."""
     input_plan_item_id: int
     product_name: str
+    # The catalogue link (2026-08-07). Optional, because a supplier may quote something
+    # nobody has catalogued yet and blocking the quote over it would be worse. But
+    # WITHOUT this field the catalogue is decorative: `product_name` is free text, so an
+    # unlinked line can never enter a price comparison — see
+    # procurement_analytics.build_report, which counts unlinked lines rather than
+    # bucketing them by name.
+    input_product_id: int | None = None
     is_substitution: bool = False
     substitution_reason: str | None = None
     quantity: float = Field(gt=0)
@@ -1457,6 +1464,10 @@ class SupplierQuoteCreate(BaseModel):
     Quotes are never edited — withdraw and re-enter is the correction path.
     """
     supplier_name: str
+    # The structured link (2026-08-07). `supplier_name` above stays authoritative for
+    # what was actually entered; this is optional so a quote from a supplier nobody has
+    # registered still goes in, rather than being blocked or attached to a guess.
+    supplier_id: int | None = None
     supplier_contact: str | None = None
     delivery_cost: float = Field(default=0.0, ge=0)
     fees: float = Field(default=0.0, ge=0)
@@ -1829,3 +1840,85 @@ class LabelResolution(BaseModel):
     # Whether the resolved record may back a decision as label-verified, and why not.
     promotable: bool = False
     promotion_blocked_reason: str | None = None
+
+
+# --------------------------------------------------------------- Marketplace
+# Added 2026-08-07. Note what is absent from every schema here: no price on a
+# catalogue entry, no rating on a supplier, no ranking field anywhere.
+class SupplierCreate(BaseModel):
+    """Register a supplier. `canonical_name` is derived server-side, never supplied."""
+    name: str = Field(min_length=1, max_length=200)
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    service_area: str | None = None
+    status: Literal["active", "inactive"] = "active"
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class Supplier(SupplierCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    canonical_name: str | None = None
+    created_at: datetime
+
+
+class InputProductCreate(BaseModel):
+    """A catalogue product. `canonical_key` is derived server-side."""
+    category: Literal[
+        "seed", "fertilizer", "crop_protection", "biological", "adjuvant", "other"
+    ]
+    name: str = Field(min_length=1, max_length=200)
+    manufacturer: str | None = None
+    pesticide_product_id: int | None = None
+    unit_of_sale: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class InputProduct(InputProductCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    canonical_key: str | None = None
+    created_at: datetime
+
+
+class SupplierProductCreate(BaseModel):
+    """A supplier offers a catalogue product. Deliberately carries NO price — a price
+    belongs to a quote, at a moment, for a quantity; on a catalogue row it would be a
+    list price nobody quoted that goes stale invisibly."""
+    input_product_id: int
+    supplier_sku: str | None = None
+    pack_size: str | None = None
+    typical_lead_time_days: int | None = Field(default=None, gt=0)
+    notes: str | None = None
+
+
+class SupplierProduct(SupplierProductCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    supplier_id: int
+    created_at: datetime
+
+
+class RfqTransmissionRequest(BaseModel):
+    """Which suppliers to send an RFQ to. Named explicitly — never auto-selected, since
+    choosing recipients on the grower's behalf is a form of ranking."""
+    supplier_ids: list[int] = Field(min_length=1)
+    requested_by: str | None = None
+
+
+class RfqTransmission(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    input_plan_id: int
+    supplier_id: int | None = None
+    sent_to: str | None = None
+    transport: str
+    status: str
+    detail: str | None = None
+    requested_by: str | None = None
+    created_at: datetime

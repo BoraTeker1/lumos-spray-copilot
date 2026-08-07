@@ -21,7 +21,8 @@ from app import (
 # see app/transcription.py and TRANSCRIPTION_TASKS.md.
 from app import (
     collateral, credit_scoring, farm_profile, fertilization, hedging, insurance,
-    irrigation, land_selection, monitoring, pricing, seed_selection, soil, transcription,
+    irrigation, land_selection, monitoring, pricing, rfq_transport, seed_selection,
+    soil, transcription,
 )
 from app.ingest import domains as ingest_domains
 from app.analytics import compute_cost_analytics
@@ -2454,6 +2455,140 @@ def internal_jobs(
             for job in recent
         ],
     }
+
+
+# ------------------------------------------------------------------- Marketplace
+# Supplier and catalogue registration is operator work (concierge, like quote entry),
+# so it sits under /internal. Dispersion and transmission history are grower-facing:
+# what suppliers quoted, and whether anyone was actually contacted, belong to the
+# person whose plan it is.
+@app.post("/internal/suppliers", response_model=schemas.Supplier, status_code=201,
+          tags=["internal"])
+def internal_create_supplier(
+    payload: schemas.SupplierCreate, db: Session = Depends(get_db)
+):
+    """INTERNAL: register a supplier as an entity rather than a string on each quote."""
+    return crud.create_supplier(db, payload)
+
+
+@app.get("/internal/suppliers", tags=["internal"])
+def internal_list_suppliers(
+    include_inactive: bool = False, db: Session = Depends(get_db)
+):
+    """INTERNAL: suppliers in registration order.
+
+    NOT ranked and not sorted by any quality or price signal — ordering a supplier list
+    is a recommendation, and Lumos does not make one.
+    """
+    return [
+        schemas.Supplier.model_validate(s)
+        for s in crud.list_suppliers(db, include_inactive=include_inactive)
+    ]
+
+
+@app.post("/internal/input-products", response_model=schemas.InputProduct,
+          status_code=201, tags=["internal"])
+def internal_create_input_product(
+    payload: schemas.InputProductCreate, db: Session = Depends(get_db)
+):
+    """INTERNAL: add a product to the catalogue.
+
+    The catalogue is what makes price comparison possible at all — quote lines carry
+    free text, and grouping three spellings of one product reports three products with
+    no spread each.
+    """
+    return crud.create_input_product(db, payload)
+
+
+@app.get("/internal/input-products", tags=["internal"])
+def internal_list_input_products(db: Session = Depends(get_db)):
+    return [
+        schemas.InputProduct.model_validate(p) for p in crud.list_input_products(db)
+    ]
+
+
+@app.post("/internal/suppliers/{supplier_id}/catalog",
+          response_model=schemas.SupplierProduct, status_code=201, tags=["internal"])
+def internal_link_supplier_product(
+    supplier_id: int, payload: schemas.SupplierProductCreate,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL: record that a supplier offers a catalogued product. No price."""
+    if db.get(models.Supplier, supplier_id) is None:
+        raise HTTPException(status_code=404, detail="supplier not found")
+    return crud.link_supplier_product(db, supplier_id, payload)
+
+
+@app.get("/internal/suppliers/{supplier_id}/catalog", tags=["internal"])
+def internal_supplier_catalog(supplier_id: int, db: Session = Depends(get_db)):
+    if db.get(models.Supplier, supplier_id) is None:
+        raise HTTPException(status_code=404, detail="supplier not found")
+    return [
+        schemas.SupplierProduct.model_validate(c)
+        for c in crud.list_supplier_catalog(db, supplier_id)
+    ]
+
+
+@app.get("/rfq-transport", tags=["procurement"])
+def rfq_transport_status():
+    """Whether this deployment can transmit an RFQ to anybody.
+
+    Answers "did my request actually go anywhere". Today it always reports `can_send:
+    false` with the reason — no transport is configured, so RFQs are recorded as skipped
+    and a human sends them. Reported rather than hidden, because a submitted plan that
+    silently contacts nobody is the gap this endpoint exists to make visible.
+    """
+    return rfq_transport.describe().as_payload()
+
+
+@app.post("/input-plans/{plan_id}/transmit-rfq", status_code=201, tags=["procurement"])
+def transmit_rfq(
+    plan_id: int, payload: schemas.RfqTransmissionRequest,
+    db: Session = Depends(get_db),
+):
+    """Attempt to send this plan's RFQ to named suppliers, and record the outcome.
+
+    One append-only row per intended recipient, ALWAYS — including when nothing was
+    sent. Recipients are named explicitly rather than auto-selected: choosing who gets
+    asked to quote, on the grower's behalf, is a form of ranking.
+    """
+    plan = crud.get_input_plan(db, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="input plan not found")
+
+    rows = crud.record_rfq_transmissions(
+        db, plan, supplier_ids=payload.supplier_ids, requested_by=payload.requested_by
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=404, detail="none of the supplied supplier_ids exist"
+        )
+    return [schemas.RfqTransmission.model_validate(r) for r in rows]
+
+
+@app.get("/input-plans/{plan_id}/transmissions", tags=["procurement"])
+def list_transmissions(plan_id: int, db: Session = Depends(get_db)):
+    if crud.get_input_plan(db, plan_id) is None:
+        raise HTTPException(status_code=404, detail="input plan not found")
+    return [
+        schemas.RfqTransmission.model_validate(r)
+        for r in crud.list_rfq_transmissions(db, plan_id)
+    ]
+
+
+@app.get("/input-plans/{plan_id}/price-dispersion", tags=["procurement"])
+def plan_price_dispersion(plan_id: int, db: Session = Depends(get_db)):
+    """How much each catalogued product varied in price across the suppliers who quoted.
+
+    This is what "better buying power" means concretely and honestly. It reports a
+    spread, not a saving and not a recommended supplier — a grower may have good reasons
+    to buy above the lowest quote, and calling the difference a saving assumes they did
+    not. Observations stay in entry order; sorting by price would make this a ranking in
+    everything but name.
+    """
+    if crud.get_input_plan(db, plan_id) is None:
+        raise HTTPException(status_code=404, detail="input plan not found")
+    return crud.price_dispersion_for_plan(db, plan_id).as_payload()
 
 
 # ------------------------------------------------- Transcription + cross-layer profile

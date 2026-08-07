@@ -30,10 +30,14 @@ export default function ConciergeQuoteCard({ farmId, country }) {
   const [busy, setBusy] = useState(false);
 
   const [quote, setQuote] = useState({
-    supplier_name: "", supplier_contact: "", delivery_cost: "", fees: "",
-    payment_terms_cash: "", expected_delivery_date: "", availability: "unknown",
-    expires_on: "", notes: "", entered_by: "",
+    supplier_name: "", supplier_id: "", supplier_contact: "", delivery_cost: "",
+    fees: "", payment_terms_cash: "", expected_delivery_date: "",
+    availability: "unknown", expires_on: "", notes: "", entered_by: "",
   });
+  // The catalogue. Without these two lists the form can only send free text, every
+  // line lands unlinked, and price dispersion reports 100% unlinked forever.
+  const [suppliers, setSuppliers] = useState([]);
+  const [products, setProducts] = useState([]);
   const [lines, setLines] = useState({}); // item_id -> { unit_price, product_name, substitution_reason }
   const [offer, setOffer] = useState({
     supplier_quote_id: "", provider_name: "", requested_amount: "",
@@ -56,6 +60,20 @@ export default function ConciergeQuoteCard({ farmId, country }) {
       setError(null);
     } catch (err) {
       setError(err.message);
+    }
+    // Catalogue loads separately and never blocks quote entry: a missing catalogue
+    // must degrade to free-text entry (an unlinked line, honestly counted as such),
+    // not stop an operator recording a quote a supplier actually gave.
+    try {
+      const [s, ip] = await Promise.all([
+        api.listSuppliers(),
+        api.listInputProducts(),
+      ]);
+      setSuppliers(s);
+      setProducts(ip);
+    } catch {
+      setSuppliers([]);
+      setProducts([]);
     }
   }, [farmId]);
 
@@ -98,6 +116,9 @@ export default function ConciergeQuoteCard({ farmId, country }) {
       () =>
         api.createSupplierQuote(selectedPlan.id, {
           supplier_name: quote.supplier_name,
+          // The structured link. `supplier_name` above stays authoritative for what
+          // was typed; this is what lets dispersion group across quotes.
+          supplier_id: quote.supplier_id ? Number(quote.supplier_id) : null,
           supplier_contact: quote.supplier_contact || null,
           delivery_cost: Number(quote.delivery_cost || 0),
           fees: Number(quote.fees || 0),
@@ -119,6 +140,12 @@ export default function ConciergeQuoteCard({ farmId, country }) {
               quantity: item.quantity,
               unit: item.unit,
               unit_price: Number(line.unit_price || 0),
+              // The catalogue link. Optional — a supplier may quote something nobody
+              // has catalogued yet — but an unlinked line is EXCLUDED from price
+              // comparison, never bucketed by name.
+              input_product_id: line.input_product_id
+                ? Number(line.input_product_id)
+                : null,
             };
           }),
         }),
@@ -194,6 +221,30 @@ export default function ConciergeQuoteCard({ farmId, country }) {
                     <Input value={quote.supplier_name} onChange={(e) => setQuote({ ...quote, supplier_name: e.target.value })} className="mt-1" />
                   </label>
                   <label className={labelCls}>
+                    Registered supplier
+                    <Select
+                      value={quote.supplier_id}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        const picked = suppliers.find((s) => String(s.id) === id);
+                        // Fill the typed name from the registry as a convenience, but
+                        // never overwrite something the operator already typed — what
+                        // they entered stays authoritative.
+                        setQuote((q) => ({
+                          ...q,
+                          supplier_id: id,
+                          supplier_name: q.supplier_name || picked?.name || "",
+                        }));
+                      }}
+                      className="mt-1"
+                    >
+                      <option value="">Not linked</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label className={labelCls}>
                     Delivery cost
                     <Input type="number" step="any" min="0" value={quote.delivery_cost} onChange={(e) => setQuote({ ...quote, delivery_cost: e.target.value })} className="mt-1" />
                   </label>
@@ -228,7 +279,7 @@ export default function ConciergeQuoteCard({ farmId, country }) {
                 </div>
                 <div className="space-y-2 rounded-control border border-line p-3">
                   {selectedPlan.items.map((item) => (
-                    <div key={item.id} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div key={item.id} className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                       <div className="text-xs text-ink sm:col-span-1">
                         <div className="font-medium">{item.product_name}</div>
                         <div className="text-muted">{item.quantity} {item.unit}</div>
@@ -236,6 +287,19 @@ export default function ConciergeQuoteCard({ farmId, country }) {
                       <label className={labelCls}>
                         Unit price *
                         <Input type="number" step="any" min="0" value={lines[item.id]?.unit_price || ""} onChange={(e) => setLines({ ...lines, [item.id]: { ...lines[item.id], unit_price: e.target.value } })} className="mt-1" />
+                      </label>
+                      <label className={labelCls}>
+                        Catalogue product
+                        <Select
+                          value={lines[item.id]?.input_product_id || ""}
+                          onChange={(e) => setLines({ ...lines, [item.id]: { ...lines[item.id], input_product_id: e.target.value } })}
+                          className="mt-1"
+                        >
+                          <option value="">Not linked</option>
+                          {products.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </Select>
                       </label>
                       <label className={labelCls}>
                         Substitute product (optional)

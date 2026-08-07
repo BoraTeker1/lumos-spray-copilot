@@ -1397,6 +1397,11 @@ class SupplierQuote(Base):
     )
     supplier_name: Mapped[str] = mapped_column(String(200), nullable=False)
     supplier_contact: Mapped[str | None] = mapped_column(String(200))
+    # The structured link, added 2026-08-07. NULLABLE on purpose: `supplier_name` above
+    # stays authoritative for what was actually entered, and a quote for a supplier
+    # nobody has registered keeps working rather than being blocked or attached to a
+    # guess. Same discipline as SprayEvent.treated_acres + treated_area_unit.
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), index=True)
     # submitted / selected / withdrawn (stored; expiry/not_selected are derived)
     status: Mapped[str] = mapped_column(String(20), default=procurement_status.QUOTE_SUBMITTED)
     delivery_cost: Mapped[float] = mapped_column(Float, default=0.0)
@@ -1447,6 +1452,14 @@ class SupplierQuoteItem(Base):
         ForeignKey("input_plan_items.id"), nullable=False, index=True
     )
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # The catalogue link, added 2026-08-07, and the reason `InputProduct` stopped being
+    # an orphan. NULLABLE: an unlinked line is EXCLUDED from price dispersion and
+    # counted, never bucketed by name — see procurement_analytics.build_report. Grouping
+    # free text would report three spellings of one product as three products with no
+    # spread each, which reads as "prices are consistent".
+    input_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("input_products.id"), index=True
+    )
     is_substitution: Mapped[bool] = mapped_column(Boolean, default=False)
     substitution_reason: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
@@ -2444,4 +2457,116 @@ class InputProduct(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+# ---------------------------------------------------------------------------
+# Marketplace (2026-08-07).
+#
+# Procurement existed before this as a concierge workflow: an operator typed a
+# supplier's name as free text on each quote, and nothing linked one quote's
+# "Switch 62.5WG" to another's "Switch 62.5 WG". These three tables are what turn
+# that into a marketplace — a supplier is an entity, a quoted line points at a
+# catalogued product, and an RFQ leaving the building is a recorded act.
+#
+# What did NOT change: quotes are still returned in entry order, there is still no
+# ranking column anywhere, and Lumos still takes no commission. The catalogue makes
+# comparison POSSIBLE; it does not make Lumos a broker.
+# ---------------------------------------------------------------------------
+class Supplier(Base):
+    """A supplier as an entity rather than a string on each quote.
+
+    `SupplierQuote.supplier_name` is kept and still populated — the same discipline as
+    `SprayEvent.treated_acres` + `treated_area_unit`: record what the human actually
+    said, and carry the structured link beside it. A quote entered before this table
+    existed, or for a supplier nobody has registered yet, keeps working with
+    `supplier_id` NULL rather than being blocked or silently attached to a guess.
+    """
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Normalised name for exact-match lookup. NOT unique: two legally distinct
+    # businesses can share a trading name, and collapsing them would misattribute a
+    # quote — the same identity rule `PesticideProduct.epa_reg_base` follows.
+    canonical_name: Mapped[str | None] = mapped_column(String(200), index=True)
+    contact_name: Mapped[str | None] = mapped_column(String(200))
+    contact_email: Mapped[str | None] = mapped_column(String(200))
+    contact_phone: Mapped[str | None] = mapped_column(String(60))
+    service_area: Mapped[str | None] = mapped_column(String(200))
+    # active / inactive. A supplier is never deleted: quotes reference them, and a
+    # deleted supplier would orphan a decision a grower already acted on.
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    catalog_entries: Mapped[list["SupplierProduct"]] = relationship(
+        back_populates="supplier", cascade="all, delete-orphan"
+    )
+
+
+class SupplierProduct(Base):
+    """A supplier offers a catalogued product. The catalogue, finally joined up.
+
+    `InputProduct` has existed since the entity-spine phase with zero references
+    anywhere else in the codebase. This is the table that gives it one, and the reason
+    it matters is `procurement_analytics`: dispersion must be grouped by product
+    IDENTITY, because grouping by free-text name reports three spellings of one product
+    as three products with no spread each — which reads as "prices are consistent".
+
+    Carries no price. A price belongs to a quote, at a moment, for a quantity; a price
+    on a catalogue row would be a list price that nobody quoted and that would go stale
+    invisibly.
+    """
+    __tablename__ = "supplier_products"
+    __table_args__ = (
+        Index("uq_supplier_product", "supplier_id", "input_product_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("suppliers.id"), nullable=False, index=True
+    )
+    input_product_id: Mapped[int] = mapped_column(
+        ForeignKey("input_products.id"), nullable=False, index=True
+    )
+    supplier_sku: Mapped[str | None] = mapped_column(String(120))
+    pack_size: Mapped[str | None] = mapped_column(String(60))
+    typical_lead_time_days: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    supplier: Mapped["Supplier"] = relationship(back_populates="catalog_entries")
+
+
+class RfqTransmission(Base):
+    """An append-only record of an RFQ being sent to a supplier.
+
+    Before this, "submit for quotes" set a status and stopped: the RFQ was never
+    transmitted anywhere, and a human was expected to notice it in an operator dropdown.
+    That is a real gap between what the state machine claims and what happens, and it is
+    the kind of gap that only becomes visible when a grower asks why nobody quoted.
+
+    Append-only, like every other consequential act here: a transmission is a thing that
+    either happened or did not, and re-sending is a NEW row rather than an edit of the
+    old one. `status` records the outcome, including `skipped_no_transport` — which is
+    what every row says today, because no transport is configured and the adapter ships
+    inert exactly like `ingest/cimis.py` without an AppKey.
+    """
+    __tablename__ = "rfq_transmissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    input_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plans.id"), nullable=False, index=True
+    )
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), index=True)
+    # As-addressed, kept even when supplier_id is set: what we actually sent to.
+    sent_to: Mapped[str | None] = mapped_column(String(200))
+    transport: Mapped[str] = mapped_column(String(40), nullable=False)
+    # queued / sent / failed / skipped_no_transport
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)

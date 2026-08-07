@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from app import (
     backtest, clock, crop_aliases, csv_import, decision_status, disease_risk,
-    label_data, label_table, models, pca_authority, procurement_status, risk_snapshot,
-    schemas, target_aliases,
+    label_data, label_table, models, pca_authority, procurement_analytics,
+    procurement_status, rfq_transport, risk_snapshot, schemas, target_aliases,
 )
 from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -3964,3 +3964,166 @@ def list_collateral_assets(db: Session, farm_id: int) -> list:
     there is also no transcribed advance rate to apply if there were.
     """
     return []
+
+
+# ---------------------------------------------------------------------------
+# Marketplace (2026-08-07): suppliers, catalogue, RFQ transmission, dispersion.
+#
+# Procurement's existing commitments are unchanged by all of this: quotes are still
+# returned in entry order, nothing ranks a supplier, and Lumos still takes no
+# commission. The catalogue makes comparison POSSIBLE; it does not make Lumos a broker.
+# ---------------------------------------------------------------------------
+def create_supplier(db: Session, data) -> models.Supplier:
+    """Register a supplier. Canonical name is normalised for exact-match lookup only."""
+    payload = data.model_dump()
+    supplier = models.Supplier(
+        canonical_name=procurement_analytics.catalog_key(payload.get("name")),
+        **payload,
+    )
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+    return supplier
+
+
+def list_suppliers(db: Session, *, include_inactive: bool = False) -> list[models.Supplier]:
+    """Suppliers in registration order. NOT ranked, and deliberately not sorted by any
+    quality or price signal — ordering a supplier list is a recommendation."""
+    stmt = select(models.Supplier)
+    if not include_inactive:
+        stmt = stmt.where(models.Supplier.status == "active")
+    return list(db.scalars(stmt.order_by(models.Supplier.id)))
+
+
+def find_supplier_by_name(db: Session, name: str) -> models.Supplier | None:
+    """Exact normalised match, or None. Never fuzzy.
+
+    Two businesses can share a trading name, so a normalised collision is NOT resolved
+    here — the caller gets the first and should be linking by id anyway. Guessing which
+    of two suppliers a quote belongs to would misattribute a price a grower acted on.
+    """
+    key = procurement_analytics.catalog_key(name)
+    if not key:
+        return None
+    return db.scalars(
+        select(models.Supplier)
+        .where(models.Supplier.canonical_name == key)
+        .order_by(models.Supplier.id)
+    ).first()
+
+
+def create_input_product(db: Session, data) -> models.InputProduct:
+    """Add a product to the catalogue.
+
+    This is the first writer `InputProduct` has ever had. `canonical_key` is the
+    normalised name, or the normalised EPA registration number when the product is a
+    pesticide specialisation — matching the identity rule the label layer already uses.
+    """
+    payload = data.model_dump()
+    product = models.InputProduct(
+        canonical_key=procurement_analytics.catalog_key(payload.get("name")),
+        **payload,
+    )
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+def list_input_products(db: Session) -> list[models.InputProduct]:
+    return list(db.scalars(select(models.InputProduct).order_by(models.InputProduct.id)))
+
+
+def link_supplier_product(db: Session, supplier_id: int, data) -> models.SupplierProduct:
+    """Record that a supplier offers a catalogued product. Carries no price."""
+    entry = models.SupplierProduct(supplier_id=supplier_id, **data.model_dump())
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def list_supplier_catalog(db: Session, supplier_id: int) -> list[models.SupplierProduct]:
+    return list(
+        db.scalars(
+            select(models.SupplierProduct)
+            .where(models.SupplierProduct.supplier_id == supplier_id)
+            .order_by(models.SupplierProduct.id)
+        )
+    )
+
+
+def record_rfq_transmissions(
+    db: Session, plan: models.InputPlan, *, supplier_ids=(), requested_by: str | None = None
+) -> list[models.RfqTransmission]:
+    """Attempt to transmit an RFQ, and record the outcome for each intended recipient.
+
+    Append-only, one row per supplier, ALWAYS — including when nothing was sent. An
+    empty list would read as "nobody needed contacting"; a row saying
+    `skipped_no_transport` is the truthful record that the RFQ exists and did not leave
+    the building.
+
+    `rfq_transport.describe()` is consulted before anything else, exactly as the ingest
+    pipeline asks `describe()` before `fetch`: a deployment with no transport configured
+    is inert by construction, and cannot email a real supplier by accident.
+    """
+    suppliers = [
+        s for s in (db.get(models.Supplier, sid) for sid in supplier_ids) if s is not None
+    ]
+    results = rfq_transport.transmit(
+        suppliers=suppliers, plan_reference=f"input-plan-{plan.id}"
+    )
+
+    rows = []
+    for supplier, result in zip(suppliers, results):
+        row = models.RfqTransmission(
+            input_plan_id=plan.id,
+            supplier_id=supplier.id,
+            sent_to=result.sent_to,
+            transport=result.transport,
+            status=result.status,
+            detail=result.detail,
+            requested_by=requested_by,
+        )
+        db.add(row)
+        rows.append(row)
+
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return rows
+
+
+def list_rfq_transmissions(db: Session, plan_id: int) -> list[models.RfqTransmission]:
+    return list(
+        db.scalars(
+            select(models.RfqTransmission)
+            .where(models.RfqTransmission.input_plan_id == plan_id)
+            .order_by(models.RfqTransmission.id)
+        )
+    )
+
+
+def price_dispersion_for_plan(db: Session, plan_id: int):
+    """Price dispersion across the quotes on one plan. Returns a DispersionReport.
+
+    Reads LIVE quotes only — a withdrawn quote is a price nobody is offering, and
+    including it would report a spread against a number the grower cannot buy at.
+    """
+    quotes = [
+        q for q in list_supplier_quotes(db, plan_id)
+        if q.status != procurement_status.QUOTE_WITHDRAWN
+    ]
+    lines = []
+    for quote in quotes:
+        for item in quote.items or []:
+            lines.append(SimpleNamespace(
+                input_product_id=item.input_product_id,
+                product_name=item.product_name,
+                supplier_name=quote.supplier_name,
+                unit_price=item.unit_price,
+                unit=item.unit,
+                currency="USD",
+                quote_id=quote.id,
+            ))
+    return procurement_analytics.build_report(lines)

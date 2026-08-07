@@ -175,6 +175,22 @@ Backend + frontend both implement:
     Each model checks its source before farm data, so with all eight sources empty **no
     amount of grower data entry unblocks anything.** Pinned by
     `test_every_gap_today_is_an_operator_transcription_gap`.
+  - **Marketplace (second pass, same day):** `Supplier`, `SupplierProduct` (the
+    catalogue — **the first reference `InputProduct` has ever had**), `RfqTransmission`,
+    plus `supplier_id` on quotes and `input_product_id` on quote lines. Migration
+    `d1e4e7de3145`; both FK columns nullable so existing quotes survive, and both FK
+    constraints **explicitly named** because SQLite batch mode cannot create an unnamed
+    one. `procurement_analytics.build_report` groups by **catalogue id, never by name** —
+    grouping free text reports three spellings of one product as three products with no
+    spread each, which reads as "prices are consistent". Reports a **spread, never a
+    saving or a recommended supplier**; observations stay in entry order, because sorting
+    by price is a ranking in everything but name. `rfq_transport` copies the CIMIS
+    `describe()`-before-acting contract: **inert by construction**, every row today reads
+    `skipped_no_transport`, which is the first time "this RFQ went nowhere" has been
+    visible at all. **A delivery gap was found and fixed here:** `input_product_id` was
+    initially absent from `SupplierQuoteItemCreate`, which would have made the catalogue
+    decorative exactly as `epa_reg_no` once did — now pinned by a schema-reachability
+    test and an end-to-end catalogue→quote→dispersion test.
   - **It is NOT validation.** Capability rose across three layers; buyer evidence did
     not. This is the FIFTH cycle of capability-up / evidence-flat. §3/§11 unchanged.
 
