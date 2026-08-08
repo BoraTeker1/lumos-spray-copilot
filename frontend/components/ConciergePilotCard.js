@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { formatCost } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
+import { fieldClass } from "@/components/ui/input";
 
 const DATA_SOURCES = [
   "grower_interview",
@@ -26,15 +29,6 @@ const EXAMPLE = `{
      "severity_1_to_5": 4}
   ]
 }`;
-
-function Field({ label, children }) {
-  return (
-    <label className="block text-sm">
-      <span className="mb-1 block text-xs font-medium text-muted">{label}</span>
-      {children}
-    </label>
-  );
-}
 
 // One-page case study, rendered founder/demo friendly.
 function CaseStudy({ cs, country }) {
@@ -179,7 +173,7 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
               value={sourceLabel}
               onChange={(e) => setSourceLabel(e.target.value)}
               placeholder="Call with PCA Maria, 20 Jun"
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             />
           </Field>
           <Field label="Imported by (optional)">
@@ -187,14 +181,14 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
               value={importedBy}
               onChange={(e) => setImportedBy(e.target.value)}
               placeholder="you@founder"
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             />
           </Field>
           <Field label="Data source">
             <select
               value={dataSource}
               onChange={(e) => setDataSource(e.target.value)}
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             >
               {DATA_SOURCES.map((s) => (
                 <option key={s} value={s}>
@@ -207,7 +201,7 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
             <select
               value={dataConfidence}
               onChange={(e) => setDataConfidence(e.target.value)}
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             >
               {DATA_CONFIDENCES.map((c) => (
                 <option key={c} value={c}>
@@ -223,7 +217,7 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Costs are rough; transcribed from a call."
-            className="w-full rounded border px-2 py-1.5"
+            className={fieldClass}
           />
         </Field>
 
@@ -233,29 +227,26 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
             onChange={(e) => setJson(e.target.value)}
             placeholder={EXAMPLE}
             rows={9}
-            className="w-full rounded border p-2 font-mono text-xs"
+            className={`${fieldClass} h-auto p-2 font-mono text-xs`}
           />
         </Field>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="submit"
-            className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white"
-          >
-            Import pilot data
-          </button>
-          <button
-            type="button"
-            onClick={viewCaseStudy}
-            className="rounded border px-3 py-1.5 text-sm hover:border-leaf"
-          >
+          <Button type="submit">Import pilot data</Button>
+          <Button type="button" variant="outline" onClick={viewCaseStudy}>
             View pilot case study
-          </button>
+          </Button>
         </div>
       </form>
 
-      {status && <p className="mt-2 text-sm text-ok-fg">{status}</p>}
-      {error && <p className="mt-2 text-sm text-risk-fg">{error}</p>}
+      {/* A successful import is announced too: this form's only confirmation is
+          this line, and it sits below a long textarea that is likely offscreen. */}
+      {status && (
+        <p role="status" className="mt-2 text-sm text-ok-fg">
+          {status}
+        </p>
+      )}
+      <FormError className="mt-2">{error}</FormError>
 
       {caseStudy && <CaseStudy cs={caseStudy} country={country} />}
     </div>

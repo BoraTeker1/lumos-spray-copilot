@@ -87,7 +87,7 @@ function DemoToolsMenu({ onReset, resetting }) {
         <button
           onClick={onReset}
           disabled={resetting}
-          className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-50"
+          className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-ink transition-colors hover:bg-canvas focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus disabled:opacity-50"
         >
           <RotateCcw className="h-4 w-4" />
           {resetting ? "Resetting…" : "Reset demo data"}

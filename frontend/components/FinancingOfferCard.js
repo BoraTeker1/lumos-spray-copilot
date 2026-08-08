@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { formatCost, formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
+import { FormError } from "@/components/ui/field";
 
 // One indicative financing offer with the grower's one-shot select/decline.
 // The copy says "selected", never "accepted" — selecting indicative terms is
@@ -101,7 +102,7 @@ export default function FinancingOfferCard({ offer, country, canDecide, onChange
           </div>
         </div>
       )}
-      {error && <p className="mt-2 text-sm text-risk-fg">{error}</p>}
+      <FormError className="mt-2">{error}</FormError>
       <p className="mt-3 text-[11px] text-muted">{offer.disclaimer}</p>
     </div>
   );

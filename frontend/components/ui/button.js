@@ -9,6 +9,11 @@ const VARIANTS = {
   secondary:
     "border border-leaf-600/40 bg-surface text-leaf-700 shadow-sm hover:bg-leaf-50",
   outline: "border border-line bg-surface text-ink shadow-sm hover:bg-canvas",
+  // Solid neutral. Exists so an operator action that must NOT read as an
+  // approval can still be the emphasised control in its group — the label
+  // library's "extract" and "commit as unverified" steps are deliberately not
+  // green, because green is the verified state they have not reached yet.
+  neutral: "bg-ink text-white shadow-sm hover:bg-ink/90",
   ghost: "text-muted hover:bg-canvas hover:text-ink",
   destructive:
     "border border-risk-line bg-surface text-risk-fg shadow-sm hover:bg-risk-bg",

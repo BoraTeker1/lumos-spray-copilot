@@ -5,6 +5,7 @@ import { Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FormError } from "@/components/ui/field";
 
 // AI review brief (beta): retrieval-grounded rescue-risk note + next EVIDENCE
 // actions for one decision. On-demand only, clearly labeled AI-suggested, and it
@@ -57,7 +58,7 @@ export default function AiBriefCard({ plannedId }) {
         </Button>
       </div>
 
-      {error && <p className="text-xs text-risk-fg">{error}</p>}
+      <FormError size="sm">{error}</FormError>
 
       {brief && (
         <div className="space-y-2">

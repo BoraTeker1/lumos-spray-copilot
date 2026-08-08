@@ -12,6 +12,7 @@ import Callout from "@/components/Callout";
 import DecisionResult, { OUTCOME_META } from "@/components/DecisionResult";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
 import {
   Sheet,
   SheetContent,
@@ -189,7 +190,7 @@ export function DecisionReview({ planned, onChanged }) {
           Reject
         </Button>
       </div>
-      {error && <p className="mt-1.5 text-sm text-risk-fg">{error}</p>}
+      <FormError className="mt-1.5">{error}</FormError>
     </div>
   );
 }
@@ -309,27 +310,8 @@ export function OutcomeRecorder({ planned, onChanged }) {
           Applied outcomes unlock after a PCA approves or edits this decision.
         </p>
       )}
-      {error && <p className="text-sm text-risk-fg">{error}</p>}
+      <FormError>{error}</FormError>
     </div>
-  );
-}
-
-// Labelled form field. Every control in this panel used its placeholder as its
-// only label, so the field name vanished the moment someone typed and the two
-// side-by-side inputs in the 320px rail clipped theirs outright. A `*` alone is
-// not an accessible required marker, so the word is in the label text too.
-function Field({ label, hint, required = false, children }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-ink">
-        {label}
-        {required && (
-          <span className="ml-1 font-normal text-muted">(required)</span>
-        )}
-      </span>
-      {children}
-      {hint && <span className="mt-1 block text-[11px] text-muted">{hint}</span>}
-    </label>
   );
 }
 

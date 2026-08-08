@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { api, API_BASE_URL } from "@/lib/api";
 import { formatCost } from "@/lib/format";
+import { FormError } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 
 // One labelled metric tile.
 // Pilot Evidence: a descriptive snapshot of what the pilot has logged so far, plus a
@@ -31,7 +33,7 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
     }
   }
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (error) return <FormError>{error}</FormError>;
   if (!data) return <p className="text-sm text-muted">Loading pilot evidence…</p>;
 
   const reviewSummary = `${data.pca_approved_count} approved · ${data.pca_pending_count} pending · ${data.pca_changes_requested_count} changes`;
@@ -43,21 +45,20 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-        <div className="flex gap-2 text-xs">
+        <div className="flex flex-wrap gap-2">
+          {/* Styled to match the Button beside it — these two sit side by side
+              and previously differed in height, radius and border colour. */}
           <a
             href={`${API_BASE_URL}/farms/${farmId}/audit-packet`}
             target="_blank"
             rel="noreferrer"
-            className="rounded border px-2 py-1 hover:border-muted"
+            className="inline-flex h-9 items-center justify-center rounded-control border border-line bg-surface px-3 text-xs font-medium text-ink shadow-sm transition-colors hover:bg-canvas focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
           >
             View audit packet
           </a>
-          <button
-            onClick={copyPacket}
-            className="rounded border px-2 py-1 hover:border-muted"
-          >
+          <Button type="button" variant="outline" size="sm" onClick={copyPacket}>
             {copied ? "Copied" : "Copy audit packet"}
-          </button>
+          </Button>
         </div>
       </div>
 

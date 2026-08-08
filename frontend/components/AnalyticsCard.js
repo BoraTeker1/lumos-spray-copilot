@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatCost } from "@/lib/format";
+import { FormError } from "@/components/ui/field";
 
 // Pesticide cost analytics for one farm. `refreshKey` re-fetches when records change.
 // `hasDocumentedSkip`: only call the figure "avoidable" when a planned spray was
@@ -18,7 +19,7 @@ export default function AnalyticsCard({ farmId, country, refreshKey, hasDocument
       .catch((err) => setError(err.message));
   }, [farmId, refreshKey]);
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (error) return <FormError>{error}</FormError>;
   if (!data) return <p className="text-sm text-muted">Loading analytics…</p>;
 
   const rows = [

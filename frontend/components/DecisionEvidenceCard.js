@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import StatTile from "@/components/StatTile";
 import { formatArea, formatCost } from "@/lib/format";
+import { FormError } from "@/components/ui/field";
 
 // Pre-spray decision workflow metrics: decisions reviewed, sprays changed/delayed/
 // avoided, conflicts caught, PCA acceptance, and the (assumption-based) review time.
@@ -19,7 +20,7 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
       .catch((err) => setError(err.message));
   }, [farmId, refreshKey]);
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (error) return <FormError>{error}</FormError>;
   if (!data) return <p className="text-sm text-muted">Loading decision evidence…</p>;
 
   const o = data.outcomes || {};

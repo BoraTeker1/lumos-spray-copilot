@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { RISK_LEVEL_TONES, tone } from "@/lib/tones";
+import { FormError } from "@/components/ui/field";
 
 const RISK_VARIANTS = Object.fromEntries(
   Object.entries(RISK_LEVEL_TONES).map(([k, t]) => [k, tone(t).badge])
@@ -22,7 +23,7 @@ export default function WeatherCard({ farmId }) {
       .catch((err) => setError(err.message));
   }, [farmId]);
 
-  if (error) return <p className="text-xs text-risk-fg">{error}</p>;
+  if (error) return <FormError size="sm">{error}</FormError>;
   if (!data) return <p className="text-xs text-muted">Loading weather…</p>;
 
   return (

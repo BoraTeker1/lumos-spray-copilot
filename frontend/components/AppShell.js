@@ -258,6 +258,17 @@ function ShellFrame({ children }) {
 
   return (
     <div className="flex min-h-screen">
+      {/* Skip link. There are 14 navigation links plus the farm switcher ahead of
+          the content on every page, so a keyboard user previously tabbed through
+          all of them on each navigation. Visible only when focused, and
+          `.no-print` so it never reaches paper. */}
+      <a
+        href="#main-content"
+        className="no-print sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-control focus:bg-leaf-700 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
+      >
+        Skip to main content
+      </a>
+
       {/* Desktop sidebar. Must stay an <aside> — the print CSS hides it by tag. */}
       <aside
         className={cn(
@@ -308,7 +319,7 @@ function ShellFrame({ children }) {
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-6 md:px-8">
+        <main id="main-content" tabIndex={-1} className="flex-1 px-4 py-6 md:px-8">
           <div className="mx-auto w-full max-w-[1360px]">{children}</div>
         </main>
 

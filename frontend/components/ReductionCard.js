@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useDemoTag } from "@/lib/farm-context";
+import { Button } from "@/components/ui/button";
+import { FormError } from "@/components/ui/field";
+import { fieldClass } from "@/components/ui/input";
 
 // Measured spray reduction vs. a grower/PCA-declared baseline. Honest by design:
 // no baseline -> no number; low-confidence/early-window numbers are clearly marked
@@ -66,7 +69,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
     }
   }
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (error) return <FormError>{error}</FormError>;
   if (!data) return <p className="text-sm text-muted">Loading reduction…</p>;
 
   const pct = data.reduction_pct;
@@ -76,12 +79,15 @@ export default function ReductionCard({ farmId, refreshKey }) {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-        <button
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-expanded={showForm}
           onClick={() => setShowForm((v) => !v)}
-          className="rounded border px-2 py-1 text-xs hover:border-muted"
         >
           {data.has_baseline ? "Edit baseline" : "Set baseline"}
-        </button>
+        </Button>
       </div>
 
       {!data.has_baseline && (
@@ -149,7 +155,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
             <select
               value={method}
               onChange={(e) => setMethod(e.target.value)}
-              className="mt-1 w-full rounded border px-2 py-1 text-sm"
+              className={`mt-1 ${fieldClass}`}
             >
               <option value="stated_cadence">Stated cadence (most common)</option>
               <option value="prior_period">Prior period (grower&apos;s own history)</option>
@@ -167,7 +173,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
                   value={cadenceDays}
                   onChange={(e) => setCadenceDays(e.target.value)}
                   placeholder="e.g. 7"
-                  className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                  className={`mt-1 ${fieldClass}`}
                 />
               </label>
               <label className="block text-xs text-muted">
@@ -178,7 +184,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
                   value={seasonCount}
                   onChange={(e) => setSeasonCount(e.target.value)}
                   placeholder="e.g. 20"
-                  className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                  className={`mt-1 ${fieldClass}`}
                 />
               </label>
             </div>
@@ -190,7 +196,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
               <select
                 value={program}
                 onChange={(e) => setProgram(e.target.value)}
-                className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                className={`mt-1 ${fieldClass}`}
               >
                 <option value="weekly">Weekly</option>
                 <option value="every_10_days">Every 10 days</option>
@@ -209,7 +215,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
                   type="date"
                   value={periodStart}
                   onChange={(e) => setPeriodStart(e.target.value)}
-                  className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                  className={`mt-1 ${fieldClass}`}
                 />
               </label>
               <label className="block text-xs text-muted">
@@ -218,7 +224,7 @@ export default function ReductionCard({ farmId, refreshKey }) {
                   type="date"
                   value={periodEnd}
                   onChange={(e) => setPeriodEnd(e.target.value)}
-                  className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                  className={`mt-1 ${fieldClass}`}
                 />
               </label>
             </div>
@@ -230,17 +236,13 @@ export default function ReductionCard({ farmId, refreshKey }) {
               value={declaredBy}
               onChange={(e) => setDeclaredBy(e.target.value)}
               placeholder="e.g. PCA Jane Doe"
-              className="mt-1 w-full rounded border px-2 py-1 text-sm"
+              className={`mt-1 ${fieldClass}`}
             />
           </label>
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-          >
+          <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save baseline"}
-          </button>
+          </Button>
         </form>
       )}
     </div>

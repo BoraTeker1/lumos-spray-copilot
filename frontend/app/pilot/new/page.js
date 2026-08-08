@@ -10,6 +10,7 @@ import { fieldClass } from "@/components/ui/input";
 import PageHeader from "@/components/PageHeader";
 import SectionCard from "@/components/SectionCard";
 import SprayImportCard from "@/components/SprayImportCard";
+import { FormError } from "@/components/ui/field";
 
 const EMPTY_SPRAY = {
   product_name: "",
@@ -387,7 +388,7 @@ export default function PilotFarmIntakePage() {
         </section>
         </SectionCard>
 
-        {error && <p className="text-sm text-risk-fg">{error}</p>}
+        <FormError>{error}</FormError>
         <div className="flex items-center gap-2">
           <Button type="submit" disabled={saving}>
             {saving ? "Creating…" : "Create pilot farm"}

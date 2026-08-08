@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Select } from "@/components/ui/select";
+import { FormError } from "@/components/ui/field";
 
 // Explicitly link a delivered order to the actual application record.
 // Delivery never marks an input as applied — this dialog is the only path.
@@ -103,7 +104,7 @@ export default function LinkApplicationDialog({ order, onChanged }) {
               </optgroup>
             )}
           </Select>
-          {error && <p className="text-sm text-risk-fg">{error}</p>}
+          <FormError>{error}</FormError>
           <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Link application"}
           </Button>

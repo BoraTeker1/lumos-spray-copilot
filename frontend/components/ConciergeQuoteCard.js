@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { FormError } from "@/components/ui/field";
 
 const AVAILABILITIES = ["in_stock", "partial", "backordered", "unknown"];
 // input_applied is deliberately absent: it needs the explicit application link
@@ -192,7 +193,7 @@ export default function ConciergeQuoteCard({ farmId, country }) {
   return (
     <div className="space-y-6">
       {status && <p className="text-sm text-leaf-700">{status}</p>}
-      {error && <p className="text-sm text-risk-fg">{error}</p>}
+      <FormError>{error}</FormError>
 
       <form onSubmit={submitQuote} className="space-y-3">
         <h3 className="text-sm font-semibold text-ink">Enter supplier quote</h3>

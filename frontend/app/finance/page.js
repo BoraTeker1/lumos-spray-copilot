@@ -12,6 +12,7 @@ import EmptyState from "@/components/EmptyState";
 import PageHeader from "@/components/PageHeader";
 import SectionCard from "@/components/SectionCard";
 import StatusBadge from "@/components/StatusBadge";
+import { FormError } from "@/components/ui/field";
 
 // A farm's finance record: what was assessed, when, and — mostly — why it could not be.
 //
@@ -123,7 +124,7 @@ export default function FinancePage() {
         here is an offer.
       </div>
 
-      {error && <p className="text-sm text-risk-fg">{error}</p>}
+      <FormError>{error}</FormError>
 
       <Tabs defaultValue="credit">
         <TabsList>

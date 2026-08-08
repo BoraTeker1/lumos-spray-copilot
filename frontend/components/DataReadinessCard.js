@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import SectionCard from "@/components/SectionCard";
 import { Database } from "lucide-react";
+import { FormError } from "@/components/ui/field";
 
 // Whether this farm's data can yet support a measurement.
 //
@@ -116,7 +117,7 @@ export default function DataReadinessCard({ farmId }) {
   if (error) {
     return (
       <SectionCard title="Data readiness" icon={<Database />}>
-        <p className="text-sm text-risk-fg">{error}</p>
+        <FormError>{error}</FormError>
       </SectionCard>
     );
   }

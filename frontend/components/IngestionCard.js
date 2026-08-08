@@ -5,6 +5,8 @@ import { api } from "@/lib/api";
 import SectionCard from "@/components/SectionCard";
 import { Button } from "@/components/ui/button";
 import { DownloadCloud } from "lucide-react";
+import { FormError } from "@/components/ui/field";
+import { fieldClass } from "@/components/ui/input";
 
 // Ingestion health, for an operator.
 //
@@ -114,7 +116,7 @@ export default function IngestionCard() {
             <select
               value={selected}
               onChange={(e) => setSelected(e.target.value)}
-              className="mt-0.5 rounded border px-2 py-1 text-sm"
+              className={`mt-0.5 h-9 py-1 text-sm ${fieldClass}`}
             >
               {runnable.map((s) => (
                 <option key={s.source_key} value={s.source_key}>
@@ -129,7 +131,7 @@ export default function IngestionCard() {
               <input
                 value={form[field]}
                 onChange={(e) => setForm({ ...form, [field]: e.target.value })}
-                className="mt-0.5 w-28 rounded border px-2 py-1 text-sm"
+                className={`mt-0.5 h-9 w-28 py-1 text-sm ${fieldClass}`}
                 required={field === "farm_id" || field === "station_id"}
               />
             </label>
@@ -148,7 +150,7 @@ export default function IngestionCard() {
         </p>
 
         {message && <p className="text-xs text-ok-fg">{message}</p>}
-        {error && <p className="text-xs text-risk-fg">{error}</p>}
+        <FormError size="sm">{error}</FormError>
 
         {runs === null ? (
           <p className="text-sm text-muted">Loading…</p>

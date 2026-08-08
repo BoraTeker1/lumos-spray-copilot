@@ -5,6 +5,8 @@ import { api } from "@/lib/api";
 import SectionCard from "@/components/SectionCard";
 import { Button } from "@/components/ui/button";
 import { History } from "lucide-react";
+import { FormError } from "@/components/ui/field";
+import { fieldClass } from "@/components/ui/input";
 
 // Historical opportunity scan — pilot ladder Stage 2, operator only.
 //
@@ -94,7 +96,7 @@ export default function OpportunityScanCard() {
             <input
               value={form.farm_id}
               onChange={(e) => setForm({ ...form, farm_id: e.target.value })}
-              className="mt-0.5 w-20 rounded border px-2 py-1 text-sm"
+              className={`mt-0.5 h-9 w-20 py-1 text-sm ${fieldClass}`}
               required
             />
           </label>
@@ -103,7 +105,7 @@ export default function OpportunityScanCard() {
             <input
               value={form.block_id}
               onChange={(e) => setForm({ ...form, block_id: e.target.value })}
-              className="mt-0.5 w-20 rounded border px-2 py-1 text-sm"
+              className={`mt-0.5 h-9 w-20 py-1 text-sm ${fieldClass}`}
               required
             />
           </label>
@@ -129,7 +131,7 @@ export default function OpportunityScanCard() {
           season admits nothing at all.
         </p>
 
-        {error && <p className="text-xs text-risk-fg">{error}</p>}
+        <FormError size="sm">{error}</FormError>
 
         {scans === null ? (
           <p className="text-sm text-muted">Loading…</p>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import SectionCard from "@/components/SectionCard";
 import { Layers } from "lucide-react";
+import { FormError } from "@/components/ui/field";
 
 // The seventeen declared data domains, and which of them this product may build.
 //
@@ -60,7 +61,7 @@ export default function DomainRegistryTable() {
   if (error) {
     return (
       <SectionCard title="Data domains" icon={<Layers />}>
-        <p className="text-sm text-risk-fg">{error}</p>
+        <FormError>{error}</FormError>
       </SectionCard>
     );
   }

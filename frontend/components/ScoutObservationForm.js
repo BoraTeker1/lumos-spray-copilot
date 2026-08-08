@@ -3,6 +3,11 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { useDemoTag } from "@/lib/farm-context";
+import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 const EMPTY = {
   observation_date: "",
@@ -46,37 +51,34 @@ export default function ScoutObservationForm({ farmId, onCreated }) {
     }
   }
 
-  const input = "w-full rounded border px-2 py-1 text-sm";
-
   return (
-    <form onSubmit={submit} className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs text-muted">
-          Observation date *
-          <input
+    <form onSubmit={submit} className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Observation date" required>
+          <Input
             type="date"
-            className={input}
             required
+            className="tabular"
             value={form.observation_date}
             onChange={(e) => update("observation_date", e.target.value)}
           />
-        </label>
-        <input
-          className={input}
-          placeholder="Crop stage (e.g. fruiting)"
-          value={form.crop_stage}
-          onChange={(e) => update("crop_stage", e.target.value)}
-        />
-        <input
-          className={input}
-          placeholder="Visible issue"
-          value={form.visible_issue}
-          onChange={(e) => update("visible_issue", e.target.value)}
-        />
-        <label className="text-xs text-muted">
-          Severity (1–5)
-          <select
-            className={input}
+        </Field>
+        <Field label="Crop stage" hint="e.g. fruiting">
+          <Input
+            value={form.crop_stage}
+            onChange={(e) => update("crop_stage", e.target.value)}
+          />
+        </Field>
+        <Field label="Visible issue">
+          <Input
+            value={form.visible_issue}
+            onChange={(e) => update("visible_issue", e.target.value)}
+          />
+        </Field>
+        {/* Severity drives the engine's high-severity scouting check, so the
+            scale belongs in the label rather than only in the option list. */}
+        <Field label="Severity (1–5)">
+          <Select
             value={form.severity_1_to_5}
             onChange={(e) => update("severity_1_to_5", e.target.value)}
           >
@@ -86,29 +88,27 @@ export default function ScoutObservationForm({ farmId, onCreated }) {
                 {n}
               </option>
             ))}
-          </select>
-        </label>
-        <input
-          className={input}
-          placeholder="Image URL (optional)"
-          value={form.image_url_optional}
-          onChange={(e) => update("image_url_optional", e.target.value)}
-        />
+          </Select>
+        </Field>
+        <Field label="Image URL" hint="Optional" className="sm:col-span-2">
+          <Input
+            type="url"
+            value={form.image_url_optional}
+            onChange={(e) => update("image_url_optional", e.target.value)}
+          />
+        </Field>
       </div>
-      <textarea
-        className={input}
-        placeholder="Notes"
-        value={form.notes}
-        onChange={(e) => update("notes", e.target.value)}
-      />
-      {error && <p className="text-sm text-risk-fg">{error}</p>}
-      <button
-        type="submit"
-        disabled={saving}
-        className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      >
+      <Field label="Notes">
+        <Textarea
+          rows={3}
+          value={form.notes}
+          onChange={(e) => update("notes", e.target.value)}
+        />
+      </Field>
+      <FormError>{error}</FormError>
+      <Button type="submit" disabled={saving}>
         {saving ? "Saving…" : "Add scouting note"}
-      </button>
+      </Button>
     </form>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { fieldClass } from "@/components/ui/input";
 
 // Operator tooling for the label library. Three separate acts, deliberately shown
 // as three steps rather than one form, because they are three different levels of
@@ -184,7 +186,7 @@ export default function LabelLibraryCard({ farmId }) {
           a draft for you to correct.
         </p>
         <textarea
-          className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+          className={`mt-2 h-auto py-1.5 text-xs ${fieldClass}`}
           rows={3}
           placeholder="Paste label text, or choose a PDF/photo below"
           value={text}
@@ -197,22 +199,18 @@ export default function LabelLibraryCard({ farmId }) {
             className="text-xs"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
-          <button
+          <Button
             type="button"
+            variant="neutral"
+            size="sm"
             onClick={extract}
             disabled={busy || (!text.trim() && !file)}
-            className="rounded bg-ink px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
           >
             {busy ? "Working…" : "Extract draft rows"}
-          </button>
-          <button
-            type="button"
-            onClick={sync}
-            disabled={busy}
-            className="rounded border px-3 py-1.5 text-xs font-medium disabled:opacity-40"
-          >
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={sync} disabled={busy}>
             Load transcribed labels
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -246,13 +244,15 @@ export default function LabelLibraryCard({ farmId }) {
                       {row.source_section_or_page ? ` — ${row.source_section_or_page}` : ""}
                     </p>
                   )}
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-1.5 border-warn-line"
                     onClick={() => setDraft(draftFromExtraction(row))}
-                    className="mt-1.5 rounded border border-warn-line bg-surface px-2 py-1 text-[11px] font-medium"
                   >
                     Correct &amp; commit this row
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -280,7 +280,7 @@ export default function LabelLibraryCard({ farmId }) {
               <label key={key} className="text-[11px] font-medium text-muted">
                 {key.replace(/_/g, " ")}
                 <input
-                  className="mt-0.5 w-full rounded border px-2 py-1 text-xs"
+                  className={`mt-0.5 h-9 py-1 text-xs ${fieldClass}`}
                   value={draft[key]}
                   onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
                 />
@@ -288,21 +288,18 @@ export default function LabelLibraryCard({ farmId }) {
             ))}
           </div>
           <div className="mt-2 flex gap-2">
-            <button
+            <Button
               type="button"
+              variant="neutral"
+              size="sm"
               onClick={commit}
               disabled={busy}
-              className="rounded bg-ink px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
             >
               Commit as unverified
-            </button>
-            <button
-              type="button"
-              onClick={() => setDraft(null)}
-              className="rounded border px-3 py-1.5 text-xs font-medium"
-            >
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setDraft(null)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -352,16 +349,18 @@ export default function LabelLibraryCard({ farmId }) {
                         </span>
                       )}
                       {farmId && (
-                        <button
+                        <Button
                           type="button"
+                          variant="outline"
+                          size="sm"
+                          className="ml-1.5"
                           onClick={() => {
                             setVerifying(record.id);
                             setAttestation("");
                           }}
-                          className="ml-1.5 rounded border px-1.5 py-0.5 text-[10px] font-medium"
                         >
                           Verify for this farm
-                        </button>
+                        </Button>
                       )}
                     </li>
                   ))}
@@ -385,28 +384,24 @@ export default function LabelLibraryCard({ farmId }) {
             these values.
           </p>
           <textarea
-            className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+            className={`mt-2 h-auto py-1.5 text-xs ${fieldClass}`}
             rows={2}
             placeholder="What you checked, against which revision and page"
             value={attestation}
             onChange={(e) => setAttestation(e.target.value)}
           />
           <div className="mt-2 flex gap-2">
-            <button
+            <Button
               type="button"
+              size="sm"
               onClick={verify}
               disabled={busy || attestation.trim().length < 10}
-              className="rounded bg-leaf-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
             >
               Record verification
-            </button>
-            <button
-              type="button"
-              onClick={() => setVerifying(null)}
-              className="rounded border px-3 py-1.5 text-xs font-medium"
-            >
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setVerifying(null)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}

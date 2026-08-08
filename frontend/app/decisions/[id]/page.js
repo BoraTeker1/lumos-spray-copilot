@@ -3,7 +3,7 @@
 import { LoadingState } from "@/components/SystemState";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Info, Printer } from "lucide-react";
+import { ArrowLeft, CircleCheck, Info, Printer, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
 } from "@/lib/labels";
 import { tone } from "@/lib/tones";
 import { formatArea, formatCost, formatDate } from "@/lib/format";
+import { FormError } from "@/components/ui/field";
 
 // Section numbers are allocated in render order rather than hardcoded: two of
 // these sections are conditional, and hand-computed numbers (previously
@@ -236,7 +237,7 @@ function FollowUpForm({ plannedId, onAdded }) {
       <Button type="submit" size="sm" disabled={busy}>
         {busy ? "Saving…" : "Append event"}
       </Button>
-      {error && <p className="text-xs text-risk-fg">{error}</p>}
+      <FormError size="sm">{error}</FormError>
     </form>
   );
 }
@@ -277,7 +278,7 @@ export default function DecisionRecordPage({ params }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
+  if (error) return <FormError>{error}</FormError>;
   if (!planned || !farm) return <LoadingState message="Loading decision record…" />;
 
   const payload = planned.decision_payload || {};
@@ -411,8 +412,26 @@ export default function DecisionRecordPage({ params }) {
                 {rules.map((r) => (
                   <li key={r.rule_id} className="text-sm">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className={r.triggered ? "font-semibold text-risk-fg" : "font-medium text-ink"}>
-                        {r.triggered ? "⚠" : "✓"} {r.name}
+                      {/* Was "⚠"/"✓" text glyphs, which render at whatever the
+                          font happens to supply and print inconsistently — on
+                          the one page a PCA is expected to sign and file. The
+                          icon shape, not just the colour, carries the state. */}
+                      <span
+                        className={
+                          r.triggered
+                            ? "inline-flex items-center gap-1.5 font-semibold text-risk-fg"
+                            : "inline-flex items-center gap-1.5 font-medium text-ink"
+                        }
+                      >
+                        {r.triggered ? (
+                          <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                        ) : (
+                          <CircleCheck className="h-3.5 w-3.5 shrink-0 text-ok-fg" aria-hidden />
+                        )}
+                        <span className="sr-only">
+                          {r.triggered ? "Triggered:" : "Passed:"}
+                        </span>
+                        {r.name}
                       </span>
                       <span className="rounded bg-draft-bg px-1.5 py-0.5 text-[10px] text-muted">
                         {AUTHORITY_SOURCE_LABELS[r.source_authority] || r.source_authority} ·{" "}

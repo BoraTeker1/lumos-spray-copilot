@@ -4,6 +4,7 @@ import { useState } from "react";
 import { FileDown, ShieldCheck, Sparkles, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { FormError } from "@/components/ui/field";
 
 // CSV pilot import for REAL records (planned spray recommendations + scouting).
 // Two input modes, one pipeline:
@@ -231,17 +232,30 @@ export default function PilotImportCard({ farmId, onImported }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex overflow-hidden rounded-control border border-line text-xs">
+        {/* Segmented control, so these stay raw buttons rather than becoming
+            Buttons — but they were the one toggle in the app with no focus ring
+            and no pressed state exposed to assistive tech. */}
+        <div
+          role="group"
+          aria-label="Import mode"
+          className="inline-flex overflow-hidden rounded-control border border-line text-xs"
+        >
           <button
             type="button"
-            className={`px-2.5 py-1.5 ${mode === "csv" ? "bg-ink text-white" : "bg-surface text-muted"}`}
+            aria-pressed={mode === "csv"}
+            className={`cursor-pointer px-2.5 py-1.5 font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus ${
+              mode === "csv" ? "bg-ink text-white" : "bg-surface text-muted hover:bg-canvas hover:text-ink"
+            }`}
             onClick={() => { setMode("csv"); reset(); }}
           >
             CSV / paste rows
           </button>
           <button
             type="button"
-            className={`px-2.5 py-1.5 ${mode === "ai" ? "bg-ink text-white" : "bg-surface text-muted"}`}
+            aria-pressed={mode === "ai"}
+            className={`cursor-pointer border-l border-line px-2.5 py-1.5 font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus ${
+              mode === "ai" ? "bg-ink text-white" : "bg-surface text-muted hover:bg-canvas hover:text-ink"
+            }`}
             onClick={() => {
               setMode("ai");
               // Spray history is CSV-only — no AI-extraction model exists for it.
@@ -381,7 +395,7 @@ export default function PilotImportCard({ farmId, onImported }) {
         {filename && <span className="text-[11px] text-muted">{filename}</span>}
       </div>
 
-      {error && <p className="text-xs text-risk-fg">{error}</p>}
+      <FormError size="sm">{error}</FormError>
 
       {committed && (
         <p className="rounded bg-ok-bg px-3 py-2 text-sm text-ok-fg">

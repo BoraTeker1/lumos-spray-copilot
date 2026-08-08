@@ -18,6 +18,7 @@ import {
 import { Input, fieldClass } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { FormError } from "@/components/ui/field";
 
 const CATEGORIES = [
   "fungicide", "insecticide", "herbicide", "miticide", "fertilizer", "adjuvant",
@@ -206,7 +207,7 @@ export default function InputPlanForm({
               className={`${fieldClass} h-16`}
             />
           )}
-          {error && <p className="text-sm text-risk-fg">{error}</p>}
+          <FormError>{error}</FormError>
           </SheetBody>
           <SheetFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
