@@ -5,16 +5,6 @@ import { api, API_BASE_URL } from "@/lib/api";
 import { formatCost } from "@/lib/format";
 
 // One labelled metric tile.
-function Metric({ label, value, hint }) {
-  return (
-    <div className="rounded-control border bg-surface p-3">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="mt-0.5 text-lg font-semibold">{value}</div>
-      {hint && <div className="text-[11px] text-muted">{hint}</div>}
-    </div>
-  );
-}
-
 // Pilot Evidence: a descriptive snapshot of what the pilot has logged so far, plus a
 // link/copy for the consolidated audit packet. Framed as evidence, not a guarantee.
 // `refreshKey` re-fetches when records change.
@@ -72,20 +62,20 @@ export default function PilotEvidenceCard({ farmId, country, refreshKey, hasDocu
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Metric label="Sprays logged" value={data.total_spray_events} />
-        <Metric
+        <StatTile label="Sprays logged" value={data.total_spray_events} />
+        <StatTile
           label="Scouting-backed sprays"
           value={`${data.sprays_with_recent_scouting_count} / ${data.total_spray_events}`}
           hint={`${data.sprays_without_recent_scouting_count} scouting-light`}
         />
-        <Metric label="PHI / REI flags" value={data.phi_rei_risk_flags_count} />
-        <Metric
+        <StatTile label="PHI / REI flags" value={data.phi_rei_risk_flags_count} />
+        <StatTile
           label="Resistance flags"
           value={data.resistance_or_repeated_active_ingredient_flags_count}
           hint="repeated active ingredient"
         />
-        <Metric label="PCA review" value={reviewSummary} />
-        <Metric
+        <StatTile label="PCA review" value={reviewSummary} />
+        <StatTile
           label={
             hasDocumentedSkip
               ? "Potential avoidable cost"

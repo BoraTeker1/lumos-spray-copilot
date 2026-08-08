@@ -38,7 +38,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ActivityTimeline from "@/components/ActivityTimeline";
 import Callout from "@/components/Callout";
-import Breadcrumbs from "@/components/Breadcrumbs";
+import PageHeader from "@/components/PageHeader";
 import ComplianceCard from "@/components/ComplianceCard";
 import DataTable from "@/components/DataTable";
 import DetailPanel, {
@@ -213,15 +213,16 @@ function FarmDetail({ farmId }) {
 
   return (
     <div className="space-y-5">
-      {/* Farm header */}
-      <div>
-        <Breadcrumbs
-          items={[{ label: "Farms & fields", href: "/farms" }, { label: farm.name }]}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg font-semibold text-ink">{farm.name}</h1>
+      {/* Farm header. Uses the shared PageHeader so the most important record
+          page in the product does not carry a smaller title than every other
+          route — it was rendering at text-lg where the rest use text-title. */}
+      <PageHeader
+        breadcrumbs={[{ label: "Farms & fields", href: "/farms" }, { label: farm.name }]}
+        title={farm.name}
+        actions={<PreSpraySheet farmId={farmId} onChanged={load} />}
+        meta={
+          <>
+            <span className="flex flex-wrap items-center gap-2">
               <Badge variant={status.variant}>{status.label}</Badge>
               {isDemoFarm && (
                 <Badge variant="outline">
@@ -235,9 +236,9 @@ function FarmDetail({ farmId }) {
                   Operator reference farm — not a customer
                 </Badge>
               )}
-            </div>
+            </span>
             {/* Meta strip — real farm fields only */}
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+            <span className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
               <span className="inline-flex items-center gap-1">
                 <MapPin className="h-3.5 w-3.5" />
                 {farm.location || "—"}
@@ -262,11 +263,10 @@ function FarmDetail({ farmId }) {
                   last scouted stage: {derived.lastScoutedStage.replace(/_/g, " ")}
                 </span>
               )}
-            </div>
-          </div>
-          <PreSpraySheet farmId={farmId} onChanged={load} />
-        </div>
-      </div>
+            </span>
+          </>
+        }
+      />
 
       {/* Server-computed next action for this farm */}
       <NextActionBanner

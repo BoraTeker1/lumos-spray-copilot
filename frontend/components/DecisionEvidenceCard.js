@@ -2,18 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import StatTile from "@/components/StatTile";
 import { formatArea, formatCost } from "@/lib/format";
-
-// One labelled metric tile (same look as PilotEvidenceCard's).
-function Metric({ label, value, hint }) {
-  return (
-    <div className="rounded-control border bg-surface p-3">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="mt-0.5 text-lg font-semibold">{value}</div>
-      {hint && <div className="text-[11px] text-muted">{hint}</div>}
-    </div>
-  );
-}
 
 // Pre-spray decision workflow metrics: decisions reviewed, sprays changed/delayed/
 // avoided, conflicts caught, PCA acceptance, and the (assumption-based) review time.
@@ -39,27 +29,27 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
   return (
     <div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Metric label="Decisions checked" value={data.decisions_checked} />
-        <Metric
+        <StatTile label="Decisions checked" value={data.decisions_checked} />
+        <StatTile
           label="Decisions PCA-reviewed"
           value={`${data.decisions_reviewed} / ${data.decisions_checked}`}
         />
-        <Metric
+        <StatTile
           label="PCA acceptance rate"
           value={acceptance}
           hint="approved or edited, of reviewed"
         />
-        <Metric
+        <StatTile
           label="Sprays changed / delayed / avoided"
           value={data.sprays_changed_delayed_or_avoided}
           hint={`${o.changed_product ?? 0} changed · ${o.delayed ?? 0} delayed · ${o.avoided ?? 0} avoided`}
         />
-        <Metric
+        <StatTile
           label="Compliance conflicts caught"
           value={data.compliance_conflicts_caught}
           hint="critical PHI/REI conflicts, pre-application"
         />
-        <Metric
+        <StatTile
           label="Est. chemical cost avoided"
           value={
             data.estimated_chemical_cost_avoided
@@ -84,7 +74,7 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
             Confirmed (follow-up-backed)
           </h4>
           <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Metric
+            <StatTile
               label="Applications confirmed avoided"
               value={data.confirmed.applications_confirmed_avoided}
               hint={
@@ -98,7 +88,7 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
                     } confirmed avoided`
               }
             />
-            <Metric
+            <StatTile
               label="Rescue treatments (failures)"
               value={data.confirmed.confirmed_rescue_treatments}
               hint={
@@ -107,7 +97,7 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
                   : "reported plainly when they happen"
               }
             />
-            <Metric
+            <StatTile
               label="Confirmed delay"
               value={
                 data.confirmed.confirmed_delayed_decisions
@@ -116,7 +106,7 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
               }
               hint={`${data.confirmed.confirmed_delayed_decisions} decision(s) with a dated later application`}
             />
-            <Metric
+            <StatTile
               label="Confirmed gross spend avoided"
               value={formatCost(data.confirmed.confirmed_gross_spend_avoided, country)}
               hint="entered planned costs of confirmed-avoided applications"
@@ -140,7 +130,7 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
                 gross avoided − scouting − rescue; negatives shown as negatives
               </div>
             </div>
-            <Metric
+            <StatTile
               label="Yield / quality coverage"
               value={`${
                 (data.confirmed.yield_impact_counts?.neutral ?? 0) +
@@ -162,17 +152,17 @@ export default function DecisionEvidenceCard({ farmId, country, area, refreshKey
             Estimated (no follow-up yet — not confirmed)
           </h4>
           <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Metric
+            <StatTile
               label="Potential gross savings (unconfirmed)"
               value={formatCost(data.estimated.potential_gross_savings_unconfirmed, country)}
               hint={`${data.estimated.avoided_outcomes_without_follow_up} avoided outcome(s) still lacking follow-up`}
             />
-            <Metric
+            <StatTile
               label="Planned application cost (all real decisions)"
               value={formatCost(data.estimated.planned_application_cost_total, country)}
               hint="entered estimates only"
             />
-            <Metric
+            <StatTile
               label="Follow-up completion"
               value={
                 data.follow_up?.follow_up_completion_rate_pct != null
