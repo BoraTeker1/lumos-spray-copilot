@@ -338,7 +338,7 @@ export default function ApplicationsPage() {
               columns={columns}
               rows={rows}
               rowKey={(s) => s.id}
-              minWidth={980}
+              minWidth={860}
               onRowClick={(s) => setSelectedId((cur) => (cur === s.id ? null : s.id))}
               selectedKey={selected?.id ?? null}
               empty={

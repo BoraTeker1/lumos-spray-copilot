@@ -7,8 +7,9 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 // columns: [{ key, header, render(row), align, priority, width, nowrap }]
 // - align: "left" | "right"
 // - priority: "primary" | "secondary" | "tertiary" | "action"
-//   * "secondary" columns hide below lg and move into an expandable per-row
+//   * "secondary" columns hide below xl and move into an expandable per-row
 //     details panel (accessible button), so they are never silently clipped.
+//     (Below xl rather than lg — see responsiveCls for why.)
 //   * "tertiary" is the same idea one breakpoint later (hidden below 2xl). A
 //     table with ten-plus columns cannot fit them all on a laptop: without a
 //     third tier the only outcomes are a horizontal scrollbar on the primary
@@ -19,9 +20,11 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 //     in the middle of the list renders the button mid-table with data columns
 //     trailing after it — which is exactly what every call site here used to
 //     do, because an omitted priority fell through to "primary".
-// - width: a CSS width applied to the <col>, so a table's columns are budgeted
-//   deliberately instead of being distributed by content length. Long free-text
-//   cells otherwise steal width from short ones and every short cell wraps.
+// - width: a CSS width, applied under table-layout:fixed, so a table's columns
+//   are budgeted deliberately instead of being distributed by content length.
+//   Long free-text cells otherwise steal width from short ones and every short
+//   cell wraps. Omit widths entirely on a small table — auto layout sizes a
+//   handful of columns to their content and cannot overflow a fixed cell.
 // - nowrap: keep the cell on one line (dates, rates, badges).
 // - The wrapper owns overflow-x-auto as a deliberate, visible fallback only.
 //
@@ -68,11 +71,17 @@ export default function DataTable({
       return next;
     });
 
-  // Secondary columns collapse below lg, tertiary below 2xl; nothing else does.
+  // Secondary columns collapse below xl, tertiary below 2xl; nothing else does.
   // Written as literals so Tailwind's content scanner emits both class pairs.
+  //
+  // These are one breakpoint higher than they look like they should be, on
+  // purpose: the app always renders a ~250px sidebar, so at viewport 1024 the
+  // table's container is only ~940px. Keyed off `lg` the secondary columns
+  // reappeared before there was room for them and pushed the pinned action
+  // column off the right edge.
   const responsiveCls = (col) =>
     col.priority === "secondary"
-      ? "hidden lg:table-cell"
+      ? "hidden xl:table-cell"
       : col.priority === "tertiary"
         ? "hidden 2xl:table-cell"
         : "";
@@ -87,13 +96,16 @@ export default function DataTable({
       .filter(Boolean)
       .join(" ");
 
+  // Headers WRAP; cells honour their column's own `nowrap`. Under table-fixed a
+  // nowrap header longer than its budgeted column has nowhere to go and clips
+  // mid-word — which is how "Source authority" came to render as
+  // "SOURCE AUTHORI". A two-line header is the honest outcome.
   const headCls = (col) =>
     [
       HEADER_CLS,
-      "border-y border-line",
+      "border-y border-line align-bottom",
       stickyHeader ? "sticky top-0 z-10" : "",
       col.align === "right" ? "text-right" : "",
-      "whitespace-nowrap",
       responsiveCls(col),
     ]
       .filter(Boolean)
@@ -117,7 +129,7 @@ export default function DataTable({
           <tr>
             {hasSecondary && (
               <th
-                className={`w-8 border-y border-line lg:hidden ${
+                className={`w-8 border-y border-line xl:hidden ${
                   stickyHeader ? "sticky top-0 z-10 bg-canvas" : ""
                 }`}
                 aria-label="Details"
@@ -172,7 +184,7 @@ export default function DataTable({
               <Fragment key={key}>
                 <tr className={rowCls} {...rowProps}>
                   {hasSecondary && (
-                    <td className={`px-1 py-3.5 lg:hidden ${accentCls}`}>
+                    <td className={`px-1 py-3 xl:hidden ${accentCls}`}>
                       <button
                         type="button"
                         onClick={(e) => {
@@ -203,7 +215,7 @@ export default function DataTable({
                   ))}
                 </tr>
                 {hasSecondary && isOpen && (
-                  <tr className="border-b border-line/60 lg:hidden">
+                  <tr className="border-b border-line/60 xl:hidden">
                     <td />
                     <td colSpan={primary.length + action.length} className="px-3 pb-3.5">
                       <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-control bg-canvas p-3 text-xs">
