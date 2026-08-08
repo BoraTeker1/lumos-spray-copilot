@@ -1,9 +1,11 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FlaskConical, Package, ShoppingCart, TriangleAlert } from "lucide-react";
+import { ChevronRight, FlaskConical, Package, ShoppingCart, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { useFarmContext } from "@/lib/farm-context";
 import { formatCost, formatDate } from "@/lib/format";
@@ -132,6 +134,7 @@ function planColumns() {
     },
     {
       key: "action",
+      priority: "action",
       header: "",
       align: "right",
       render: (p) => (
@@ -218,6 +221,7 @@ function orderColumns(country) {
     },
     {
       key: "action",
+      priority: "action",
       header: "",
       align: "right",
       render: (o) => (
@@ -271,7 +275,7 @@ function InputsPage() {
     [plans, activeFilter]
   );
 
-  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading input plans…" />;
   if (!activeFarm) {
     return (
       <p className="text-sm text-muted">
@@ -288,13 +292,15 @@ function InputsPage() {
         meta={
           <span>Turn PCA-reviewed decisions into supplier-ready input orders.</span>
         }
-        actions={<InputPlanForm farmId={farmId} onCreated={load} />}
+        actions={
+          <InputPlanForm farmId={farmId} onCreated={load} triggerVariant="default" />
+        }
       />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -302,12 +308,33 @@ function InputsPage() {
           <TabsTrigger value="plans">Input plans</TabsTrigger>
           <TabsTrigger value="orders">Orders</TabsTrigger>
         </TabsList>
-        <p className="mt-2 text-xs text-muted">
-          Draft plan → quotes requested → quotes received → quote selected →
-          financing (optional) → order confirmed → delivered → applied. Supplier
-          quotes and financing terms are concierge-entered; no money moves through
-          Lumos.
-        </p>
+        <div className="mt-3">
+          <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
+            {[
+              "Draft plan",
+              "Quotes requested",
+              "Quotes received",
+              "Quote selected",
+              "Financing (optional)",
+              "Order confirmed",
+              "Delivered",
+              "Applied",
+            ].map((step, i, all) => (
+              <li key={step} className="flex items-center gap-1.5">
+                <span className="rounded-full border border-line bg-surface px-2.5 py-0.5 text-[11px] font-medium text-muted">
+                  {step}
+                </span>
+                {i < all.length - 1 && (
+                  <ChevronRight className="h-3 w-3 text-line" aria-hidden />
+                )}
+              </li>
+            ))}
+          </ol>
+          <p className="mt-2 text-meta text-muted">
+            Supplier quotes and financing terms are concierge-entered; no money
+            moves through Lumos.
+          </p>
+        </div>
 
         <TabsContent value="plans">
           <Card>
@@ -328,6 +355,7 @@ function InputsPage() {
                 minWidth={680}
                 empty={
                   <EmptyState
+                    size="sm"
                     icon={ShoppingCart}
                     title={
                       plans.length === 0
@@ -356,6 +384,7 @@ function InputsPage() {
                 minWidth={680}
                 empty={
                   <EmptyState
+                    size="sm"
                     icon={Package}
                     title="No orders yet"
                     description="An order is created from a plan's selected quote and tracked here through delivery and application."
@@ -372,7 +401,7 @@ function InputsPage() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="text-sm text-muted">Loading…</p>}>
+    <Suspense fallback={<LoadingState message="Loading input plans…" />}>
       <InputsPage />
     </Suspense>
   );

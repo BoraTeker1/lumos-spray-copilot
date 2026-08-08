@@ -14,42 +14,41 @@ import { ShieldCheck } from "lucide-react";
 // Verdict = the historical engine decision; State = workflow (or the recorded
 // outcome once resolved); the action button is the SPECIFIC current next step
 // (server-derived current_next_action), never a generic "Open".
-export function decisionColumns({ includeNextActionText = false } = {}) {
+//
+// There is deliberately NO separate "next action" text column: it rendered
+// `nextActionLabel(current_next_action)` — the identical string the action
+// button already shows — so every row printed its next step twice, side by side.
+// `compact` is for the dashboard rail, which is ~690px wide inside a
+// two-column page. The secondary columns are hidden by a VIEWPORT breakpoint,
+// which cannot see that its container is narrow — so on a wide screen they
+// stayed visible in a narrow column and the fixed-width cells overlapped each
+// other. The caller knows how much room it has; the media query does not.
+export function decisionColumns({ compact = false } = {}) {
   const cols = [
     {
       key: "product",
       header: "Decision",
+      width: compact ? "30%" : "20%",
       render: (p) => (
         <div className="min-w-0">
-          <div className="font-medium text-ink">{p.product_name}</div>
+          <div className="truncate font-medium text-ink">{p.product_name}</div>
           {p.active_ingredient && (
-            <div className="text-xs text-muted">{p.active_ingredient}</div>
+            <div className="truncate text-xs text-muted">{p.active_ingredient}</div>
           )}
         </div>
       ),
     },
     {
-      key: "field",
-      header: "Field",
-      priority: "secondary",
-      render: (p) => <span className="text-ink">{p.field_block || "—"}</span>,
-    },
-    {
-      key: "target",
-      header: "Target",
-      priority: "secondary",
-      render: (p) => (
-        <span className="text-xs text-muted">{p.target_pest_or_disease || "—"}</span>
-      ),
-    },
-    {
       key: "verdict",
       header: "Verdict",
+      width: compact ? "18%" : "13%",
+      nowrap: true,
       render: (p) => <StatusBadge kind="verdict" value={p.decision_outcome} />,
     },
     {
       key: "state",
       header: "State",
+      width: compact ? "18%" : "13%",
       render: (p) =>
         p.workflow_state === "resolved" ? (
           <div className="flex flex-col items-start gap-1">
@@ -65,35 +64,48 @@ export function decisionColumns({ includeNextActionText = false } = {}) {
     {
       key: "planned",
       header: "Planned",
+      width: compact ? "16%" : "11%",
+      nowrap: true,
       render: (p) => (
         <span className="whitespace-nowrap text-ink">{formatDate(p.intended_date)}</span>
       ),
     },
-  ];
-  if (includeNextActionText) {
-    cols.push({
-      key: "next",
-      header: "Next action",
-      priority: "secondary",
+    {
+      key: "action",
+      priority: "action",
+      header: <span className="sr-only">Action</span>,
+      align: "right",
       render: (p) => (
-        <span className="text-xs text-muted">
-          {p.current_next_action === "none" ? "—" : nextActionLabel(p.current_next_action)}
-        </span>
+        <Link href={`/decisions/${p.id}`}>
+          <Button variant="secondary" size="sm">
+            {nextActionLabel(p.current_next_action)}
+          </Button>
+        </Link>
       ),
-    });
+    },
+  ];
+  if (!compact) {
+    cols.splice(
+      1,
+      0,
+      {
+        key: "field",
+        header: "Field",
+        priority: "secondary",
+        width: "8%",
+        render: (p) => <span className="text-ink">{p.field_block || "—"}</span>,
+      },
+      {
+        key: "target",
+        header: "Target",
+        priority: "secondary",
+        width: "16%",
+        render: (p) => (
+          <span className="text-xs text-muted">{p.target_pest_or_disease || "—"}</span>
+        ),
+      }
+    );
   }
-  cols.push({
-    key: "action",
-    header: <span className="sr-only">Action</span>,
-    align: "right",
-    render: (p) => (
-      <Link href={`/decisions/${p.id}`}>
-        <Button variant="secondary" size="sm">
-          {nextActionLabel(p.current_next_action)}
-        </Button>
-      </Link>
-    ),
-  });
   return cols;
 }
 
@@ -102,10 +114,10 @@ export default function DecisionQueue({ planned = [], limit, viewAllHref, emptyS
   return (
     <div>
       <DataTable
-        columns={decisionColumns()}
+        columns={decisionColumns({ compact: true })}
         rows={shown}
         rowKey={(p) => p.id}
-        minWidth={640}
+        minWidth={560}
         empty={
           emptyState || (
             <EmptyState

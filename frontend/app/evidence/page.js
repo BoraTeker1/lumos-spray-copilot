@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
@@ -262,6 +264,7 @@ export default function EvidencePage() {
     },
     {
       key: "action",
+      priority: "action",
       header: <span className="sr-only">Action</span>,
       align: "right",
       render: (p) => (
@@ -276,7 +279,7 @@ export default function EvidencePage() {
     },
   ];
 
-  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading evidence…" />;
   if (!activeFarm) {
     return (
       <p className="text-sm text-muted">
@@ -322,9 +325,9 @@ export default function EvidencePage() {
       />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       {/* Outer view: pilot evidence vs. the compliance attention view (the former
@@ -347,22 +350,29 @@ export default function EvidencePage() {
 
         <TabsContent value="evidence">
           <div className="space-y-6">
-      {/* Explicit scope control — simulated and real evidence never mix. */}
+      {/* Explicit scope control — simulated and real evidence never mix.
+          Segmented, not underlined: this sits inside the Evidence view and must
+          not read as a peer of the page-level Evidence/Compliance switch. */}
       <Tabs value={scope || "real"} onValueChange={setScope}>
-        <TabsList>
-          <TabsTrigger value="demo">
-            <FlaskConical className="h-4 w-4" />
-            Pilot demo (simulated)
-            <span className="text-xs text-muted">
-              {demoMetrics?.decisions_checked ?? 0}
-            </span>
-          </TabsTrigger>
-          <TabsTrigger value="real">
-            <ClipboardCheck className="h-4 w-4" />
-            Real operations
-            <span className="text-xs text-muted">{realChecked}</span>
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+            Dataset
+          </span>
+          <TabsList variant="segmented">
+            <TabsTrigger variant="segmented" value="demo">
+              <FlaskConical className="h-4 w-4" />
+              Pilot demo (simulated)
+              <span className="tabular text-xs text-muted">
+                {demoMetrics?.decisions_checked ?? 0}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger variant="segmented" value="real">
+              <ClipboardCheck className="h-4 w-4" />
+              Real operations
+              <span className="tabular text-xs text-muted">{realChecked}</span>
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="demo">
           {demoMetrics?.decisions_checked > 0 ? (
@@ -443,6 +453,7 @@ export default function EvidencePage() {
             minWidth={760}
             empty={
               <EmptyState
+                size="sm"
                 icon={ListChecks}
                 title={
                   scopedRows.length === 0

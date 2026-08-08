@@ -162,6 +162,7 @@ export default function QuoteComparisonTable({
     },
     {
       key: "action",
+      priority: "action",
       header: "",
       align: "right",
       render: (q) =>
@@ -189,6 +190,7 @@ export default function QuoteComparisonTable({
         minWidth={760}
         empty={
           <EmptyState
+            size="sm"
             icon={FileText}
             title="No quotes yet"
             description="Quotes are concierge-entered against this plan and appear here for side-by-side comparison."

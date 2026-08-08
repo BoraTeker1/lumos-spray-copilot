@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Droplets, FileCheck, FlaskConical, Info, Plus, ShieldCheck } from "lucide-react";
@@ -92,10 +94,17 @@ export default function ApplicationsPage() {
 
   const fields = [...new Set(sprays.map((s) => s.field_block).filter(Boolean))].sort();
 
+  // Column budget. Widths are declared rather than left to content length:
+  // without them the free-text Product and Target cells were squeezed by the
+  // short ones and wrapped to four lines each, turning a one-line record into a
+  // 100px row. Provenance (source, confidence, order link) lives in the detail
+  // rail on row click, so it is a secondary column here rather than a primary one.
   const columns = [
     {
       key: "date",
       header: "Date",
+      width: "12%",
+      nowrap: true,
       render: (s) => (
         <span className="whitespace-nowrap text-ink">
           {formatDate(s.application_date)}
@@ -105,16 +114,20 @@ export default function ApplicationsPage() {
     {
       key: "field",
       header: "Field",
+      width: "6%",
       render: (s) => <span className="text-ink">{s.field_block || "—"}</span>,
     },
     {
       key: "product",
       header: "Product",
+      width: "19%",
       render: (s) => (
         <div className="min-w-0">
-          <div className="font-medium text-ink">{s.product_name}</div>
+          <div className="truncate font-medium text-ink" title={s.product_name}>
+            {s.product_name}
+          </div>
           {(s.active_ingredient || s.dose) && (
-            <div className="text-xs text-muted">
+            <div className="truncate text-xs text-muted">
               {[s.active_ingredient, s.dose].filter(Boolean).join(" · ")}
             </div>
           )}
@@ -122,9 +135,20 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "target",
+      header: "Target",
+      priority: "secondary",
+      width: "14%",
+      render: (s) => (
+        <span className="text-xs text-muted">{s.target_pest_or_disease || "—"}</span>
+      ),
+    },
+    {
       key: "rate",
       header: "Rate / acres",
       priority: "secondary",
+      width: "12%",
+      nowrap: true,
       render: (s) => (
         <span className="whitespace-nowrap text-xs text-muted">
           {s.rate_amount != null ? `${s.rate_amount} ${s.rate_unit || ""}`.trim() : "—"}
@@ -134,17 +158,11 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "target",
-      header: "Target",
-      priority: "secondary",
-      render: (s) => (
-        <span className="text-xs text-muted">{s.target_pest_or_disease || "—"}</span>
-      ),
-    },
-    {
       key: "phi",
       header: "PHI / REI",
       priority: "secondary",
+      width: "8%",
+      nowrap: true,
       render: (s) => (
         <span className="whitespace-nowrap text-ink">
           {s.pre_harvest_interval_days != null ? `${s.pre_harvest_interval_days}d` : "—"}
@@ -156,7 +174,8 @@ export default function ApplicationsPage() {
     {
       key: "source",
       header: "Source",
-      priority: "secondary",
+      priority: "tertiary",
+      width: "9%",
       render: (s) => (
         <span className="text-xs text-muted">
           {(s.data_source || "—").replace(/_/g, " ")}
@@ -165,8 +184,10 @@ export default function ApplicationsPage() {
     },
     {
       key: "order",
-      header: "Source order",
-      priority: "secondary",
+      header: "Order",
+      priority: "tertiary",
+      width: "7%",
+      nowrap: true,
       // Only applications procured through Inputs & finance carry an order link —
       // most applications are not procured through Lumos, and that stays visible.
       render: (s) =>
@@ -175,7 +196,7 @@ export default function ApplicationsPage() {
             href={`/inputs/orders/${s.source_order_id}`}
             className="text-xs font-medium text-leaf-700 hover:underline"
           >
-            Order #{s.source_order_id}
+            #{s.source_order_id}
           </Link>
         ) : (
           <span className="text-xs text-muted">—</span>
@@ -184,6 +205,8 @@ export default function ApplicationsPage() {
     {
       key: "doc",
       header: "Documentation",
+      width: "12%",
+      nowrap: true,
       render: (s) => {
         const decision = decisionBySprayId.get(s.id);
         return decision ? (
@@ -199,6 +222,8 @@ export default function ApplicationsPage() {
       key: "cost",
       header: "Cost",
       align: "right",
+      width: "7%",
+      nowrap: true,
       render: (s) => (
         <span className="whitespace-nowrap font-medium text-ink">
           {s.cost != null ? formatCost(s.cost, activeFarm?.country) : "—"}
@@ -207,6 +232,7 @@ export default function ApplicationsPage() {
     },
     {
       key: "action",
+      priority: "action",
       header: <span className="sr-only">Action</span>,
       align: "right",
       render: (s) => {
@@ -228,7 +254,7 @@ export default function ApplicationsPage() {
     },
   ];
 
-  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading applications…" />;
   if (!activeFarm) {
     return (
       <p className="text-sm text-muted">
@@ -276,17 +302,16 @@ export default function ApplicationsPage() {
       />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       {/* Entered values are not label values. Stated once, above the table. */}
-      <div className="flex items-start gap-2 rounded-card border border-warn-line bg-warn-bg px-4 py-2.5 text-sm text-warn-fg">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <Callout tone="warn" icon={Info}>
         PHI and REI values below are entered per application; confirm against the
         product label.
-      </div>
+      </Callout>
 
       <div
         className={`grid grid-cols-1 gap-4 ${
@@ -313,11 +338,12 @@ export default function ApplicationsPage() {
               columns={columns}
               rows={rows}
               rowKey={(s) => s.id}
-              minWidth={760}
+              minWidth={980}
               onRowClick={(s) => setSelectedId((cur) => (cur === s.id ? null : s.id))}
               selectedKey={selected?.id ?? null}
               empty={
                 <EmptyState
+                  size="sm"
                   icon={Droplets}
                   title={
                     sprays.length === 0

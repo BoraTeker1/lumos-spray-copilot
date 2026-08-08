@@ -8,6 +8,7 @@ import { useDemoTag, useFarm } from "@/lib/farm-context";
 import { formatCost } from "@/lib/format";
 import { RECORDED_OUTCOME_LABELS, REVIEW_STATE_LABELS } from "@/lib/labels";
 import { RECORDED_OUTCOME_TONES, REVIEW_STATE_TONES, tone } from "@/lib/tones";
+import Callout from "@/components/Callout";
 import DecisionResult, { OUTCOME_META } from "@/components/DecisionResult";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -233,37 +234,58 @@ export function OutcomeRecorder({ planned, onChanged }) {
   }
 
   return (
-    <div className="mt-2 space-y-1.5">
+    // Every field is LABELLED and the pair STACKS. This form renders in a 320px
+    // context rail, where two inputs side by side clipped their own placeholders
+    // to "Changed to produ" / "…its active ingredi" — and a placeholder that is
+    // also the only label disappears the moment someone types.
+    <div className="mt-2 space-y-2.5">
       <div className="text-xs font-semibold text-ink">What actually happened?</div>
-      <input
-        className={inputCls}
-        placeholder="Reason (required unless sprayed as planned)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-      />
-      <label className="block text-xs text-muted">
-        Outcome date (optional — defaults to today; the server rejects impossible
-        chronology, e.g. an application before the intended date)
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-muted">
+          Reason <span className="font-normal">(required unless sprayed as planned)</span>
+        </span>
+        <input
+          className={inputCls}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-muted">
+          Outcome date <span className="font-normal">(optional)</span>
+        </span>
         <input
           type="date"
           className={inputCls}
           value={outcomeDate}
           onChange={(e) => setOutcomeDate(e.target.value)}
         />
+        <span className="mt-1 block text-[11px] text-muted">
+          Defaults to today. The server rejects impossible chronology, e.g. an
+          application before the intended date.
+        </span>
       </label>
-      <div className="grid grid-cols-2 gap-1.5">
-        <input
-          className={inputCls}
-          placeholder="Changed to product… (changed product only)"
-          value={changedProduct}
-          onChange={(e) => setChangedProduct(e.target.value)}
-        />
-        <input
-          className={inputCls}
-          placeholder="…its active ingredient"
-          value={changedAi}
-          onChange={(e) => setChangedAi(e.target.value)}
-        />
+      <div className="grid grid-cols-1 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-muted">
+            Changed to product <span className="font-normal">(if changed)</span>
+          </span>
+          <input
+            className={inputCls}
+            value={changedProduct}
+            onChange={(e) => setChangedProduct(e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-muted">
+            Its active ingredient
+          </span>
+          <input
+            className={inputCls}
+            value={changedAi}
+            onChange={(e) => setChangedAi(e.target.value)}
+          />
+        </label>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {RECORDABLE_OUTCOMES.map((outcome) => (
@@ -283,12 +305,31 @@ export function OutcomeRecorder({ planned, onChanged }) {
         ))}
       </div>
       {reviewGateActive && (
-        <p className="text-[11px] text-info-fg">
+        <p className="rounded-control border border-info-line bg-info-bg px-2.5 py-1.5 text-[11px] text-info-fg">
           Applied outcomes unlock after a PCA approves or edits this decision.
         </p>
       )}
       {error && <p className="text-sm text-risk-fg">{error}</p>}
     </div>
+  );
+}
+
+// Labelled form field. Every control in this panel used its placeholder as its
+// only label, so the field name vanished the moment someone typed and the two
+// side-by-side inputs in the 320px rail clipped theirs outright. A `*` alone is
+// not an accessible required marker, so the word is in the label text too.
+function Field({ label, hint, required = false, children }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-ink">
+        {label}
+        {required && (
+          <span className="ml-1 font-normal text-muted">(required)</span>
+        )}
+      </span>
+      {children}
+      {hint && <span className="mt-1 block text-[11px] text-muted">{hint}</span>}
+    </label>
   );
 }
 
@@ -541,26 +582,27 @@ export default function PreSpraySheet({ farmId, onChanged }) {
         </SheetHeader>
 
         {/* Mobile-first: two required fields + target; everything else is collapsible. */}
-        <form onSubmit={submit} className="space-y-2.5">
-          <input
-            className={inputCls}
-            placeholder="Product name *"
-            required
-            value={form.product_name}
-            onChange={(e) => update("product_name", e.target.value)}
-          />
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Product name" required>
+            <input
+              className={inputCls}
+              required
+              value={form.product_name}
+              onChange={(e) => update("product_name", e.target.value)}
+            />
+          </Field>
           {/* The join key to the label library. Without it no label check can run,
               which is why it sits here rather than behind the collapsed section. */}
-          <input
-            className={inputCls}
-            placeholder="EPA Reg. No. (unlocks label checks)"
-            value={form.epa_reg_no}
-            onChange={(e) => update("epa_reg_no", e.target.value)}
-            onBlur={lookUpLabel}
-          />
+          <Field label="EPA Reg. No." hint="Unlocks the label checks.">
+            <input
+              className={inputCls}
+              value={form.epa_reg_no}
+              onChange={(e) => update("epa_reg_no", e.target.value)}
+              onBlur={lookUpLabel}
+            />
+          </Field>
           <LabelResolutionNote resolution={labelResolution} />
-          <label className="block text-xs text-muted">
-            Intended date *
+          <Field label="Intended date" required>
             <input
               type="date"
               className={inputCls}
@@ -568,63 +610,74 @@ export default function PreSpraySheet({ farmId, onChanged }) {
               value={form.intended_date}
               onChange={(e) => update("intended_date", e.target.value)}
             />
-          </label>
-          <input
-            className={inputCls}
-            placeholder="Target pest / disease (links scouting evidence)"
-            value={form.target_pest_or_disease}
-            onChange={(e) => update("target_pest_or_disease", e.target.value)}
-          />
+          </Field>
+          <Field
+            label="Target pest / disease"
+            hint="Links this check to your scouting evidence."
+          >
+            <input
+              className={inputCls}
+              value={form.target_pest_or_disease}
+              onChange={(e) => update("target_pest_or_disease", e.target.value)}
+            />
+          </Field>
 
           <details className="rounded-control border border-line p-2.5">
             <summary className="cursor-pointer select-none text-xs font-medium text-muted">
               Compliance values — PHI, REI, active ingredient, cost, who entered them
             </summary>
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input
-                className={inputCls}
-                placeholder="Active ingredient"
-                value={form.active_ingredient}
-                onChange={(e) => update("active_ingredient", e.target.value)}
-              />
-              <input
-                type="number"
-                min="0"
-                className={inputCls}
-                placeholder="PHI (days, from label)"
-                value={form.pre_harvest_interval_days}
-                onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
-              />
-              <input
-                type="number"
-                min="0"
-                className={inputCls}
-                placeholder="REI (hours, from label)"
-                value={form.re_entry_interval_hours}
-                onChange={(e) => update("re_entry_interval_hours", e.target.value)}
-              />
-              <input
-                type="number"
-                step="0.01"
-                className={inputCls}
-                placeholder="Estimated cost"
-                value={form.estimated_cost}
-                onChange={(e) => update("estimated_cost", e.target.value)}
-              />
-              <select
-                className={inputCls}
-                value={form.values_source}
-                onChange={(e) => update("values_source", e.target.value)}
-              >
-                <option value="grower_entered">Values entered by grower</option>
-                <option value="pca_entered">Values entered by PCA</option>
-              </select>
-              <input
-                className={inputCls}
-                placeholder="Entered by (name)"
-                value={form.values_entered_by}
-                onChange={(e) => update("values_entered_by", e.target.value)}
-              />
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Active ingredient">
+                <input
+                  className={inputCls}
+                  value={form.active_ingredient}
+                  onChange={(e) => update("active_ingredient", e.target.value)}
+                />
+              </Field>
+              <Field label="PHI (days, from label)">
+                <input
+                  type="number"
+                  min="0"
+                  className={inputCls}
+                  value={form.pre_harvest_interval_days}
+                  onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
+                />
+              </Field>
+              <Field label="REI (hours, from label)">
+                <input
+                  type="number"
+                  min="0"
+                  className={inputCls}
+                  value={form.re_entry_interval_hours}
+                  onChange={(e) => update("re_entry_interval_hours", e.target.value)}
+                />
+              </Field>
+              <Field label="Estimated cost">
+                <input
+                  type="number"
+                  step="0.01"
+                  className={inputCls}
+                  value={form.estimated_cost}
+                  onChange={(e) => update("estimated_cost", e.target.value)}
+                />
+              </Field>
+              <Field label="Values entered by">
+                <select
+                  className={inputCls}
+                  value={form.values_source}
+                  onChange={(e) => update("values_source", e.target.value)}
+                >
+                  <option value="grower_entered">Grower</option>
+                  <option value="pca_entered">PCA</option>
+                </select>
+              </Field>
+              <Field label="Name of the person entering">
+                <input
+                  className={inputCls}
+                  value={form.values_entered_by}
+                  onChange={(e) => update("values_entered_by", e.target.value)}
+                />
+              </Field>
             </div>
             <p className="mt-1.5 text-[11px] text-muted">
               Only PCA-entered values can make a BLOCK PCA-authorized; grower-entered
@@ -633,14 +686,16 @@ export default function PreSpraySheet({ farmId, onChanged }) {
             </p>
           </details>
 
-          {error && <p className="text-sm text-risk-fg">{error}</p>}
-          <Button type="submit" disabled={saving} className="w-full sm:w-auto">
-            {saving ? "Checking…" : "Run the decision check"}
-          </Button>
-          <p className="text-[11px] text-muted">
+          {error && <Callout tone="risk">{error}</Callout>}
+          {/* The caveat sits ABOVE the button: it qualifies what pressing the
+              button will do, and below it was read after the decision to press. */}
+          <p className="border-t border-line pt-3 text-[11px] text-muted">
             Leaving PHI, REI, harvest date, or the active ingredient blank never yields an
             APPROVE — checks that can’t run escalate to PCA review.
           </p>
+          <Button type="submit" disabled={saving} size="lg" className="w-full">
+            {saving ? "Checking…" : "Run the decision check"}
+          </Button>
         </form>
 
         {lastCheck && (

@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -95,12 +97,12 @@ export default function OperationsPage() {
     load();
   }, [load]);
 
-  if (farmsLoading) return <p className="text-sm text-muted">Loading farms…</p>;
+  if (farmsLoading) return <LoadingState message="Loading farms…" />;
   if (farmsError) {
     return (
-      <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+      <Callout tone="risk">
         {farmsError} — is the backend running on <code>http://localhost:8000</code>?
-      </div>
+      </Callout>
     );
   }
   if (!activeFarm) {
@@ -244,9 +246,9 @@ export default function OperationsPage() {
       />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       {overview && (
@@ -503,7 +505,7 @@ export default function OperationsPage() {
               <ListChecks className="h-4 w-4 text-leaf" />
               Full farm record
             </span>
-            <ArrowRight className="h-3.5 w-3.5 text-line" />
+            <ArrowRight className="h-4 w-4 text-muted" />
           </Link>
         </div>
       </div>

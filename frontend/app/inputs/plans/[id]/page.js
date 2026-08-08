@@ -1,5 +1,6 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -17,6 +18,7 @@ import { api } from "@/lib/api";
 import { formatCost, formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import Callout from "@/components/Callout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import DataTable from "@/components/DataTable";
 import FinancingOfferCard from "@/components/FinancingOfferCard";
@@ -67,12 +69,12 @@ export default function InputPlanDetailPage({ params }) {
 
   if (error && !plan) {
     return (
-      <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+      <Callout tone="risk">
         {error}
-      </div>
+      </Callout>
     );
   }
-  if (!plan || !farm) return <p className="text-sm text-muted">Loading input plan…</p>;
+  if (!plan || !farm) return <LoadingState message="Loading input plan…" />;
 
   const country = farm.country;
   const isDraft = plan.status === "draft";
@@ -148,6 +150,7 @@ export default function InputPlanDetailPage({ params }) {
     },
     {
       key: "action",
+      priority: "action",
       header: "",
       align: "right",
       render: (i) =>
@@ -240,9 +243,9 @@ export default function InputPlanDetailPage({ params }) {
       </div>
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       <SectionCard

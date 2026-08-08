@@ -4,10 +4,25 @@ import { Fragment, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 // Shared operational table.
-// columns: [{ key, header, render(row), align: "left"|"right", priority: "primary"|"secondary" }]
-// - "secondary" columns hide below lg and move into an expandable per-row details
-//   panel (accessible button), so critical columns (incl. the action column, always
-//   last) are never silently clipped.
+// columns: [{ key, header, render(row), align, priority, width, nowrap }]
+// - align: "left" | "right"
+// - priority: "primary" | "secondary" | "tertiary" | "action"
+//   * "secondary" columns hide below lg and move into an expandable per-row
+//     details panel (accessible button), so they are never silently clipped.
+//   * "tertiary" is the same idea one breakpoint later (hidden below 2xl). A
+//     table with ten-plus columns cannot fit them all on a laptop: without a
+//     third tier the only outcomes are a horizontal scrollbar on the primary
+//     record table or every free-text cell wrapping to three lines. Reach for
+//     it only for columns that are mostly "—" or that the detail rail repeats.
+//   * "action" columns are PINNED LAST in DOM order, after the data columns,
+//     and never collapse. Without this a page that declares its action column
+//     in the middle of the list renders the button mid-table with data columns
+//     trailing after it — which is exactly what every call site here used to
+//     do, because an omitted priority fell through to "primary".
+// - width: a CSS width applied to the <col>, so a table's columns are budgeted
+//   deliberately instead of being distributed by content length. Long free-text
+//   cells otherwise steal width from short ones and every short cell wraps.
+// - nowrap: keep the cell on one line (dates, rates, badges).
 // - The wrapper owns overflow-x-auto as a deliberate, visible fallback only.
 //
 // Row selection is OPT-IN via `onRowClick`. A table without it renders no hover
@@ -15,7 +30,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 // clickable, because a row that appears interactive and does nothing reads as a
 // broken app.
 const HEADER_CLS =
-  "bg-surface px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted";
+  "bg-canvas px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted";
 
 export default function DataTable({
   columns,
@@ -28,10 +43,20 @@ export default function DataTable({
   stickyHeader = true,
 }) {
   const [expanded, setExpanded] = useState(() => new Set());
+  const COLLAPSIBLE = ["secondary", "tertiary"];
   const secondary = columns.filter((c) => c.priority === "secondary");
-  const primary = columns.filter((c) => c.priority !== "secondary");
-  const hasSecondary = secondary.length > 0;
+  const tertiary = columns.filter((c) => c.priority === "tertiary");
+  const action = columns.filter((c) => c.priority === "action");
+  const primary = columns.filter(
+    (c) => !COLLAPSIBLE.includes(c.priority) && c.priority !== "action"
+  );
+  // Everything that can drop out of the row must be recoverable from the
+  // expander, or a filter/sort decision would be made on invisible data.
+  const collapsible = [...secondary, ...tertiary];
+  const hasSecondary = collapsible.length > 0;
   const interactive = typeof onRowClick === "function";
+  // Render order is the visual order: primary, then collapsible, then actions.
+  const ordered = [...primary, ...collapsible, ...action];
 
   if (!rows.length) return empty || null;
 
@@ -43,36 +68,66 @@ export default function DataTable({
       return next;
     });
 
+  // Secondary columns collapse below lg, tertiary below 2xl; nothing else does.
+  // Written as literals so Tailwind's content scanner emits both class pairs.
+  const responsiveCls = (col) =>
+    col.priority === "secondary"
+      ? "hidden lg:table-cell"
+      : col.priority === "tertiary"
+        ? "hidden 2xl:table-cell"
+        : "";
+
   const cellCls = (col) =>
-    `px-3 py-3.5 align-top text-sm ${col.align === "right" ? "text-right tabular" : ""}`;
+    [
+      "px-3 py-3 align-middle text-sm",
+      col.align === "right" ? "text-right tabular" : "",
+      col.nowrap || col.priority === "action" ? "whitespace-nowrap" : "",
+      responsiveCls(col),
+    ]
+      .filter(Boolean)
+      .join(" ");
 
   const headCls = (col) =>
-    `${HEADER_CLS} ${stickyHeader ? "sticky top-0 z-10" : ""} ${
-      col.align === "right" ? "text-right" : ""
-    }`;
+    [
+      HEADER_CLS,
+      "border-y border-line",
+      stickyHeader ? "sticky top-0 z-10" : "",
+      col.align === "right" ? "text-right" : "",
+      "whitespace-nowrap",
+      responsiveCls(col),
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+  // Declared widths only bind under table-layout:fixed. They are applied to the
+  // <th> rather than a <colgroup> on purpose: a hidden <col> does not reliably
+  // drop its width, so a collapsed column would keep reserving space, while a
+  // hidden <th> leaves fixed layout to redistribute the remainder correctly.
+  const hasWidths = columns.some((c) => c.width);
 
   return (
     <div className="w-full overflow-x-auto">
-      <table className="w-full border-separate border-spacing-0" style={minWidth ? { minWidth } : undefined}>
+      <table
+        className={`w-full border-separate border-spacing-0 ${
+          hasWidths ? "table-fixed" : ""
+        }`}
+        style={minWidth ? { minWidth } : undefined}
+      >
         <thead>
           <tr>
             {hasSecondary && (
               <th
-                className={`w-8 border-b border-line lg:hidden ${
-                  stickyHeader ? "sticky top-0 z-10 bg-surface" : ""
+                className={`w-8 border-y border-line lg:hidden ${
+                  stickyHeader ? "sticky top-0 z-10 bg-canvas" : ""
                 }`}
                 aria-label="Details"
               />
             )}
-            {primary.map((col) => (
-              <th key={col.key} className={`${headCls(col)} border-b border-line`}>
-                {col.header}
-              </th>
-            ))}
-            {secondary.map((col) => (
+            {ordered.map((col) => (
               <th
                 key={col.key}
-                className={`${headCls(col)} hidden border-b border-line lg:table-cell`}
+                className={headCls(col)}
+                style={col.width ? { width: col.width } : undefined}
               >
                 {col.header}
               </th>
@@ -136,7 +191,7 @@ export default function DataTable({
                       </button>
                     </td>
                   )}
-                  {primary.map((col, i) => (
+                  {ordered.map((col, i) => (
                     <td
                       key={col.key}
                       className={`${cellCls(col)} ${
@@ -146,16 +201,11 @@ export default function DataTable({
                       {col.render(row)}
                     </td>
                   ))}
-                  {secondary.map((col) => (
-                    <td key={col.key} className={`hidden lg:table-cell ${cellCls(col)}`}>
-                      {col.render(row)}
-                    </td>
-                  ))}
                 </tr>
                 {hasSecondary && isOpen && (
                   <tr className="border-b border-line/60 lg:hidden">
                     <td />
-                    <td colSpan={primary.length} className="px-3 pb-3.5">
+                    <td colSpan={primary.length + action.length} className="px-3 pb-3.5">
                       <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-control bg-canvas p-3 text-xs">
                         {secondary.map((col) => (
                           <div key={col.key}>

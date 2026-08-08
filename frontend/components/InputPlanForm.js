@@ -32,6 +32,9 @@ export default function InputPlanForm({
   farmId,
   plannedSpray = null,
   triggerLabel = "Build input plan",
+  // "secondary" suits an inline card action; a page header's primary CTA
+  // passes "default" so it matches every other page's primary button.
+  triggerVariant = "secondary",
   onCreated,
 }) {
   const router = useRouter();
@@ -115,7 +118,7 @@ export default function InputPlanForm({
     // the fields.
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="secondary">
+        <Button variant={triggerVariant}>
           <ShoppingCart />
           {triggerLabel}
         </Button>

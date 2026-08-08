@@ -41,10 +41,16 @@ export default function AiBriefCard({ plannedId }) {
 
   return (
     <div className="no-print space-y-2 rounded-control border border-info-line bg-info-bg/40 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-info-fg">
-          AI review brief (beta) — suggestion only; the verdict above stays deterministic
-        </p>
+      {/* Title in ink, caveat in muted: the whole line used to be link-blue, so
+          a heading that is not a link read as one. The caveat stays adjacent —
+          it qualifies the card, not the button. */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-ink">AI review brief (beta)</p>
+          <p className="text-[11px] text-muted">
+            Suggestion only; the verdict above stays deterministic.
+          </p>
+        </div>
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={generate}>
           <Sparkles />
           {busy ? "Generating…" : brief ? "Regenerate" : "Generate AI review brief"}

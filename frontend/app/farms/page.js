@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
@@ -255,6 +257,7 @@ export default function FarmsPage() {
     },
     {
       key: "action",
+      priority: "action",
       header: <span className="sr-only">Action</span>,
       align: "right",
       render: (f) =>
@@ -294,15 +297,15 @@ export default function FarmsPage() {
       />
 
       {resetError && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {resetError}
-        </div>
+        </Callout>
       )}
-      {loading && <p className="text-sm text-muted">Loading farms…</p>}
+      {loading && <LoadingState message="Loading farms…" />}
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error} — is the backend running on <code>http://localhost:8000</code>?
-        </div>
+        </Callout>
       )}
 
       {!loading && visibleFarms.length > 0 && (
@@ -331,11 +334,22 @@ export default function FarmsPage() {
         const meta = URGENCY_META[farm.urgency] || URGENCY_META.ok;
         const overdue = farm.days_to_harvest != null && farm.days_to_harvest < 0;
         return (
-          <div key={farm.id} className="space-y-4">
+          // One card per farm: identity + next action, then that farm's fields
+          // below a divider. The fields table used to be a second full-size
+          // SectionCard sitting outside the card, so five farms produced ten
+          // stacked panels and the page lost any sense of grouping.
+          <Card
+            key={farm.id}
+            className={`overflow-hidden transition-colors hover:border-muted ${meta.border}`}
+          >
             <Link href={`/farms/${farm.id}`} className="group block">
-              <Card className={`transition-colors group-hover:border-muted ${meta.border}`}>
+              <div>
                 <CardContent className="p-5">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  {/* A grid, not a wrapping flex row: with justify-between the
+                      next-action panel landed under the title on farms with long
+                      names and top-right on the others, so no two cards agreed
+                      on where to look for the same information. */}
+                  <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_300px]">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-base font-semibold text-ink">
@@ -362,9 +376,21 @@ export default function FarmsPage() {
                         {farm.location || "—"} · {(farm.country || "US").toUpperCase()}
                       </div>
                     </div>
-                    <div className="text-right text-xs text-muted">
-                      <div className="font-medium text-ink">{farm.next_action}</div>
-                      <div className="text-muted">{farm.why}</div>
+                    {/* The next action is the point of this card, so it gets a
+                        labelled panel of its own. As a bare right-aligned text
+                        block in a wrapping flex row it landed at a different
+                        place on every card, depending on how long the farm's
+                        name was, and read as floating unattached copy. */}
+                    <div
+                      className={`rounded-control border px-3 py-2 ${meta.border} bg-canvas/60`}
+                    >
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                        Next action
+                      </div>
+                      <div className="mt-0.5 text-sm font-medium text-ink">
+                        {farm.next_action}
+                      </div>
+                      <div className="mt-0.5 text-xs text-muted">{farm.why}</div>
                     </div>
                   </div>
 
@@ -398,29 +424,35 @@ export default function FarmsPage() {
                     </span>
                   </div>
                 </CardContent>
-              </Card>
+              </div>
             </Link>
 
-            <SectionCard
-              title={`Fields — ${farm.name}`}
-              icon={<Sprout />}
-              description="Named field blocks from this farm's records, with each field's current operational state."
-            >
-              <DataTable
-                columns={fieldColumns(farm)}
-                rows={fields}
-                rowKey={(f) => f.name}
-                minWidth={640}
-                empty={
-                  <EmptyState
-                    icon={Sprout}
-                    title="No named fields yet"
-                    description="Records on this farm don't carry a field/block name. Add one when logging sprays, scouting, or planned sprays and fields will appear here."
-                  />
-                }
-              />
-            </SectionCard>
-          </div>
+            {/* Fields live inside the farm card, outside its link: a table with
+                its own row actions must never be nested in an anchor. */}
+            <div className="border-t border-line bg-canvas/40 px-5 py-3">
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                <Sprout className="h-3.5 w-3.5" aria-hidden />
+                Fields
+              </div>
+              {fields.length === 0 ? (
+                // A one-line note, not a panel: "this farm's records carry no
+                // block name" does not deserve the same weight as the farm.
+                <p className="text-meta text-muted">
+                  No named fields yet — records on this farm don&apos;t carry a
+                  field/block name. Add one when logging sprays, scouting, or planned
+                  sprays and fields will appear here.
+                </p>
+              ) : (
+                <DataTable
+                  columns={fieldColumns(farm)}
+                  rows={fields}
+                  rowKey={(f) => f.name}
+                  minWidth={640}
+                  stickyHeader={false}
+                />
+              )}
+            </div>
+          </Card>
         );
       })}
 

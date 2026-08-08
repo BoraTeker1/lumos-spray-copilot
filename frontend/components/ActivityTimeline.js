@@ -65,7 +65,9 @@ export default function ActivityTimeline({ sprays = [], observations = [], count
               </div>
             </div>
             {item.right && (
-              <span className="shrink-0 text-sm font-medium text-ink">{item.right}</span>
+              <span className="tabular shrink-0 text-sm font-medium text-ink">
+                {item.right}
+              </span>
             )}
           </div>
         </li>

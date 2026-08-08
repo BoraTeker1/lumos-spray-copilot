@@ -1,11 +1,13 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { FlaskConical, History, Landmark, Package, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCost, formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
+import Callout from "@/components/Callout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import DataTable from "@/components/DataTable";
 import LinkApplicationDialog from "@/components/LinkApplicationDialog";
@@ -39,12 +41,12 @@ export default function OrderDetailPage({ params }) {
 
   if (error && !order) {
     return (
-      <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+      <Callout tone="risk">
         {error}
-      </div>
+      </Callout>
     );
   }
-  if (!order || !farm) return <p className="text-sm text-muted">Loading order…</p>;
+  if (!order || !farm) return <LoadingState message="Loading order…" />;
 
   const country = farm.country;
   const quote = order.selected_quote;
@@ -143,9 +145,9 @@ export default function OrderDetailPage({ params }) {
       </div>
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">

@@ -44,6 +44,27 @@ function qs(params) {
   return pairs.length ? `?${new URLSearchParams(pairs)}` : "";
 }
 
+// Presentation only: FastAPI returns its message as {"detail": "..."}, and
+// printing the raw body put a literal `API 403: {"detail":"…"}` on screen —
+// JSON punctuation the reader has to parse past to reach the sentence. The
+// status code is kept for anything without a detail string.
+async function errorMessage(res) {
+  const body = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(body);
+    const detail = parsed?.detail;
+    if (typeof detail === "string" && detail) return detail;
+    // Pydantic validation errors arrive as a list of {loc, msg}.
+    if (Array.isArray(detail) && detail.length) {
+      const msgs = detail.map((d) => d?.msg).filter(Boolean);
+      if (msgs.length) return msgs.join("; ");
+    }
+  } catch {
+    // Not JSON — fall through to the raw text.
+  }
+  return body || `${res.status} ${res.statusText}`;
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
     cache: "no-store",
@@ -55,8 +76,7 @@ async function request(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+    throw new Error(await errorMessage(res));
   }
   if (res.status === 204) return null;
   return res.json();
@@ -147,8 +167,7 @@ export const api = {
       body, // browser sets the multipart boundary; do NOT set Content-Type
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+      throw new Error(await errorMessage(res));
     }
     return res.json();
   },
@@ -204,8 +223,7 @@ export const api = {
       body, // browser sets the multipart boundary; do NOT set Content-Type
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+      throw new Error(await errorMessage(res));
     }
     return res.json();
   },
@@ -287,8 +305,7 @@ export const api = {
       body, // browser sets the multipart boundary; do NOT set Content-Type
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+      throw new Error(await errorMessage(res));
     }
     return res.json();
   },

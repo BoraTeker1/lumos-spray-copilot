@@ -24,6 +24,7 @@ import EmptyState from "@/components/EmptyState";
 import FilterBar from "@/components/FilterBar";
 import NextActionBanner from "@/components/NextActionBanner";
 import SectionCard from "@/components/SectionCard";
+import Callout from "@/components/Callout";
 import StatusBadge from "@/components/StatusBadge";
 import UpdateHarvestDialog from "@/components/UpdateHarvestDialog";
 
@@ -129,6 +130,8 @@ export default function CompliancePanel() {
     {
       key: "date",
       header: "Date",
+      width: "12%",
+      nowrap: true,
       render: (r) => (
         <span className="whitespace-nowrap text-ink">{formatDate(r.date)}</span>
       ),
@@ -137,13 +140,14 @@ export default function CompliancePanel() {
       key: "field",
       header: "Field",
       priority: "secondary",
+      width: "9%",
       render: (r) => <span className="text-ink">{r.field || "—"}</span>,
     },
     {
       key: "issue",
       header: "Signal",
       render: (r) => (
-        <div className="min-w-0 max-w-[340px]">
+        <div className="min-w-0">
           <div className="flex items-center gap-1.5 font-medium text-ink">
             {r.severity === "critical" ? (
               <OctagonX className="h-3.5 w-3.5 shrink-0 text-risk-fg" aria-hidden />
@@ -163,6 +167,7 @@ export default function CompliancePanel() {
       key: "decision",
       header: "Decision",
       priority: "secondary",
+      width: "16%",
       render: (r) => (
         <div className="text-xs">
           <div className="font-medium text-ink">{r.planned.product_name}</div>
@@ -173,7 +178,8 @@ export default function CompliancePanel() {
     {
       key: "source",
       header: "Source authority",
-      priority: "secondary",
+      priority: "tertiary",
+      width: "13%",
       render: (r) => (
         <span className="text-xs text-muted">
           {r.source ? AUTHORITY_SOURCE_LABELS[r.source] || r.source : "—"}
@@ -182,8 +188,10 @@ export default function CompliancePanel() {
     },
     {
       key: "action",
+      priority: "action",
       header: <span className="sr-only">Action</span>,
       align: "right",
+      width: "16%",
       render: (r) => (
         <Link href={`/decisions/${r.planned.id}`}>
           <Button variant="secondary" size="sm">
@@ -201,9 +209,7 @@ export default function CompliancePanel() {
   return (
     <div className="space-y-4">
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
-          {error}
-        </div>
+        <Callout tone="risk">{error}</Callout>
       )}
 
       {/* Harvest conflict — the highest-leverage stale-data risk. */}
@@ -232,7 +238,7 @@ export default function CompliancePanel() {
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-8">
+        <div className="min-w-0 lg:col-span-9">
           <SectionCard
             title="Records requiring attention"
             icon={<ShieldAlert />}
@@ -267,9 +273,10 @@ export default function CompliancePanel() {
               columns={columns}
               rows={rows}
               rowKey={(r) => r.key}
-              minWidth={720}
+              minWidth={620}
               empty={
                 <EmptyState
+                  size="sm"
                   icon={CircleCheck}
                   title={
                     attention.length === 0
@@ -287,7 +294,7 @@ export default function CompliancePanel() {
           </SectionCard>
         </div>
 
-        <div className="space-y-4 lg:col-span-4">
+        <div className="space-y-4 lg:col-span-3">
           <SectionCard title="Harvest window" icon={<CalendarClock />}>
             <div className="space-y-1.5 text-xs text-muted">
               <div className="flex items-center justify-between">

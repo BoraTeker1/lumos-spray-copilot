@@ -5,7 +5,7 @@ import { api, API_BASE_URL } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui/input";
-import Breadcrumbs from "@/components/Breadcrumbs";
+import PageHeader from "@/components/PageHeader";
 
 const PERSON_TYPES = ["grower", "PCA", "agronomist", "exporter", "input_supplier", "other"];
 const RECORDS = ["paper", "spreadsheet", "whatsapp", "software", "none", "other"];
@@ -72,13 +72,16 @@ export default function FeedbackPage() {
 
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Feedback" }]} />
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Pilot feedback</h1>
-        <p className="mt-1 text-sm text-muted">
-          Capture what growers, PCAs, and operators say after a demo. Stored locally.
-        </p>
-      </div>
+      <PageHeader
+        breadcrumbs={[{ label: "Feedback" }]}
+        title="Pilot feedback"
+        meta={
+          <span>
+            Capture what growers, PCAs, and operators say after a demo. Stored
+            locally.
+          </span>
+        }
+      />
 
       <form onSubmit={submit} className="grid gap-3 rounded-card border border-line bg-surface p-5 shadow-sm sm:grid-cols-2">
         <div>
@@ -140,7 +143,7 @@ export default function FeedbackPage() {
       </form>
 
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Captured feedback ({items.length})</h2>
+        <h2 className="text-section font-semibold text-ink">Captured feedback ({items.length})</h2>
         {items.length > 0 && (
           <a
             href={`${API_BASE_URL}/export/pilot-feedback.csv`}

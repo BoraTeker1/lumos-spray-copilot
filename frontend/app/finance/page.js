@@ -154,12 +154,22 @@ export default function FinancePage() {
                 {
                   key: "as_of",
                   header: "As of",
+                  width: "11%",
+                  nowrap: true,
                   render: (r) => formatDate(r.as_of),
                 },
-                { key: "state", header: "State", render: (r) => <AssessmentState row={r} /> },
+                {
+                  key: "state",
+                  header: "State",
+                  width: "17%",
+                  nowrap: true,
+                  render: (r) => <AssessmentState row={r} />,
+                },
                 {
                   key: "score",
                   header: "Score",
+                  width: "13%",
+                  nowrap: true,
                   align: "right",
                   render: (r) =>
                     r.total === null || r.total === undefined ? (
@@ -187,6 +197,8 @@ export default function FinancePage() {
                   key: "digest",
                   header: "Inputs digest",
                   priority: "secondary",
+                  width: "14%",
+                  nowrap: true,
                   render: (r) =>
                     r.inputs_digest ? (
                       <code className="text-[11px] text-muted">
@@ -202,6 +214,7 @@ export default function FinancePage() {
               minWidth={720}
               empty={
                 <EmptyState
+                  size="sm"
                   icon={Banknote}
                   title="No assessments recorded yet"
                   description="Running one today will record why it could not score — no lender scorecard has been transcribed. That record is the point: it is what a grower sees if they ask why."
@@ -231,10 +244,18 @@ export default function FinancePage() {
           >
             <DataTable
               columns={[
-                { key: "as_of", header: "As of", render: (r) => formatDate(r.as_of) },
+                {
+                  key: "as_of",
+                  header: "As of",
+                  width: "11%",
+                  nowrap: true,
+                  render: (r) => formatDate(r.as_of),
+                },
                 {
                   key: "outcome",
                   header: "Outcome",
+                  width: "17%",
+                  nowrap: true,
                   render: (r) =>
                     r.outcome ? (
                       <StatusBadge kind="underwritingOutcome" value={r.outcome} />
@@ -245,6 +266,8 @@ export default function FinancePage() {
                 {
                   key: "unevaluated",
                   header: "Not evaluated",
+                  width: "13%",
+                  nowrap: true,
                   align: "right",
                   render: (r) => (
                     // Its own column, never folded into a pass count: a policy where
@@ -272,6 +295,7 @@ export default function FinancePage() {
               minWidth={680}
               empty={
                 <EmptyState
+                  size="sm"
                   icon={ShieldCheck}
                   title="No policy evaluations yet"
                   description="No lender credit policy has been transcribed, so an evaluation today records that it could not run."
@@ -300,6 +324,8 @@ export default function FinancePage() {
                 {
                   key: "value",
                   header: "Assessed value",
+                  width: "18%",
+                  nowrap: true,
                   align: "right",
                   render: (r) =>
                     r.assessed_value === null || r.assessed_value === undefined ? (
@@ -329,6 +355,7 @@ export default function FinancePage() {
               minWidth={680}
               empty={
                 <EmptyState
+                  size="sm"
                   icon={Wallet}
                   title="No collateral registered"
                   description="Assets are registered by an operator. Note that a value alone is not enough — an advance rate assumes a valuation basis, so both are required together."
@@ -363,10 +390,18 @@ export default function FinancePage() {
           >
             <DataTable
               columns={[
-                { key: "as_of", header: "As of", render: (r) => formatDate(r.as_of) },
+                {
+                  key: "as_of",
+                  header: "As of",
+                  width: "11%",
+                  nowrap: true,
+                  render: (r) => formatDate(r.as_of),
+                },
                 {
                   key: "standing",
                   header: "Standing",
+                  width: "17%",
+                  nowrap: true,
                   render: (r) =>
                     r.standing ? (
                       <StatusBadge kind="standing" value={r.standing} />
@@ -377,6 +412,8 @@ export default function FinancePage() {
                 {
                   key: "breached",
                   header: "Breached",
+                  width: "12%",
+                  nowrap: true,
                   align: "right",
                   render: (r) => (
                     <span className="tabular-nums text-xs">
@@ -402,6 +439,7 @@ export default function FinancePage() {
               minWidth={680}
               empty={
                 <EmptyState
+                  size="sm"
                   icon={Landmark}
                   title="No covenant snapshots yet"
                   description="No facility covenant schedule has been transcribed. An empty schedule is not compliance — it means nothing was checked."

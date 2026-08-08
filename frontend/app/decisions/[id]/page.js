@@ -1,5 +1,6 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Info, Printer } from "lucide-react";
@@ -277,7 +278,7 @@ export default function DecisionRecordPage({ params }) {
   }, [params.id]);
 
   if (error) return <p className="text-sm text-risk-fg">{error}</p>;
-  if (!planned || !farm) return <p className="text-sm text-muted">Loading decision record…</p>;
+  if (!planned || !farm) return <LoadingState message="Loading decision record…" />;
 
   const payload = planned.decision_payload || {};
   const rules = payload.rules || [];

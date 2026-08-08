@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlaskConical, OctagonX, RefreshCw, ShieldCheck, Users } from "lucide-react";
 import { api } from "@/lib/api";
@@ -69,7 +71,7 @@ export default function DecisionsPage() {
   const fields = [...new Set(planned.map((p) => p.field_block).filter(Boolean))].sort();
   const verdicts = [...new Set(planned.map((p) => p.decision_outcome).filter(Boolean))];
 
-  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading decisions…" />;
   if (!activeFarm) {
     return (
       <p className="text-sm text-muted">
@@ -96,9 +98,9 @@ export default function DecisionsPage() {
       />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_300px]">
@@ -143,12 +145,13 @@ export default function DecisionsPage() {
           </FilterBar>
 
           <DataTable
-            columns={decisionColumns({ includeNextActionText: true })}
+            columns={decisionColumns()}
             rows={rows}
             rowKey={(p) => p.id}
             minWidth={720}
             empty={
               <EmptyState
+                size="sm"
                 icon={ShieldCheck}
                 title={
                   planned.length === 0

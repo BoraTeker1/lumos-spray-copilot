@@ -1,5 +1,11 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
+import PageHeader from "@/components/PageHeader";
+import SectionCard from "@/components/SectionCard";
+import { Badge } from "@/components/ui/badge";
+import { Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
@@ -23,8 +29,8 @@ function InstrumentationSummary() {
     api.getInstrumentation().then(setData).catch((err) => setError(err.message));
   }, []);
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
-  if (!data) return <p className="text-sm text-muted">Loading telemetry…</p>;
+  if (error) return <Callout tone="risk">{error}</Callout>;
+  if (!data) return <LoadingState message="Loading telemetry…" />;
 
   const rows = [
     ["Checks started (client-reported)", data.checks_started],
@@ -74,8 +80,8 @@ function AiCalibrationSummary() {
     api.getAiCalibration().then(setData).catch((err) => setError(err.message));
   }, []);
 
-  if (error) return <p className="text-sm text-risk-fg">{error}</p>;
-  if (!data) return <p className="text-sm text-muted">Loading AI calibration…</p>;
+  if (error) return <Callout tone="risk">{error}</Callout>;
+  if (!data) return <LoadingState message="Loading AI calibration…" />;
 
   const rows = [
     ["Risk notes logged", data.risk_notes_total],
@@ -150,46 +156,63 @@ export default function InternalToolsPage() {
   }, []);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Internal tools</h1>
-        <p className="mt-0.5 max-w-2xl text-xs text-muted">
-          Operator-only concierge tooling. Not part of the customer-facing workflow and not
-          linked from the navigation.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        breadcrumbs={[{ label: "Internal tools" }]}
+        title="Internal tools"
+        meta={
+          <span>
+            Operator-only concierge tooling. Not part of the customer-facing
+            workflow and not linked from the navigation.
+          </span>
+        }
+        actions={
+          <Badge variant="amber">
+            <Wrench />
+            Operator only
+          </Badge>
+        }
+      />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error} — is the backend running on <code>http://localhost:8000</code>?
-        </div>
+        </Callout>
       )}
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Pilot instrumentation</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Workflow telemetry for running a real pilot: the check funnel, review latency,
-          changed decisions, and how data gets entered. Never customer-facing.
-        </p>
+      <SectionCard
+        title="Pilot instrumentation"
+        size="section"
+        description={
+          <>
+            Workflow telemetry for running a real pilot: the check funnel, review latency, changed decisions, and how data gets entered. Never customer-facing.
+          </>
+        }
+      >
         <InstrumentationSummary />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">AI calibration</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Every AI output (extraction, risk note, evidence action) is logged append-only;
-          this compares predicted rescue risk against realized rescues from follow-up
-          records. Rates are published only past the minimum-n gate — counts until then.
-        </p>
+      <SectionCard
+        title="AI calibration"
+        size="section"
+        description={
+          <>
+            Every AI output (extraction, risk note, evidence action) is logged append-only; this compares predicted rescue risk against realized rescues from follow-up records. Rates are published only past the minimum-n gate — counts until then.
+          </>
+        }
+      >
         <AiCalibrationSummary />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Concierge import</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an
-          existing farm, with provenance tags on every row.
-        </p>
+      <SectionCard
+        title="Concierge import"
+        size="section"
+        description={
+          <>
+            Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an existing farm, with provenance tags on every row.
+          </>
+        }
+      >
         {farms.length === 0 ? (
           <p className="text-sm text-muted">No farms yet — create one first.</p>
         ) : (
@@ -217,79 +240,81 @@ export default function InternalToolsPage() {
             )}
           </>
         )}
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Botrytis shadow pilot</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Issue and authorize PCA credentials, review the protocol, and read shadow
-          risk assessments. Assessments are operator-only by construction — they are
-          absent from the PCA-facing decision payload, not merely hidden in their UI.
-        </p>
+      <SectionCard
+        title="Botrytis shadow pilot"
+        size="section"
+        description={
+          <>
+            Issue and authorize PCA credentials, review the protocol, and read shadow risk assessments. Assessments are operator-only by construction — they are absent from the PCA-facing decision payload, not merely hidden in their UI.
+          </>
+        }
+      >
         <PilotOperatorCard farmId={farmId} />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Pesticide label library</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Extract label directions with AI, correct every value against the document,
-          and commit them as UNVERIFIED. A committed value is on file, not in force:
-          only a licensed PCA verifying it for a specific farm lets a decision rely on
-          it. Nothing here shortens that chain.
-        </p>
+      <SectionCard
+        title="Pesticide label library"
+        size="section"
+        description={
+          <>
+            Extract label directions with AI, correct every value against the document, and commit them as UNVERIFIED. A committed value is on file, not in force: only a licensed PCA verifying it for a specific farm lets a decision rely on it. Nothing here shortens that chain.
+          </>
+        }
+      >
         <LabelLibraryCard farmId={farmId} />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Data ingestion</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Enqueue and inspect ingestion runs. The counts matter more than the status: a
-          run that fetched 24 rows and admitted 3 is not a healthy run, and each of the
-          21 dropped rows is explained individually rather than summarised away. Without
-          a provider credential the adapter is inert by construction — it records
-          <span className="font-mono"> skipped_no_credential</span> and makes no network
-          call.
-        </p>
+      <SectionCard
+        title="Data ingestion"
+        size="section"
+        description={
+          <>
+            Enqueue and inspect ingestion runs. The counts matter more than the status: a run that fetched 24 rows and admitted 3 is not a healthy run, and each of the 21 dropped rows is explained individually rather than summarised away. Without a provider credential the adapter is inert by construction — it records <span className="font-mono"> skipped_no_credential</span> and makes no network call.
+          </>
+        }
+      >
         <IngestionCard />
-      </section>
+      </SectionCard>
 
       {/* The most actionable card on this page: every finance, market and agronomy
           model refuses for one reason, and it is a reading task, not a build task. */}
       <TranscriptionStatusCard />
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Data domains</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Seventeen domains are declared. Eight were deferred until 2026-08-07, when an
-          explicit instruction admitted them — each now names the EMPTY transcription
-          source that governs it and the constraint admission did not lift. Declaring is
-          still not building: an admitted domain&apos;s source ships empty, every model
-          over it refuses, and the worklist above says which document would change that.
-        </p>
+      <SectionCard
+        title="Data domains"
+        size="section"
+        description={
+          <>
+            Seventeen domains are declared. Eight were deferred until 2026-08-07, when an explicit instruction admitted them — each now names the EMPTY transcription source that governs it and the constraint admission did not lift. Declaring is still not building: an admitted domain&apos;s source ships empty, every model over it refuses, and the worklist above says which document would change that.
+          </>
+        }
+      >
         <DomainRegistryTable />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Historical opportunity scan</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Pilot ladder Stage 2. Replays a past season&rsquo;s scheduled spray dates and
-          reports what the versioned rule read on each — or, while the threshold table
-          is empty, exactly what stopped each date from being assessable. That reason
-          histogram is a per-farm work list, and it is available before a single
-          coefficient is transcribed. It is <strong>sizing, never evidence</strong>:
-          every historical outcome followed the actual spray, so there is no untreated
-          counterfactual and no date here can be called avoidable.
-        </p>
+      <SectionCard
+        title="Historical opportunity scan"
+        size="section"
+        description={
+          <>
+            Pilot ladder Stage 2. Replays a past season&rsquo;s scheduled spray dates and reports what the versioned rule read on each — or, while the threshold table is empty, exactly what stopped each date from being assessable. That reason histogram is a per-farm work list, and it is available before a single coefficient is transcribed. It is <strong>sizing, never evidence</strong>: every historical outcome followed the actual spray, so there is no untreated counterfactual and no date here can be called avoidable.
+          </>
+        }
+      >
         <OpportunityScanCard />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
-        <h2 className="font-semibold">Supplier quotes & financing (concierge)</h2>
-        <p className="mb-3 mt-1 text-xs text-muted">
-          Enter supplier quotes against open RFQs, indicative financing offers
-          (never approvals), and append-only order lifecycle events. Phase 1 has
-          no supplier portal — Lumos staff transcribe on suppliers&apos; behalf.
-        </p>
+      <SectionCard
+        title="Supplier quotes & financing (concierge)"
+        size="section"
+        description={
+          <>
+            Enter supplier quotes against open RFQs, indicative financing offers (never approvals), and append-only order lifecycle events. Phase 1 has no supplier portal — Lumos staff transcribe on suppliers&apos; behalf.
+          </>
+        }
+      >
         {farms.length === 0 ? (
           <p className="text-sm text-muted">No farms yet — create one first.</p>
         ) : (
@@ -301,7 +326,7 @@ export default function InternalToolsPage() {
             />
           )
         )}
-      </section>
+      </SectionCard>
     </div>
   );
 }

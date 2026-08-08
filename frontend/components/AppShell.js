@@ -52,7 +52,7 @@ const NAV_GROUPS = [
   },
 ];
 const BOTTOM_NAV = [
-  { href: "/inputs", label: "Inputs & procurement", icon: ShoppingCart },
+  { href: "/inputs", label: "Inputs & finance", icon: ShoppingCart },
   // Deliberately in the SECONDARY group, beside procurement rather than in "Farm
   // operations". The wedge is the pre-spray decision loop; a finance page in the
   // primary group would misrepresent what this product currently is, and every

@@ -1,5 +1,7 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Eye, FlaskConical, Plus, ShieldCheck } from "lucide-react";
@@ -206,7 +208,7 @@ export default function ScoutingPage() {
     },
   ];
 
-  if (farmsLoading) return <p className="text-sm text-muted">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading scouting observations…" />;
   if (!activeFarm) {
     return (
       <p className="text-sm text-muted">
@@ -252,9 +254,9 @@ export default function ScoutingPage() {
       />
 
       {error && (
-        <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       <div
@@ -319,6 +321,7 @@ export default function ScoutingPage() {
             selectedKey={selected?.id ?? null}
             empty={
               <EmptyState
+                size="sm"
                 icon={Eye}
                 title={
                   observations.length === 0

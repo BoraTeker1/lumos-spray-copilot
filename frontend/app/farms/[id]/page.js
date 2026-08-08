@@ -1,5 +1,6 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -36,6 +37,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ActivityTimeline from "@/components/ActivityTimeline";
+import Callout from "@/components/Callout";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import ComplianceCard from "@/components/ComplianceCard";
 import DataTable from "@/components/DataTable";
@@ -193,11 +195,11 @@ function FarmDetail({ farmId }) {
 
   if (error)
     return (
-      <div className="rounded-control border border-risk-line bg-risk-bg p-3 text-sm text-risk-fg">
+      <Callout tone="risk">
         {error} — is the backend running on <code>http://localhost:8000</code>?
-      </div>
+      </Callout>
     );
-  if (!farm || !overview) return <p className="text-sm text-muted">Loading…</p>;
+  if (!farm || !overview) return <LoadingState message="Loading farm record…" />;
 
   // Same urgency vocabulary as the dashboard card (shared via lib/labels.js).
   const status = URGENCY_META[overview.urgency] || URGENCY_META.ok;
@@ -894,6 +896,7 @@ function ConditionsTab({ farmId, isDemo, observations, overview }) {
             ]}
             empty={
               <EmptyState
+                size="sm"
                 icon={Eye}
                 title="No scouting observations recorded"
                 description="Scouting evidence gates the pre-spray checks — a check with no observation for its target escalates rather than approves."
@@ -951,7 +954,7 @@ function ConditionsTab({ farmId, isDemo, observations, overview }) {
 // useSearchParams requires a Suspense boundary for the production build.
 export default function FarmDetailPage({ params }) {
   return (
-    <Suspense fallback={<p className="text-sm text-muted">Loading…</p>}>
+    <Suspense fallback={<LoadingState message="Loading farm record…" />}>
       <FarmDetail farmId={params.id} />
     </Suspense>
   );

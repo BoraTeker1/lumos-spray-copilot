@@ -227,19 +227,40 @@ export default function PilotFarmIntakePage() {
           size="section"
           description="Recent chemistry and timing give the rotation and interval checks something to work from."
         >
+          {/* A column-header row once, instead of a placeholder in all eighteen
+              inputs: a placeholder is not a label, and it disappears exactly when
+              the person needs to check which column they are in. The headers are
+              hidden on one-column mobile, where each input needs its own label. */}
           <div className="space-y-3">
+            <div className="hidden gap-2 sm:grid sm:grid-cols-6">
+              {[
+                "Product",
+                "Active ingredient",
+                "Date",
+                "Cost",
+                "PHI days",
+                "REI hours",
+              ].map((h) => (
+                <span
+                  key={h}
+                  className="text-[11px] font-semibold uppercase tracking-wider text-muted"
+                >
+                  {h}
+                </span>
+              ))}
+            </div>
             {sprays.map((s, i) => (
               <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-6">
-                <input className={input} placeholder="Product" value={s.product_name} onChange={(e) => setSpray(i, "product_name", e.target.value)} />
-                <input className={input} placeholder="Active ingredient" value={s.active_ingredient} onChange={(e) => setSpray(i, "active_ingredient", e.target.value)} />
-                <input type="date" className={input} value={s.application_date} onChange={(e) => setSpray(i, "application_date", e.target.value)} />
-                <input type="number" className={input} placeholder="Cost" value={s.cost} onChange={(e) => setSpray(i, "cost", e.target.value)} />
-                <input type="number" className={input} placeholder="PHI days" value={s.pre_harvest_interval_days} onChange={(e) => setSpray(i, "pre_harvest_interval_days", e.target.value)} />
-                <input type="number" className={input} placeholder="REI hours" value={s.re_entry_interval_hours} onChange={(e) => setSpray(i, "re_entry_interval_hours", e.target.value)} />
+                <input className={input} aria-label={`Spray ${i + 1} product`} placeholder="Product" value={s.product_name} onChange={(e) => setSpray(i, "product_name", e.target.value)} />
+                <input className={input} aria-label={`Spray ${i + 1} active ingredient`} placeholder="Active ingredient" value={s.active_ingredient} onChange={(e) => setSpray(i, "active_ingredient", e.target.value)} />
+                <input type="date" className={input} aria-label={`Spray ${i + 1} date`} value={s.application_date} onChange={(e) => setSpray(i, "application_date", e.target.value)} />
+                <input type="number" className={input} aria-label={`Spray ${i + 1} cost`} placeholder="Cost" value={s.cost} onChange={(e) => setSpray(i, "cost", e.target.value)} />
+                <input type="number" className={input} aria-label={`Spray ${i + 1} PHI days`} placeholder="PHI days" value={s.pre_harvest_interval_days} onChange={(e) => setSpray(i, "pre_harvest_interval_days", e.target.value)} />
+                <input type="number" className={input} aria-label={`Spray ${i + 1} REI hours`} placeholder="REI hours" value={s.re_entry_interval_hours} onChange={(e) => setSpray(i, "re_entry_interval_hours", e.target.value)} />
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-muted">Leave a row blank to skip it.</p>
+          <p className="mt-3 text-meta text-muted">Leave a row blank to skip it.</p>
         </SectionCard>
 
         {/* Spray baseline — the reduction denominator */}
