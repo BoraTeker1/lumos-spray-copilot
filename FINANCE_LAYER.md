@@ -255,3 +255,51 @@ The fix was **not** to edit that migration: it has already run on real databases
 missing table. `ADDED_AFTER_BACKFILL` in `tests/test_schema_migrations.py` records the
 exemption explicitly, with a reason, and a second test guards the exemption list itself
 from going stale.
+
+---
+
+## 9. Frontend surfaces (added 2026-08-08)
+
+| Surface | Where | Audience |
+|---|---|---|
+| `/finance` — credit, underwriting, collateral, covenants | nav (secondary group) | Grower |
+| `FarmProfileCard` | farm detail | Grower |
+| `TranscriptionStatusCard` | `/internal` | Operator |
+| `PriceDispersionCard` | input-plan detail | Grower |
+
+`/finance` sits in the **secondary** nav group beside procurement, not in "Farm
+operations". The wedge is the pre-spray decision loop; a finance page in the primary
+group would misrepresent what this product currently is.
+
+**Every refusal renders "Not calculated" plus its reason** — never a `0`, never a dash in
+a numeric slot, never a blank card. This is `DataReadinessCard`'s rule extended to the
+new layers, and it is why the Finance page is *useful* today rather than empty: with no
+lender document transcribed, the assessment history is entirely refusals, and a page that
+filtered them would be blank and would imply nothing had happened.
+
+### The CORS bug that only a browser could find
+
+Verifying these pages in a real browser exposed a **two-part bug, latent since the
+operator key shipped on 2026-07-20**, that the entire backend suite could not catch
+because `TestClient` does not perform CORS:
+
+1. **The gate 403'd the preflight.** A browser never sends custom headers on an
+   `OPTIONS` preflight — the spec forbids it — so a preflight for any key-bearing
+   request arrived with no `X-Lumos-Operator-Key` and was refused. The browser then
+   never sent the real request. **Every `/internal` call from the UI failed with an
+   opaque "Failed to fetch"**, on exactly the deployments where the key is mandatory
+   (i.e. any database holding real records).
+2. **The 403 carried no CORS headers.** The gate short-circuited *outside*
+   `CORSMiddleware`, so the browser discarded the response — and with it the one message
+   that tells an operator their key is missing or wrong.
+
+Fixes: exempt `OPTIONS` from the gate (a preflight carries no credentials and returns no
+data; the actual request is still gated), and register `CORSMiddleware` **last so it is
+outermost**. **Middleware registration order in `main.py` is now load-bearing** and
+commented as such.
+
+Four regression tests in `tests/test_operator_key.py`, verified to fail without the fix.
+Worth noting the pattern: this is the *third* delivery-gap-class defect this build
+surfaced (missing `operatorHeaders()`, the absent `input_product_id` schema field, and
+now CORS), and **all three were invisible to a green test suite**. The method that found
+each was running the actual app.

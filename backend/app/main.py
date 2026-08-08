@@ -58,15 +58,6 @@ app = FastAPI(
     version="0.2.0",
 )
 
-# Allow the local Next.js dev server to call the API.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def _operator_key_middleware(request, call_next):
     """Gate every /internal path behind the deployment's operator key.
@@ -78,7 +69,23 @@ async def _operator_key_middleware(request, call_next):
 
     No-ops when LUMOS_OPERATOR_KEY is unset (demo/local development); `_startup`
     refuses to boot in that state once the database holds real records.
+
+    CORS PREFLIGHT IS EXEMPT, and it has to be. A browser never sends custom headers
+    on an `OPTIONS` preflight — the spec forbids it — so a preflight for any
+    key-bearing request arrives here with no `X-Lumos-Operator-Key` and used to be
+    refused 403. The browser then never sent the real request, and every /internal
+    call from the UI failed with an opaque "Failed to fetch". That made the whole
+    operator surface unusable from a browser on exactly the deployments where the key
+    is mandatory (i.e. any database holding real records).
+
+    Exempting preflight does not weaken the gate: a preflight carries no credentials
+    and returns no data, and the ACTUAL request that follows still passes through here
+    and still needs a valid key. Verified by
+    `test_a_preflight_is_answered_but_the_real_request_still_needs_the_key`.
     """
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     if request.url.path.startswith("/internal"):
         reason = operator_key.denial_reason(
             request.headers.get(operator_key.KEY_HEADER)
@@ -89,6 +96,27 @@ async def _operator_key_middleware(request, call_next):
                 content={"detail": operator_key.DENIAL_MESSAGES.get(reason, reason)},
             )
     return await call_next(request)
+
+
+# Allow the local Next.js dev server to call the API.
+#
+# REGISTERED LAST ON PURPOSE, and the order is load-bearing. Starlette runs the
+# most-recently-added middleware OUTERMOST, so adding CORS after the operator gate puts
+# CORS *outside* it. That matters because the gate short-circuits with a 403: if CORS
+# were inner, it would never run on that path, the 403 would carry no
+# `access-control-allow-origin`, and a browser would discard it and report an opaque
+# "Failed to fetch" instead of the actual message.
+#
+# The message is the whole point — "this route requires the X-Lumos-Operator-Key
+# header" is what tells an operator their key is missing or wrong. Ordering it this way
+# is what lets them see it. Pinned by
+# `test_a_denied_internal_request_still_carries_cors_headers`.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Demo/real mixing is rejected wherever a record is created (several crud entry

@@ -5,6 +5,7 @@ import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
 import DomainRegistryTable from "@/components/DomainRegistryTable";
 import IngestionCard from "@/components/IngestionCard";
+import TranscriptionStatusCard from "@/components/TranscriptionStatusCard";
 import OpportunityScanCard from "@/components/OpportunityScanCard";
 import LabelLibraryCard from "@/components/LabelLibraryCard";
 import PilotOperatorCard from "@/components/PilotOperatorCard";
@@ -252,14 +253,18 @@ export default function InternalToolsPage() {
         <IngestionCard />
       </section>
 
+      {/* The most actionable card on this page: every finance, market and agronomy
+          model refuses for one reason, and it is a reading task, not a build task. */}
+      <TranscriptionStatusCard />
+
       <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
         <h2 className="font-semibold">Data domains</h2>
         <p className="mb-3 mt-1 text-xs text-muted">
-          Seventeen domains are declared; eight are deferred to a finance phase that
-          does not exist, and each names the ENGINEERING_GUIDELINES.md clause deferring it. Declaring is
-          not building: a source under a deferred domain cannot have an adapter, and the
-          feature registry refuses a non-MVP domain outright. This table makes that
-          boundary visible rather than leaving it in a document.
+          Seventeen domains are declared. Eight were deferred until 2026-08-07, when an
+          explicit instruction admitted them — each now names the EMPTY transcription
+          source that governs it and the constraint admission did not lift. Declaring is
+          still not building: an admitted domain&apos;s source ships empty, every model
+          over it refuses, and the worklist above says which document would change that.
         </p>
         <DomainRegistryTable />
       </section>

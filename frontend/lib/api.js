@@ -394,6 +394,53 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  // ----------------------------------------------------------------- finance
+  // Reading a farm's own assessment history is grower-facing (no operator key):
+  // "why was I declined" is their question, and the refusal rows are the part they
+  // most need to see. RECORDING an assessment is a consequential act, so it is
+  // operator-gated.
+  getFarmProfile: (farmId) => request(`/farms/${farmId}/profile`),
+  listCreditAssessments: (farmId) =>
+    request(`/farms/${farmId}/credit-assessments`),
+  recordCreditAssessment: (farmId, assessedBy) =>
+    request(
+      `/internal/farms/${farmId}/credit-assessments${qs({ assessed_by: assessedBy })}`,
+      { method: "POST", headers: operatorHeaders() }
+    ),
+  listUnderwritingDecisions: (farmId) =>
+    request(`/farms/${farmId}/underwriting-decisions`),
+  recordUnderwritingDecision: (farmId, data) =>
+    request(`/internal/farms/${farmId}/underwriting-decisions`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  listCollateral: (farmId) => request(`/farms/${farmId}/collateral`),
+  registerCollateral: (farmId, data) =>
+    request(`/internal/farms/${farmId}/collateral`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  listMonitoringSnapshots: (farmId) =>
+    request(`/farms/${farmId}/monitoring-snapshots`),
+  recordMonitoringSnapshot: (farmId) =>
+    request(`/internal/farms/${farmId}/monitoring-snapshots`, {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
+  listCoverageAssessments: (farmId) =>
+    request(`/farms/${farmId}/coverage-assessments`),
+  recordCoverageAssessment: (farmId, data) =>
+    request(`/internal/farms/${farmId}/coverage-assessments`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  // The operator worklist: which empty sources are blocking which layer.
+  getTranscriptionStatus: () =>
+    request("/internal/transcription-status", { headers: operatorHeaders() }),
+
   // ------------------------------------------------------------- marketplace
   // Suppliers and the product catalogue. Without these the concierge form can only
   // send free text, every quote line lands unlinked, and price dispersion reports

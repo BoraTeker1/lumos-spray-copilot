@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Sprout,
   Truck,
   TriangleAlert,
   Users,
@@ -132,6 +133,38 @@ export const STATUS = {
     delivered: { label: "Delivered", tone: "good", icon: PackageCheck },
     partially_delivered: { label: "Partially delivered", tone: "warn", icon: Package },
     cancelled: { label: "Cancelled", tone: "neutral", icon: Ban },
+  },
+
+  // ------------------------------------------------------------- finance layer
+  // Added 2026-08-07. Two things these tables must never acquire:
+  //
+  // 1. An "approved" value. The backend vocabulary is conditions_met /
+  //    conditions_not_met / referred_to_human, and adding a friendlier label here
+  //    would let the UI claim something the engine deliberately cannot express.
+  // 2. A "good" tone on `unknown`. Nothing-checked is not compliance — the whole
+  //    reason `standing` is three-valued is that a two-value pill would force the
+  //    unchecked case into whichever colour reads well.
+  standing: {
+    in_good_standing: { label: "In good standing", tone: "good", icon: CircleCheck },
+    in_breach: { label: "In breach", tone: "bad", icon: OctagonX },
+    // Neutral, never good. A farm nobody could evaluate is not a compliant farm.
+    unknown: { label: "Not evaluated", tone: "neutral", icon: CircleHelp },
+  },
+  underwritingOutcome: {
+    conditions_met: { label: "Conditions met", tone: "good", icon: CircleCheck },
+    conditions_not_met: { label: "Conditions not met", tone: "bad", icon: OctagonX },
+    referred_to_human: { label: "Referred to a human", tone: "warn", icon: Users },
+  },
+  // Whether a stored assessment produced a result or recorded why it could not.
+  assessment: {
+    scored: { label: "Assessed", tone: "info", icon: FileText },
+    refused: { label: "Could not assess", tone: "neutral", icon: FileWarning },
+  },
+  // Who can unblock a cross-layer gap. The useful half of the farm profile.
+  gapOwner: {
+    grower: { label: "You can fix this", tone: "info", icon: Sprout },
+    operator: { label: "Waiting on Lumos", tone: "neutral", icon: Landmark },
+    undetermined: { label: "Unclassified", tone: "neutral", icon: CircleHelp },
   },
 };
 

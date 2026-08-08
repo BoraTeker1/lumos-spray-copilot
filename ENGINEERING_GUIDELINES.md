@@ -207,6 +207,24 @@ Backend + frontend both implement:
     which desynced the P0 backfill's table list, resolved by `ADDED_AFTER_BACKFILL` in
     `tests/test_schema_migrations.py` rather than by editing a migration that has
     already run.
+  - **Frontend + a latent CORS bug the browser found (fourth pass, 2026-08-08):**
+    `/finance` (credit / underwriting / collateral / covenants), `FarmProfileCard` on
+    farm detail, `TranscriptionStatusCard` on `/internal`, `PriceDispersionCard` on the
+    plan page, plus `standing`/`underwritingOutcome`/`assessment`/`gapOwner` STATUS
+    kinds. Every refusal renders "Not calculated" **plus its reason**, never a `0` and
+    never a blank card — the `DataReadinessCard` rule, extended.
+    **Verifying in a real browser exposed a two-part bug that had been latent since the
+    operator key shipped (2026-07-20) and that NO backend test could catch**, because
+    TestClient does not speak CORS:
+    (1) the operator middleware 403'd the CORS **preflight** — a browser never sends
+    custom headers on `OPTIONS`, so every `/internal` call from the UI died with an
+    opaque "Failed to fetch" on exactly the deployments where the key is mandatory; and
+    (2) the 403 itself carried **no CORS headers**, because the gate short-circuited
+    *outside* `CORSMiddleware`, so a browser discarded the one message that says the key
+    is missing. Fixes: exempt `OPTIONS` (a preflight carries no credentials and returns
+    no data — the real request is still gated), and register `CORSMiddleware` **last so
+    it is outermost**. Middleware order is now load-bearing and commented as such.
+    Pinned by 4 tests in `tests/test_operator_key.py`, verified to fail without the fix.
   - **It is NOT validation.** Capability rose across three layers; buyer evidence did
     not. This is the FIFTH cycle of capability-up / evidence-flat. §3/§11 unchanged.
 

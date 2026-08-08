@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import DataTable from "@/components/DataTable";
 import FinancingOfferCard from "@/components/FinancingOfferCard";
+import PriceDispersionCard from "@/components/PriceDispersionCard";
 import QuoteComparisonTable from "@/components/QuoteComparisonTable";
 import SectionCard from "@/components/SectionCard";
 import StatusBadge from "@/components/StatusBadge";
@@ -282,6 +283,11 @@ export default function InputPlanDetailPage({ params }) {
           />
         </SectionCard>
       )}
+
+      {/* Per-PRODUCT comparison, alongside the per-QUOTE table above. The two answer
+          different questions: the table compares total baskets, this compares the same
+          catalogued item across suppliers. Neither ranks anyone. */}
+      <PriceDispersionCard planId={plan.id} />
 
       {plan.financing_requested && (
         <SectionCard

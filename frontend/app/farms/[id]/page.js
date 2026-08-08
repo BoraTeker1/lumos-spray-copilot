@@ -45,6 +45,7 @@ import DetailPanel, {
 } from "@/components/DetailPanel";
 import EmptyState from "@/components/EmptyState";
 import DataReadinessCard from "@/components/DataReadinessCard";
+import FarmProfileCard from "@/components/FarmProfileCard";
 import EvidencePanel from "@/components/EvidencePanel";
 import InputPlanForm from "@/components/InputPlanForm";
 import MetricCard from "@/components/MetricCard";
@@ -419,6 +420,11 @@ function FarmDetail({ farmId }) {
                   above, this reports what the data IS, so a demo farm honestly shows
                   its measures abstaining. */}
               <DataReadinessCard farmId={farmId} />
+
+              {/* The cross-layer view. Farm-scoped and grower-facing — and deliberately
+                  NOT on /decisions/[id], because the Botrytis shadow study depends on
+                  the reviewing PCA not seeing model output. */}
+              <FarmProfileCard farmId={farmId} />
 
               <SectionCard
                 title="Inputs & orders"
