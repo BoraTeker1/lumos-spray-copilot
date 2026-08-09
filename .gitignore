@@ -19,6 +19,13 @@ frontend/out/
 .env
 backend/.env
 
+# Strix pentest runs. Findings embed source excerpts, request/response bodies, and
+# whatever secrets the agent recovered — never commit them. The throwaway scan
+# database is disposable: rebuild it with `python -m app.seed` against
+# LUMOS_DATABASE_URL rather than tracking it.
+strix_runs/
+backend/lumos-strix.db
+
 # OS
 .DS_Store
 docs/~$*

@@ -1457,6 +1457,16 @@ def review_planned_spray(
         ensure_pca_authority(
             db, planned.farm_id, pca_credential, claim=f"recording an {data.action} review"
         )
+    elif pca_credential is not None:
+        # A rejection does not *require* a credential — but if one is presented, it is
+        # about to be stamped into this farm's immutable audit trail below
+        # (reviewed_by_credential_id / reviewed_by). A credential scoped to a different
+        # farm must not be attributable here: otherwise Farm A's PCA can reject Farm B's
+        # spray and poison Farm B's record with a false attribution. Scope-check before
+        # attributing; a token with no authority for this farm is refused with 403.
+        ensure_pca_authority(
+            db, planned.farm_id, pca_credential, claim="recording a rejected review"
+        )
 
     before = _decision_snapshot(planned)
     before["decision_payload"] = planned.decision_payload

@@ -267,6 +267,47 @@ def test_approve_and_edit_require_a_credential_but_reject_does_not(client):
     assert allowed.status_code == 200
 
 
+def test_a_cross_farm_credential_cannot_be_attributed_to_a_rejection(client):
+    """A rejection needs no credential — but a presented one still gets stamped into the
+    farm's immutable audit trail, so a token scoped to another farm must not be
+    attributable here. Otherwise Farm A's PCA rejects Farm B's spray and poisons B's
+    record with a false attribution. Regression test for vuln-0001 (Strix scan)."""
+    farm_a = _farm(client, "Farm A")
+    farm_b = _farm(client, "Farm B")
+    cred_a = _issue(client, name="A's PCA")
+    _grant(client, cred_a["id"], farm_a["id"])
+    _grant(client, _issue(client, name="B's PCA")["id"], farm_b["id"])  # enroll B too
+
+    spray_b = _planned(client, farm_b["id"]).json()
+    denied = client.patch(
+        f"/planned-sprays/{spray_b['id']}/review",
+        json={"action": "rejected", "review_comment": "unauthorized rejection"},
+        headers={HEADER: cred_a["token"]},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["reason"] == pca_authority.DENY_FARM_NOT_AUTHORIZED
+
+    # The audit trail was never touched: no attribution, no status change.
+    still = client.get(f"/planned-sprays/{spray_b['id']}").json()
+    assert still["review_status"] != "rejected"
+    assert still["reviewed_by_credential_id"] is None
+
+
+def test_an_anonymous_rejection_is_still_allowed_on_an_enrolled_farm(client):
+    """The fix for vuln-0001 must not make rejection harder: with no credential at all,
+    an enrolled farm's spray can still be rejected."""
+    farm = _farm(client)
+    _grant(client, _issue(client)["id"], farm["id"])  # enrollment turns enforcement on
+
+    spray = _planned(client, farm["id"]).json()
+    rejected = client.patch(
+        f"/planned-sprays/{spray['id']}/review",
+        json={"action": "rejected", "review_comment": "Inputs look wrong."},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["review_status"] == "rejected"
+
+
 def test_review_attribution_comes_from_the_credential_not_the_client_string(client):
     """Attribution must name what was actually verified, not what someone typed."""
     farm = _farm(client)
