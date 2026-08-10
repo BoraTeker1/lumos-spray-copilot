@@ -274,25 +274,45 @@ Outside data reaching a decision auditably. **Full contract in `DATA_PLATFORM.md
   `fetch`, so a deployment without a credential is **inert by construction**. CIMIS publishes no
   leaf-wetness item; that measurement needs the on-site sensor now permitted by §4.
 
-### Advisory, procurement, finance, market layers
+### Procurement and the marketplace (live)
 
-Built 2026-08-07 on the empty-source pattern. **Full contract in `FINANCE_LAYER.md`.**
+Turns a PCA-reviewed decision into a supplier order. Contract in `FINANCE_LAYER.md` §7.
 
-- Agronomy: `soil`, `fertilization`, `seed_selection`, `irrigation`, `land_selection`.
-- Finance: `credit_scoring` (all-or-nothing on inputs — a scorecard is a weighted sum, so a missing
-  factor scores zero and reads as a *worse borrower*, not an incomplete one), `underwriting` (no
-  `approved`; an unevaluated rule yields `referred_to_human`), `collateral` (refuses an unrated
-  asset — 100% understates lender exposure, 0% denies held collateral), `insurance`, `monitoring`
-  (`standing` has three values because "nothing checked" must never render as "compliant").
-- Market: `pricing` refuses outside a freshness window with **no last-known-value fallback**;
-  `hedging` reports coverage with advice *inexpressible*.
-- **Persistence is append-only and the invariant is outcome XOR refusal — a refusal IS stored**
-  (`crud._outcome_columns`). Storing only successes would make the record set survivorship-biased.
+- **The chain:** eligible decision → `InputPlan` (the plan IS the RFQ) → concierge-entered quotes →
+  grower selects one *with a reason* → optional indicative financing → `PurchaseOrder` → delivery →
+  an **explicit** application link. State machine in `app/procurement_status.py` (pure).
+- **`decision_status.procurement_eligible` is the gate that matters:** only a PCA-approved or
+  PCA-edited decision can back a purchase, never an `avoided` one — and it is re-checked at submit,
+  because a PCA may have rejected the decision after the item was added.
+- Expiry is **derived, never stored**; quotes and offers are **never edited** (withdraw + re-enter,
+  so what the grower saw survives); **delivery never implies application**; financing is
+  "selected", never "accepted" — no `funded`/`approved`/APR field exists anywhere.
 - **Marketplace:** `Supplier` / `SupplierProduct` / `RfqTransmission`.
   `procurement_analytics.build_report` groups by **catalogue id, never by name** — grouping free
   text reports three spellings of one product as three products with no spread, which reads as
   "prices are consistent." Reports a **spread, never a saving or a recommended supplier**;
   observations stay in entry order, because sorting by price is a ranking in everything but name.
+  **Today the catalogue is empty and no seeded quote line is linked, so dispersion computes
+  nothing** — a data-entry gap, not a code one. RFQ transport is inert (`can_send: false`) and has
+  **no UI caller at all**; "submitted for quotes" means a human emails suppliers off-platform.
+
+### Advisory, finance, market layers (built, dormant)
+
+Built 2026-08-07 on the empty-source pattern, on an explicit session instruction rather than a §3
+rung. **All of it refuses today** — every one of its coefficient sources is empty, so the honest
+summary is *the structure works and computes nothing*. **Full contract in `FINANCE_LAYER.md`;
+read it before touching any of this — do not re-derive the directional rules from scratch, they
+are all written down there with the reason each points the way it does.**
+
+- Agronomy `soil` / `fertilization` / `seed_selection` / `irrigation` / `land_selection`; finance
+  `credit_scoring` / `underwriting` / `collateral` / `insurance` / `monitoring`; market `pricing` /
+  `hedging`. Persistence is append-only and the invariant is **outcome XOR refusal — a refusal IS
+  stored** (`crud._outcome_columns`), or the record set would be survivorship-biased.
+- **The `/finance` page is UNLINKED from the nav** (2026-08-10), like `/internal`: not on the build
+  ladder, aimed at a lender rather than the §1 buyer, and its own write buttons are operator-gated
+  so they 403 for the grower it was built for. Backend, routes and tests are untouched. Re-link it
+  when a lender or insurer conversation is real; **delete the layer outright if none happens** —
+  that is the standing decision, not a reason to keep extending it.
 - **Cross-layer:** `farm_profile.py` + `GET /farms/{id}/profile` (grower-facing) and
   `GET /internal/transcription-status` (operator worklist, generated from the domain registry so it
   cannot drift). The profile abstains **per field** and computes no overall score.
@@ -388,8 +408,9 @@ Built 2026-08-07 on the empty-source pattern. **Full contract in `FINANCE_LAYER.
 - **16 routes (`frontend/app/`):** `page.js` (dashboard) · `farms/` + `farms/[id]` ·
   `decisions/` + `decisions/[id]` (the printable one-page decision record) · `applications/` ·
   `scouting/` · `evidence/` (Evidence|Compliance tabs) · `compliance/` (redirects into it) ·
-  `finance/` · `inputs/` + `inputs/plans/[id]` + `inputs/orders/[id]` · `feedback/` ·
-  `pilot/new/` · `internal/` (unlinked operator page).
+  `inputs/` + `inputs/plans/[id]` + `inputs/orders/[id]` · `feedback/` · `pilot/new/` ·
+  **two unlinked routes reachable only by URL:** `internal/` (operator page) and `finance/`
+  (the lending layer — see §5).
 - **Design system — use it; do not add ad-hoc styling.**
   - `components/ui/` — 10 primitives: `badge`, `button`, `card`, `dialog`, `field`, `input`,
     `select`, `sheet`, `tabs`, `textarea`.

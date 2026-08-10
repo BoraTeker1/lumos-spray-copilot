@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Banknote,
   Building2,
   CalendarClock,
   ClipboardList,
@@ -53,11 +52,14 @@ const NAV_GROUPS = [
 ];
 const BOTTOM_NAV = [
   { href: "/inputs", label: "Inputs & finance", icon: ShoppingCart },
-  // Deliberately in the SECONDARY group, beside procurement rather than in "Farm
-  // operations". The wedge is the pre-spray decision loop; a finance page in the
-  // primary group would misrepresent what this product currently is, and every
-  // assessment on it refuses until a lender document is transcribed.
-  { href: "/finance", label: "Finance", icon: Banknote },
+  // `/finance` (the LENDING layer — scorecard, underwriting, collateral, covenants)
+  // is deliberately UNLINKED, like /internal: reachable by URL, absent from the nav.
+  // It is not on the ENGINEERING_GUIDELINES.md §3 build ladder, it serves a lender rather than the
+  // PCA/packer buyer in §1, and every assessment on it refuses until a lender
+  // document is transcribed — so in a demo it reads as an unfinished product rather
+  // than as discipline. Its write actions are also operator-gated, so its own
+  // buttons 403 without a key set on /internal. Re-link it when a lender or insurer
+  // conversation is real; the backend layer is untouched and still tested.
   { href: "/pilot/new", label: "Pilot setup", icon: ClipboardList },
   { href: "/feedback", label: "Feedback", icon: MessageSquare },
 ];

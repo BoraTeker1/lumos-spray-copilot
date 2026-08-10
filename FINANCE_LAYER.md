@@ -267,9 +267,22 @@ from going stale.
 | `TranscriptionStatusCard` | `/internal` | Operator |
 | `PriceDispersionCard` | input-plan detail | Grower |
 
-`/finance` sits in the **secondary** nav group beside procurement, not in "Farm
-operations". The wedge is the pre-spray decision loop; a finance page in the primary
-group would misrepresent what this product currently is.
+**Update 2026-08-10: `/finance` is UNLINKED from the nav** — reachable by URL, absent
+from the product surface, like `/internal`. It sat in the secondary nav group on the
+reasoning that a finance page in the primary group would misrepresent what this product
+is; the stronger version of that argument removed it entirely. Three reasons, on the
+record so this is not silently reverted:
+
+1. It advances no rung on the `ENGINEERING_GUIDELINES.md` §3 build ladder — there is no finance rung.
+2. It serves a **lender**, a party absent from the §1 buyer hypothesis, the §12
+   validation plan, and the §13 signal list.
+3. Its own write actions are operator-gated (`POST /internal/...`), so every button on
+   this grower-facing page 403s unless an operator key was set on `/internal`. To a
+   visitor the page reads as unfinished rather than as disciplined refusal.
+
+Backend modules, routes, persistence and tests are **untouched and still passing**. The
+standing decision is: re-link when a lender or insurer conversation is real, and delete
+the layer outright if none happens.
 
 **Every refusal renders "Not calculated" plus its reason** — never a `0`, never a dash in
 a numeric slot, never a blank card. This is `DataReadinessCard`'s rule extended to the
