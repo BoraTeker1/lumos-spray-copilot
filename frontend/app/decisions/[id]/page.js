@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, CircleCheck, Info, Printer, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
+import DecisionEconomics from "@/components/DecisionEconomics";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { OUTCOME_META } from "@/components/DecisionResult";
@@ -638,6 +639,10 @@ export default function DecisionRecordPage({ params }) {
                 </ul>
               </Section>
             )}
+
+            <Section number={step()} title="Cost of each choice">
+              <DecisionEconomics plannedId={planned.id} country={farm.country} />
+            </Section>
 
             <Section number={step()} title="Final recorded outcome">
               <div className="grid gap-x-8 sm:grid-cols-2">

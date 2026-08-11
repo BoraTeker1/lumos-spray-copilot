@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from app import (
     ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction,
-    label_extraction, llm, models, operator_key, pca_authority, schemas, vision,
+    label_extraction, llm, models, operator_key, pca_authority, schemas,
+    value_ledger, vision,
 )
 # The layers admitted on 2026-08-07. Every one of these ships with an EMPTY transcription
 # source, so each entry point below returns a Refusal until someone reads a document —
@@ -816,6 +817,139 @@ def get_block_outcomes(
 ):
     _require_farm(db, farm_id)
     return crud.list_block_outcomes(db, farm_id, block_id)
+
+
+# --------------------------------------------------------------- Crop cycles
+# The season as a queryable thing. `CropCycle` and `Operation` were modelled in the
+# entity-spine phase and had no route at all until now, so nothing could be
+# attributed to a season and the value ledger had no scope to compute over.
+@app.post(
+    "/farms/{farm_id}/crop-cycles",
+    response_model=schemas.CropCycle,
+    status_code=201,
+    tags=["crop-cycles"],
+)
+def post_crop_cycle(
+    farm_id: int, payload: schemas.CropCycleCreate, db: Session = Depends(get_db)
+):
+    farm = _require_farm(db, farm_id)
+    cycle = crud.create_crop_cycle(db, farm, payload)
+    # Records already on the farm that fall inside the new cycle's window are
+    # attached immediately — otherwise a grower who creates a season mid-flight
+    # sees an empty ledger beside a full spray log and concludes it is broken.
+    crud.link_records_to_cycle(db, cycle)
+    return cycle
+
+
+@app.get(
+    "/farms/{farm_id}/crop-cycles",
+    response_model=list[schemas.CropCycle],
+    tags=["crop-cycles"],
+)
+def get_crop_cycles(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_crop_cycles(db, farm_id)
+
+
+def _require_crop_cycle(db: Session, cycle_id: int):
+    cycle = crud.get_crop_cycle(db, cycle_id)
+    if cycle is None:
+        raise HTTPException(status_code=404, detail="Crop cycle not found")
+    return cycle
+
+
+@app.get("/crop-cycles/{cycle_id}", response_model=schemas.CropCycle, tags=["crop-cycles"])
+def get_crop_cycle(cycle_id: int, db: Session = Depends(get_db)):
+    return _require_crop_cycle(db, cycle_id)
+
+
+@app.patch(
+    "/crop-cycles/{cycle_id}", response_model=schemas.CropCycle, tags=["crop-cycles"]
+)
+def patch_crop_cycle(
+    cycle_id: int, payload: schemas.CropCycleUpdate, db: Session = Depends(get_db)
+):
+    """Update a cycle — most often to close it once harvest is finished."""
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.update_crop_cycle(db, cycle, payload)
+
+
+@app.post("/crop-cycles/{cycle_id}/link-records", tags=["crop-cycles"])
+def post_link_records(cycle_id: int, db: Session = Depends(get_db)):
+    """Attach unlinked farm records that fall inside this cycle's window.
+
+    Only touches rows whose `crop_cycle_id` is NULL, so a record already attributed
+    to a season is never moved between them.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return {"crop_cycle_id": cycle.id, "linked": crud.link_records_to_cycle(db, cycle)}
+
+
+@app.post(
+    "/crop-cycles/{cycle_id}/operations",
+    response_model=schemas.Operation,
+    status_code=201,
+    tags=["crop-cycles"],
+)
+def post_operation(
+    cycle_id: int, payload: schemas.OperationCreate, db: Session = Depends(get_db)
+):
+    """Record a non-spray operation and its cost. Applications keep their own table."""
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.create_operation(db, cycle, payload)
+
+
+@app.get(
+    "/farms/{farm_id}/operations",
+    response_model=list[schemas.Operation],
+    tags=["crop-cycles"],
+)
+def get_operations(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    _require_farm(db, farm_id)
+    return crud.list_operations(db, farm_id, crop_cycle_id)
+
+
+# --------------------------------------------------------------- Value ledger
+@app.get("/farms/{farm_id}/value-ledger", tags=["value"])
+def get_value_ledger(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    """The loop: what Lumos recommended, what was done, what happened, what it was worth.
+
+    Verified and estimated totals are returned separately and are never added
+    together, and every row carries the sentence explaining its own arithmetic. A
+    row with nothing attributable carries `not_calculated_reason` and no amount —
+    the `value` key is omitted rather than nulled, so no template can render it
+    as a zero.
+    """
+    farm = _require_farm(db, farm_id)
+    if crop_cycle_id is not None:
+        cycle = _require_crop_cycle(db, crop_cycle_id)
+        if cycle.farm_id != farm_id:
+            raise HTTPException(
+                status_code=404, detail="That crop cycle belongs to a different farm"
+            )
+    return crud.build_value_ledger(db, farm, crop_cycle_id)
+
+
+@app.get("/planned-sprays/{planned_id}/economics", tags=["value"])
+def get_decision_economics(planned_id: int, db: Session = Depends(get_db)):
+    """The direct cost of each choice open on one decision.
+
+    A SEPARATE route, deliberately: nothing is added to the decision payload itself,
+    which is what the Botrytis shadow study's blinding depends on. Direct recorded
+    costs only — no probabilities and no rescue-rate model, because this farm's
+    history is nowhere near large enough to support one.
+    """
+    planned = crud.get_planned_spray(db, planned_id)
+    if planned is None:
+        raise HTTPException(status_code=404, detail="Planned spray not found")
+    farm = crud.get_farm(db, planned.farm_id)
+    return value_ledger.decision_economics(
+        planned, currency=value_ledger.currency_for(farm)
+    )
 
 
 @app.get(

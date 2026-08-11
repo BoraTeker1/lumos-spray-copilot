@@ -16,6 +16,8 @@ Idempotent: clears existing rows first so re-running gives a clean demo state.
 """
 from datetime import date, datetime, time, timedelta
 
+from sqlalchemy import select
+
 from app import clock, crud, models, schemas
 from app.database import Base, SessionLocal, engine, init_db
 from app.decision_engine import evaluate_planned_spray
@@ -951,7 +953,9 @@ def run() -> None:
             acres=18.0,
             needed_by_date=today,
             intended_use="gray mold (Botrytis) on ripening fruit",
-            estimated_cost=210.0,
+            # The grower's own pre-quote estimate for the whole 252 oz line — the
+            # documented baseline the value ledger compares the selected quote to.
+            estimated_cost=3900.0,
             created_by="Demo grower (simulated)",
             data_source="demo",
             data_confidence="simulated",
@@ -1169,7 +1173,91 @@ def run() -> None:
             )
         )
 
+        # ------------------------------------------------------------------ #
+        # The season, for farm 3. `CropCycle` is the economic unit every cost   #
+        # and outcome hangs off; without one seeded, the value ledger has       #
+        # nothing to scope to and reads as broken rather than as empty.         #
+        # Demo/simulated like every other seeded row — an avoided application   #
+        # here is an illustration, never value anyone created (ENGINEERING_GUIDELINES.md §9).   #
+        # ------------------------------------------------------------------ #
+        field3 = models.Field(
+            farm_id=farm3.id,
+            name="Field 7",
+            display_area=18.0,
+            display_area_unit="acres",
+            area_m2=18.0 * 4046.8564224,
+            irrigation_type="drip",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        db.add(field3)
+        db.flush()
+
+        cycle3 = models.CropCycle(
+            farm_id=farm3.id,
+            field_id=field3.id,
+            crop="strawberry",
+            variety_name="Monterey",
+            season_year=today.year,
+            season_label=f"{today.year} spring plant",
+            planting_date=farm3.planting_date,
+            expected_harvest_start=farm3.expected_harvest_date,
+            planted_area_m2=18.0 * 4046.8564224,
+            display_area=18.0,
+            display_area_unit="acres",
+            status="harvesting",
+            currency_code="USD",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        db.add(cycle3)
+        db.flush()
+
+        # Non-spray costs the season actually carried. These have had a column
+        # (`Operation.cost_amount`) and no writer since the entity-spine phase.
+        db.add_all([
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="fertilization",
+                performed_on=today - timedelta(days=40),
+                cost_amount=1450.0, currency_code="USD",
+                notes="Pre-bloom fertigation pass.",
+                data_source="demo", data_confidence="simulated",
+            ),
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="irrigation",
+                performed_on=today - timedelta(days=12),
+                cost_amount=380.0, currency_code="USD",
+                data_source="demo", data_confidence="simulated",
+            ),
+        ])
+
+        # A measured harvest outcome. Per block per harvest — one outcome is
+        # evidence for many decisions and for none in particular.
+        block3 = db.scalars(
+            select(models.Block).where(models.Block.farm_id == farm3.id)
+        ).first()
+        if block3 is not None:
+            db.add(models.BlockOutcomeObservation(
+                block_id=block3.id,
+                observed_on=today - timedelta(days=1),
+                outcome_type="marketable_packout",
+                value=87.5,
+                unit="pct",
+                denominator=1200.0,
+                method="Trays graded at the cooler, first pick.",
+                source_type="demo",
+                data_source="demo",
+                data_confidence="simulated",
+            ))
+
         db.commit()
+        # Attach the farm's existing sprays, decisions, scouting and input plans to
+        # the season through the same backfill the API calls — so the demo exercises
+        # the real code path rather than a seed-only shortcut.
+        crud.link_records_to_cycle(db, cycle3)
+
         print(f"Seeded HIGH-risk farm:  {farm1.name} (id={farm1.id}, {farm1.country})")
         print(f"Seeded LOW-risk  farm:  {farm2.name} (id={farm2.id}, {farm2.country})")
         print(f"Seeded U.S. wedge farm: {farm3.name} (id={farm3.id}, {farm3.country})")

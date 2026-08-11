@@ -121,3 +121,53 @@ export const URGENCY_META = Object.fromEntries(
     },
   ])
 );
+
+// ------------------------------------------------------- the value ledger
+// Evidence tier for one attributed figure (mirrors app/value_ledger.py). The
+// distinction is the whole point of the ledger: a verified dollar is backed by
+// recorded follow-up evidence, an estimated one is somebody's recorded outcome
+// and nothing more, and the two are never added together.
+export const VALUE_TIER_LABELS = {
+  verified: "Verified",
+  estimated: "Estimated",
+  not_calculated: "Not calculated",
+};
+
+// Where an attributed figure came from.
+export const VALUE_SOURCE_LABELS = {
+  avoided_application: "Application avoided",
+  procurement_saving: "Input purchasing",
+};
+
+// Crop-cycle status (mirrors schemas.CropCycleStatus).
+export const CROP_CYCLE_STATUS_LABELS = {
+  planned: "Planned",
+  planted: "Planted",
+  growing: "Growing",
+  harvesting: "Harvesting",
+  closed: "Closed",
+  abandoned: "Abandoned",
+};
+
+// Non-spray operations that carry a season cost (mirrors schemas.OperationType).
+export const OPERATION_TYPE_LABELS = {
+  planting: "Planting",
+  irrigation: "Irrigation",
+  fertilization: "Fertilization",
+  crop_protection: "Crop protection",
+  scouting: "Scouting",
+  harvest: "Harvest",
+  tillage: "Tillage",
+  other: "Other",
+};
+
+// Measured block outcomes (mirrors schemas.BlockOutcomeType).
+export const BLOCK_OUTCOME_TYPE_LABELS = {
+  disease_incidence: "Disease incidence",
+  rescue_treatment: "Rescue treatment",
+  yield: "Yield",
+  marketable_packout: "Marketable packout",
+  cull: "Cull",
+  cost: "Cost",
+  adverse_event: "Adverse event",
+};

@@ -580,6 +580,68 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // ------------------------------------------------- season + the value ledger
+  listCropCycles: (farmId) => request(`/farms/${farmId}/crop-cycles`),
+  createCropCycle: (farmId, data) =>
+    request(`/farms/${farmId}/crop-cycles`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateCropCycle: (cycleId, data) =>
+    request(`/crop-cycles/${cycleId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  linkCropCycleRecords: (cycleId) =>
+    request(`/crop-cycles/${cycleId}/link-records`, { method: "POST" }),
+  listOperations: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/operations${qs({ crop_cycle_id: cropCycleId })}`),
+  createOperation: (cycleId, data) =>
+    request(`/crop-cycles/${cycleId}/operations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getValueLedger: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/value-ledger${qs({ crop_cycle_id: cropCycleId })}`),
+  getDecisionEconomics: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/economics`),
+
+  // ------------------------------------------------- operator-only (/internal)
+  // Risk assessments are SHADOW: this is the only surface that returns them, and it
+  // is deliberately absent from every PCA-facing payload.
+  runRiskAssessment: (plannedId, data = {}) =>
+    request(`/planned-sprays/${plannedId}/risk-assessment`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listShadowAssessments: (farmId) =>
+    request(`/internal/pilot/assessments${qs({ farm_id: farmId })}`, {
+      headers: operatorHeaders(),
+    }),
+  listPcaCredentials: () =>
+    request("/internal/pca-credentials", { headers: operatorHeaders() }),
+  createPcaCredential: (data) =>
+    request("/internal/pca-credentials", {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers: operatorHeaders(),
+    }),
+  revokePcaCredential: (credentialId) =>
+    request(`/internal/pca-credentials/${credentialId}/revoke`, {
+      method: "POST",
+      body: JSON.stringify({}),
+      headers: operatorHeaders(),
+    }),
+  authorizePcaForFarm: (credentialId, data) =>
+    request(`/internal/pca-credentials/${credentialId}/farm-authorizations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers: operatorHeaders(),
+    }),
+  listFarmPcaAuthorizations: (farmId) =>
+    request(`/internal/farms/${farmId}/pca-authorizations`, {
+      headers: operatorHeaders(),
+    }),
 
   // USDA PDP measured-residue reference. Grower/PCA-facing and deliberately not
   // farm-scoped — PDP measures commodities nationally, so no farm id belongs here.

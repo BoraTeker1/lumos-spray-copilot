@@ -56,11 +56,13 @@ import PhotoScoutCard from "@/components/PhotoScoutCard";
 import PilotImportCard from "@/components/PilotImportCard";
 import PreSpraySheet, { PlannedSprayList } from "@/components/PreSpraySheet";
 import ScoutObservationForm from "@/components/ScoutObservationForm";
+import SeasonPanel from "@/components/SeasonPanel";
 import SectionCard from "@/components/SectionCard";
 import SprayEventForm from "@/components/SprayEventForm";
 import SeverityBadge from "@/components/SeverityBadge";
 import SprayImportCard from "@/components/SprayImportCard";
 import StatusBadge from "@/components/StatusBadge";
+import ValueLedgerCard from "@/components/ValueLedgerCard";
 import WeatherCard from "@/components/WeatherCard";
 
 // "fields" and "conditions" are new views over data this page already fetches.
@@ -96,6 +98,11 @@ function FarmDetail({ farmId }) {
   const [compliance, setCompliance] = useState(null);
   const [inputPlans, setInputPlans] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [cycles, setCycles] = useState([]);
+  const [blocks, setBlocks] = useState([]);
+  const [ledger, setLedger] = useState(null);
+  // null = every season; a cycle id scopes the ledger to that one.
+  const [ledgerCycleId, setLedgerCycleId] = useState(null);
   const [error, setError] = useState(null);
   const [sprayDialogOpen, setSprayDialogOpen] = useState(false);
   const [scoutDialogOpen, setScoutDialogOpen] = useState(false);
@@ -110,7 +117,7 @@ function FarmDetail({ farmId }) {
 
   const load = useCallback(async () => {
     try {
-      const [f, ov, s, o, r, p, c, plans, orders] = await Promise.all([
+      const [f, ov, s, o, r, p, c, plans, orders, cyc, blk] = await Promise.all([
         api.getFarm(farmId),
         api.getFarmOverview(farmId),
         api.listSprayEvents(farmId),
@@ -120,6 +127,8 @@ function FarmDetail({ farmId }) {
         api.getCompliance(farmId),
         api.listInputPlans(farmId),
         api.listOrders(farmId),
+        api.listCropCycles(farmId),
+        api.listBlocks(farmId),
       ]);
       setFarm(f);
       setOverview(ov);
@@ -130,6 +139,8 @@ function FarmDetail({ farmId }) {
       setCompliance(c);
       setInputPlans(plans);
       setPurchaseOrders(orders);
+      setCycles(cyc);
+      setBlocks(blk);
     } catch (err) {
       setError(err.message);
     }
@@ -138,6 +149,21 @@ function FarmDetail({ farmId }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // The ledger is its own fetch because it re-runs on a season change without
+  // reloading the whole farm. `cycles` is a dependency so recording an outcome or
+  // starting a season refreshes the figures.
+  const loadLedger = useCallback(async () => {
+    try {
+      setLedger(await api.getValueLedger(farmId, ledgerCycleId ?? undefined));
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [farmId, ledgerCycleId]);
+
+  useEffect(() => {
+    loadLedger();
+  }, [loadLedger, cycles]);
 
   const latest = recommendations[0] || null;
 
@@ -383,6 +409,14 @@ function FarmDetail({ farmId }) {
                 />
               </SectionCard>
 
+              {/* The loop, closed: recommendation → action → outcome → value. */}
+              <ValueLedgerCard
+                ledger={ledger}
+                cycles={cycles}
+                activeCycleId={ledgerCycleId}
+                onSelectCycle={setLedgerCycleId}
+              />
+
               <SectionCard title="Recent activity" icon={<Droplets />}>
                 <ActivityTimeline
                   sprays={sprays}
@@ -395,6 +429,14 @@ function FarmDetail({ farmId }) {
 
             {/* Right rail */}
             <div className="space-y-4">
+              <SeasonPanel
+                farmId={farmId}
+                farm={farm}
+                cycles={cycles}
+                blocks={blocks}
+                onChanged={load}
+              />
+
               {/* Weather is a mock service — demo farms only; a real pilot farm
                   never renders a simulated widget. */}
               {isDemoFarm && (

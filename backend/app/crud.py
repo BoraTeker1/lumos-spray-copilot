@@ -15,7 +15,7 @@ from app import (
     backtest, clock, credit_scoring, crop_aliases, csv_import, decision_status,
     disease_risk, insurance, label_data, label_table, models, monitoring,
     pca_authority, procurement_analytics, procurement_status, refusal, rfq_transport,
-    risk_snapshot, schemas, target_aliases, underwriting,
+    risk_snapshot, schemas, target_aliases, underwriting, units, value_ledger,
 )
 from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -1072,6 +1072,7 @@ def create_spray_event(
     event = models.SprayEvent(farm_id=farm_id, **data.model_dump())
     if event.treated_acres is not None:
         event.treated_area_unit = resolve_treated_area_unit(db, farm_id)
+    stamp_open_cycle(db, farm_id, event)
     db.add(event)
     db.commit()
     db.refresh(event)
@@ -1104,6 +1105,7 @@ def create_scout_observation(
     ensure_demo_real_separation(db, farm_id, data)
     ensure_block_on_farm(db, farm_id, data.block_id)
     obs = models.ScoutObservation(farm_id=farm_id, **data.model_dump())
+    stamp_open_cycle(db, farm_id, obs)
     db.add(obs)
     db.commit()
     db.refresh(obs)
@@ -1365,6 +1367,7 @@ def create_planned_spray(
     )
     if planned.treated_acres is not None:
         planned.treated_area_unit = getattr(farm, "area_unit", None)
+    stamp_open_cycle(db, farm.id, planned)
     db.add(planned)
     db.flush()
 
@@ -2755,6 +2758,7 @@ def create_input_plan(
     )
     for item in data.items:
         _validate_plan_item(db, farm, decision_status.is_demo_record(plan), item)
+    stamp_open_cycle(db, farm.id, plan)
     db.add(plan)
     db.flush()
     for item in data.items:
@@ -4499,3 +4503,289 @@ def residue_reference_coverage(db: Session) -> dict:
             key=lambda e: e["commodity_name"],
         ),
     }
+
+
+# ======================================================================= #
+# Crop cycles: the season as a thing you can query                        #
+# ======================================================================= #
+# `CropCycle` and `Operation` have been in models.py since the entity-spine phase
+# with no route, no writer and zero rows, while every record that belongs to a
+# season (sprays, decisions, scouting, input plans) already carried a nullable
+# `crop_cycle_id` nobody set. These helpers close that gap. The FK stays nullable:
+# a record entered before a cycle existed is honestly unlinked, and the value
+# ledger reports how many it had to leave out rather than guessing.
+
+
+def _planted_area_m2(data) -> float | None:
+    """Canonical area from what the human typed, or None when it cannot be converted."""
+    converted = units.convert(
+        getattr(data, "display_area", None), getattr(data, "display_area_unit", None), "m2"
+    )
+    return None if isinstance(converted, units.Refusal) else converted.amount
+
+
+def _resolve_cycle_field(db: Session, farm: models.Farm, field_id: int | None):
+    """The field this cycle sits on, creating a whole-farm one if none exists.
+
+    `CropCycle.field_id` is NOT NULL because a season happens on a piece of ground,
+    and `Field` has no route of its own. Rather than make the caller build the entity
+    spine by hand — most wedge farms are a single block anyway — an unspecified field
+    resolves to the farm's first, or to a whole-farm field carrying the farm's own
+    area. Naming it after the farm keeps it obvious that nobody drew a boundary.
+    """
+    if field_id is not None:
+        field = db.get(models.Field, field_id)
+        if field is None or field.farm_id != farm.id:
+            raise CrossFarmReferenceError("that field belongs to a different farm")
+        return field
+
+    existing = db.scalars(
+        select(models.Field).where(models.Field.farm_id == farm.id).order_by(models.Field.id)
+    ).first()
+    if existing is not None:
+        return existing
+
+    converted = units.convert(
+        getattr(farm, "greenhouse_area", None), getattr(farm, "area_unit", None), "m2"
+    )
+    field = models.Field(
+        farm_id=farm.id,
+        name=f"{farm.name} (whole farm)",
+        display_area=getattr(farm, "greenhouse_area", None),
+        display_area_unit=getattr(farm, "area_unit", None),
+        area_m2=None if isinstance(converted, units.Refusal) else converted.amount,
+        data_source=getattr(farm, "data_source", None) or "manual_entry",
+        data_confidence=getattr(farm, "data_confidence", None) or "user_provided",
+    )
+    db.add(field)
+    db.flush()
+    return field
+
+
+def create_crop_cycle(
+    db: Session, farm: models.Farm, data: schemas.CropCycleCreate
+) -> models.CropCycle:
+    field = _resolve_cycle_field(db, farm, data.field_id)
+    farm_id = farm.id
+
+    payload = data.model_dump()
+    payload["field_id"] = field.id
+    cycle = models.CropCycle(
+        farm_id=farm_id, planted_area_m2=_planted_area_m2(data), **payload
+    )
+    ensure_demo_real_separation(db, farm_id, cycle)
+    db.add(cycle)
+    db.commit()
+    db.refresh(cycle)
+    return cycle
+
+
+def list_crop_cycles(db: Session, farm_id: int) -> list[models.CropCycle]:
+    return list(
+        db.scalars(
+            select(models.CropCycle)
+            .where(models.CropCycle.farm_id == farm_id)
+            .order_by(models.CropCycle.season_year.desc(), models.CropCycle.id.desc())
+        )
+    )
+
+
+def get_crop_cycle(db: Session, cycle_id: int) -> models.CropCycle | None:
+    return db.get(models.CropCycle, cycle_id)
+
+
+# Statuses that mean the cycle is still accepting new records. A record created
+# while two cycles are open would have no unambiguous home, so `open_crop_cycle`
+# takes the most recent and nothing is ever guessed across seasons.
+OPEN_CYCLE_STATUSES = ("planned", "planted", "growing", "harvesting")
+
+
+def open_crop_cycle(db: Session, farm_id: int) -> models.CropCycle | None:
+    """The farm's current season, or None. Used to stamp new records."""
+    return db.scalars(
+        select(models.CropCycle)
+        .where(
+            models.CropCycle.farm_id == farm_id,
+            models.CropCycle.status.in_(OPEN_CYCLE_STATUSES),
+        )
+        .order_by(models.CropCycle.season_year.desc(), models.CropCycle.id.desc())
+    ).first()
+
+
+def update_crop_cycle(
+    db: Session, cycle: models.CropCycle, data: schemas.CropCycleUpdate
+) -> models.CropCycle:
+    changes = data.model_dump(exclude_unset=True)
+    for name, value in changes.items():
+        setattr(cycle, name, value)
+    if "display_area" in changes or "display_area_unit" in changes:
+        cycle.planted_area_m2 = _planted_area_m2(cycle)
+    db.commit()
+    db.refresh(cycle)
+    return cycle
+
+
+# The record types that belong to a season. Each already has the column; none had
+# a writer. `date_attr` is how a record is placed in time for the backfill.
+_CYCLE_LINKED_MODELS = (
+    (models.SprayEvent, "application_date"),
+    (models.PlannedSpray, "intended_date"),
+    (models.ScoutObservation, "observation_date"),
+)
+
+
+def link_records_to_cycle(db: Session, cycle: models.CropCycle) -> dict:
+    """Attach the farm's unlinked records that fall inside this cycle's window.
+
+    Only rows with `crop_cycle_id IS NULL` are touched, so a record already
+    attributed to a season is never silently moved. The window runs from the
+    planting date (or the season's start) to the recorded harvest end, or is
+    open-ended while the cycle is still growing — an open cycle should collect
+    today's records, which is the entire point of stamping new ones.
+    """
+    start = cycle.planting_date or date(cycle.season_year, 1, 1)
+    end = cycle.actual_harvest_end or cycle.expected_harvest_end
+    linked: dict[str, int] = {}
+    for model, date_attr in _CYCLE_LINKED_MODELS:
+        column = getattr(model, date_attr)
+        stmt = select(model).where(
+            model.farm_id == cycle.farm_id,
+            model.crop_cycle_id.is_(None),
+            column >= start,
+        )
+        if end is not None:
+            stmt = stmt.where(column <= end)
+        rows = list(db.scalars(stmt))
+        for row in rows:
+            row.crop_cycle_id = cycle.id
+        linked[model.__tablename__] = len(rows)
+
+    plans = list(
+        db.scalars(
+            select(models.InputPlan).where(
+                models.InputPlan.farm_id == cycle.farm_id,
+                models.InputPlan.crop_cycle_id.is_(None),
+            )
+        )
+    )
+    for plan in plans:
+        needed = plan.needed_by
+        if needed is not None and needed >= start and (end is None or needed <= end):
+            plan.crop_cycle_id = cycle.id
+            linked["input_plans"] = linked.get("input_plans", 0) + 1
+
+    db.commit()
+    return linked
+
+
+def stamp_open_cycle(db: Session, farm_id: int, record) -> None:
+    """Give a newly created record the farm's open season, when it has one.
+
+    Called before the insert commits. Silent no-op when the farm has no open
+    cycle — season tracking is opt-in and nothing should break for a farm that
+    has never created one.
+    """
+    if getattr(record, "crop_cycle_id", None) is not None:
+        return
+    cycle = open_crop_cycle(db, farm_id)
+    if cycle is not None:
+        record.crop_cycle_id = cycle.id
+
+
+# ------------------------------------------------------------------- Operations
+def create_operation(
+    db: Session, cycle: models.CropCycle, data: schemas.OperationCreate
+) -> models.Operation:
+    """Record a non-spray operation and its cost against a cycle.
+
+    Applications keep their own table (`SprayEvent.cost`); this is the irrigation,
+    fertiliser and harvest work that has never had anywhere to go. The ledger reads
+    both and de-duplicates on `operation_id`.
+    """
+    if data.field_id is not None:
+        field = db.get(models.Field, data.field_id)
+        if field is None or field.farm_id != cycle.farm_id:
+            raise CrossFarmReferenceError("that field belongs to a different farm")
+    if data.block_id is not None:
+        ensure_block_on_farm(db, cycle.farm_id, data.block_id)
+
+    payload = data.model_dump()
+    display_area = payload.get("display_area")
+    display_unit = payload.get("display_area_unit")
+    converted = units.convert(display_area, display_unit, "m2")
+    operation = models.Operation(
+        farm_id=cycle.farm_id,
+        crop_cycle_id=cycle.id,
+        area_m2=None if isinstance(converted, units.Refusal) else converted.amount,
+        **payload,
+    )
+    if operation.currency_code is None:
+        operation.currency_code = cycle.currency_code or cycle.farm.currency_code
+    ensure_demo_real_separation(db, cycle.farm_id, operation)
+    db.add(operation)
+    db.commit()
+    db.refresh(operation)
+    return operation
+
+
+def list_operations(
+    db: Session, farm_id: int, crop_cycle_id: int | None = None
+) -> list[models.Operation]:
+    stmt = select(models.Operation).where(models.Operation.farm_id == farm_id)
+    if crop_cycle_id is not None:
+        stmt = stmt.where(models.Operation.crop_cycle_id == crop_cycle_id)
+    return list(
+        db.scalars(stmt.order_by(models.Operation.performed_on.desc(), models.Operation.id.desc()))
+    )
+
+
+# ==================================================================== #
+# The value ledger                                                     #
+# ==================================================================== #
+def build_value_ledger(
+    db: Session, farm: models.Farm, crop_cycle_id: int | None = None
+) -> dict:
+    """Gather one farm's loop and hand it to the pure `value_ledger` module.
+
+    When a cycle is named, every record set is scoped to it and the count of
+    records that fall outside is reported — an unlinked spray silently missing
+    from a season's costs is exactly the kind of gap that makes a total look
+    better than the truth.
+    """
+    def _scoped(model, rows):
+        if crop_cycle_id is None:
+            return rows, 0
+        inside = [r for r in rows if getattr(r, "crop_cycle_id", None) == crop_cycle_id]
+        return inside, len(rows) - len(inside)
+
+    all_decisions = list_planned_sprays(db, farm.id)
+    decisions, decisions_out = _scoped(models.PlannedSpray, all_decisions)
+    all_sprays = list_spray_events(db, farm.id)
+    sprays, sprays_out = _scoped(models.SprayEvent, all_sprays)
+    all_plans = list_input_plans(db, farm.id)
+    plans, plans_out = _scoped(models.InputPlan, all_plans)
+
+    follow_ups = {
+        decision.id: list_follow_up_events(db, decision.id) for decision in decisions
+    }
+    operations = list_operations(db, farm.id, crop_cycle_id)
+    block_outcomes = list_block_outcomes(db, farm.id)
+
+    scope = {
+        "crop_cycle_id": crop_cycle_id,
+        "records_outside_cycle": {
+            "planned_sprays": decisions_out,
+            "spray_events": sprays_out,
+            "input_plans": plans_out,
+        } if crop_cycle_id is not None else None,
+    }
+    return value_ledger.build_ledger(
+        farm=farm,
+        decisions=decisions,
+        follow_ups_by_decision=follow_ups,
+        input_plans=plans,
+        spray_events=sprays,
+        operations=operations,
+        block_outcomes=block_outcomes,
+        scope=scope,
+    )

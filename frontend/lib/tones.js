@@ -128,3 +128,11 @@ export const URGENCY_TONES = {
   flags: "warn",
   ok: "neutral",
 };
+
+// Value-ledger evidence tiers. `not_calculated` is deliberately neutral, not a
+// warning: a decision with nothing attributable is a normal, honest state.
+export const VALUE_TIER_TONES = {
+  verified: "good",
+  estimated: "info",
+  not_calculated: "neutral",
+};

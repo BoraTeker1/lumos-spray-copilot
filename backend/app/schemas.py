@@ -551,6 +551,11 @@ class BlockOutcomeObservationCreate(BaseModel):
     notes: str | None = None
     source_type: str | None = None
     supersedes_id: int | None = None
+    # Provenance, so an outcome entered on a demo farm is tagged simulated like
+    # every other record there. Without these the schema silently dropped the
+    # caller's tag and the ORM default made it look like a real measurement.
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
 
     @model_validator(mode="after")
     def _value_requires_a_unit(self):
@@ -577,6 +582,8 @@ class BlockOutcomeObservation(BaseModel):
     notes: str | None = None
     source_type: str | None = None
     supersedes_id: int | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
     created_at: datetime
 
 
@@ -2040,4 +2047,128 @@ class CoverageAssessment(BaseModel):
     refusal_code: str | None = None
     refusal_detail: str | None = None
     assessed_by: str | None = None
+    created_at: datetime
+
+
+# --------------------------------------------------- Crop cycles (the season)
+# `CropCycle` and `Operation` have existed in models.py since the entity-spine
+# phase with no route and no writer. These are the schemas that make the season
+# reachable, so decisions, applications, costs and harvest outcomes can hang off
+# the economic unit they belong to.
+CropCycleStatus = Literal[
+    "planned", "planted", "growing", "harvesting", "closed", "abandoned"
+]
+OperationType = Literal[
+    "planting", "irrigation", "fertilization", "crop_protection", "scouting",
+    "harvest", "tillage", "other",
+]
+
+
+class CropCycleCreate(BaseModel):
+    # Optional: a farm with no field entities yet gets a whole-farm one, so a season
+    # can be started without building the entity spine by hand first.
+    field_id: int | None = None
+    crop: str
+    season_year: int
+    variety_name: str | None = None
+    season_label: str | None = None
+    planting_date: date | None = None
+    expected_harvest_start: date | None = None
+    expected_harvest_end: date | None = None
+    display_area: float | None = Field(default=None, gt=0)
+    display_area_unit: str | None = None
+    target_market: str | None = None
+    target_grade: str | None = None
+    status: CropCycleStatus = "growing"
+    currency_code: str | None = None
+    notes: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+
+class CropCycleUpdate(BaseModel):
+    """Closing a cycle is the common case; every field is optional."""
+    status: CropCycleStatus | None = None
+    variety_name: str | None = None
+    season_label: str | None = None
+    planting_date: date | None = None
+    expected_harvest_start: date | None = None
+    expected_harvest_end: date | None = None
+    actual_harvest_start: date | None = None
+    actual_harvest_end: date | None = None
+    display_area: float | None = Field(default=None, gt=0)
+    display_area_unit: str | None = None
+    target_market: str | None = None
+    target_grade: str | None = None
+    notes: str | None = None
+
+
+class CropCycle(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    field_id: int
+    crop: str
+    variety_name: str | None = None
+    season_year: int
+    season_label: str | None = None
+    planting_date: date | None = None
+    expected_harvest_start: date | None = None
+    expected_harvest_end: date | None = None
+    actual_harvest_start: date | None = None
+    actual_harvest_end: date | None = None
+    planted_area_m2: float | None = None
+    display_area: float | None = None
+    display_area_unit: str | None = None
+    target_market: str | None = None
+    target_grade: str | None = None
+    status: str
+    currency_code: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+class OperationCreate(BaseModel):
+    """A non-spray thing done to a crop cycle, and what it cost.
+
+    Applications keep their own table and their own cost column — the ledger reads
+    both. This is for the irrigation / fertiliser / harvest passes that have never
+    had anywhere to go.
+    """
+    operation_type: OperationType
+    performed_on: date | None = None
+    planned_on: date | None = None
+    field_id: int | None = None
+    block_id: int | None = None
+    display_area: float | None = Field(default=None, gt=0)
+    display_area_unit: str | None = None
+    cost_amount: float | None = Field(default=None, ge=0)
+    currency_code: str | None = None
+    performed_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+
+class Operation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    crop_cycle_id: int | None = None
+    field_id: int | None = None
+    block_id: int | None = None
+    operation_type: str
+    planned_on: date | None = None
+    performed_on: date | None = None
+    area_m2: float | None = None
+    display_area: float | None = None
+    display_area_unit: str | None = None
+    cost_amount: float | None = None
+    currency_code: str | None = None
+    performed_by: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
     created_at: datetime
