@@ -2750,3 +2750,69 @@ class CoverageAssessment(Base):
     data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class ResidueReferenceRecord(Base):
+    """One (commodity, pesticide, program year) summary from a USDA PDP release.
+
+    APPEND-ONLY, and unique on the pair plus the source digest. Unlike
+    `ProductLabelRecord` there is no supersede chain, and the reason is the same one
+    `feature_values` gives for having none: at a fixed program year computed from fixed
+    published bytes, the aggregate must reproduce forever. A row that changed while its
+    digest stayed the same would be proof of a loader bug, and the uniqueness constraint
+    turns that into an integrity error instead of a silent rewrite. USDA re-releasing a
+    corrected year produces a different digest and therefore a visibly different row.
+
+    NOT a regulatory source. `epa_tolerance_value` is USDA's transcription of an EPA
+    tolerance into their own reference workbook — a secondary source. It travels with
+    `residue_reference.AUTHORITY_REFERENCE_DATASET` and must never back a definitive
+    verdict or override a transcribed label (ENGINEERING_GUIDELINES.md §4, §5 authority gating).
+
+    `epa_tolerance_value` NULL means the workbook stated a non-numeric basis (NT / EX /
+    SU) held in `epa_tolerance_basis`, or stated nothing. As everywhere else in this
+    schema, NULL means THE SOURCE IS SILENT — never "no limit".
+    """
+    __tablename__ = "residue_reference_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "commodity_code", "commodity_type", "pesticide_code", "program_year",
+            "domestic_only", "source_digest",
+            name="uq_residue_reference_pair_release",
+        ),
+        Index("ix_residue_reference_lookup", "commodity_code", "pesticide_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # PDP's own codes and names, stored verbatim. Matching to this product's crop
+    # vocabulary happens at read time through app/crop_aliases.py — never by rewriting
+    # USDA's names on the way in.
+    commodity_code: Mapped[str] = mapped_column(String(4), nullable=False)
+    commodity_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    commodity_type: Mapped[str] = mapped_column(String(4), nullable=False, default="")
+    pesticide_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    pesticide_name: Mapped[str] = mapped_column(String(160), nullable=False)
+
+    program_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # Assays run for this pair, INCLUDING non-detects. The denominator of any rate.
+    samples_tested: Mapped[int] = mapped_column(Integer, nullable=False)
+    samples_with_detection: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL when nothing was detected: there is no maximum of an empty set, and 0.0 would
+    # read as "detected at zero" rather than "never detected".
+    max_concentration: Mapped[float | None] = mapped_column(Float)
+    median_detected_concentration: Mapped[float | None] = mapped_column(Float)
+    concentration_unit: Mapped[str | None] = mapped_column(String(8))
+    unit_conflict: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # True when only ORIGIN=1 (US-grown) samples were counted.
+    domestic_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    epa_tolerance_value: Mapped[float | None] = mapped_column(Float)
+    # NT / EX / SU when the workbook stated a code instead of a number.
+    epa_tolerance_basis: Mapped[str | None] = mapped_column(String(4))
+    tolerance_unit: Mapped[str | None] = mapped_column(String(8))
+
+    # Provenance: the release this came from and a digest of the exact bytes read.
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    source_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    loaded_by: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)

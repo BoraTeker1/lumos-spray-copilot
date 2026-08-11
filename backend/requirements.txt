@@ -9,3 +9,5 @@ python-multipart>=0.0.9   # file uploads (field-photo analysis)
 anthropic>=0.40           # multimodal photo analysis (optional; falls back to a mock without a key)
 alembic>=1.13             # schema migrations (baseline exists; required once real pilot data lands)
 pytest>=8.2
+openpyxl>=3.1            # reads the USDA PDP reference workbook (.xlsx, 2020+ releases)
+xlrd>=2.0                # same workbook in the legacy .xls form (2019 and earlier releases)

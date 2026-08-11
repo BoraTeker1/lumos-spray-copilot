@@ -26,6 +26,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import CompliancePanel from "@/components/CompliancePanel";
+import ResidueReferenceCard from "@/components/ResidueReferenceCard";
 import DataTable from "@/components/DataTable";
 import DecisionEvidenceCard from "@/components/DecisionEvidenceCard";
 import ReductionCard from "@/components/ReductionCard";
@@ -345,7 +346,13 @@ export default function EvidencePage() {
         </TabsList>
 
         <TabsContent value="compliance">
-          <CompliancePanel />
+          <div className="space-y-6">
+            <CompliancePanel />
+            {/* Residue history sits under Compliance rather than on a decision page:
+                it is audit/residue-risk context, and adding it to the PCA-facing
+                decision surface would break the Botrytis shadow study's blinding. */}
+            <ResidueReferenceCard />
+          </div>
         </TabsContent>
 
         <TabsContent value="evidence">

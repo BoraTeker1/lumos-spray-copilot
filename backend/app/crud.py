@@ -4363,3 +4363,139 @@ def list_coverage_assessments(db: Session, farm_id: int) -> list[models.Coverage
             )
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Residue reference (USDA PDP). See app/residue_reference.py for the contract and
+# app/pdp_sync.py for the explicit loader that calls this.
+# ---------------------------------------------------------------------------
+
+def load_residue_reference(
+    db: Session,
+    aggregates,
+    *,
+    commodity_names: dict[str, str],
+    pesticide_names: dict[str, str],
+    tolerances: dict[tuple[str, str], tuple[float | None, str | None, str | None]],
+    source_reference: str,
+    source_digest: str,
+    loaded_by: str | None = None,
+) -> dict:
+    """Persist PDP aggregates as append-only reference rows. Idempotent by digest.
+
+    Re-running with the same release is a no-op rather than an error: the uniqueness
+    constraint is on the pair plus the digest, so identical bytes cannot produce a second
+    row. A corrected USDA re-release has a different digest and lands alongside the old
+    one, leaving both readable — the same auditability argument as the label supersede
+    chain, achieved here without a chain because these rows are never revised in place.
+
+    An aggregate whose commodity or pesticide code is missing from the release's own
+    reference workbook is SKIPPED and counted, never written with the code as its name:
+    a row labelled 'B22' instead of 'Cyprodinil' cannot be matched by any caller and
+    would silently shrink coverage.
+    """
+    created = 0
+    skipped_unnamed = 0
+    unchanged = 0
+
+    for agg in aggregates:
+        commodity_name = commodity_names.get(agg.commodity_code)
+        pesticide_name = pesticide_names.get(agg.pesticide_code)
+        if not commodity_name or not pesticide_name:
+            skipped_unnamed += 1
+            continue
+
+        existing = db.execute(
+            select(models.ResidueReferenceRecord).where(
+                models.ResidueReferenceRecord.commodity_code == agg.commodity_code,
+                models.ResidueReferenceRecord.commodity_type == agg.commodity_type,
+                models.ResidueReferenceRecord.pesticide_code == agg.pesticide_code,
+                models.ResidueReferenceRecord.program_year == agg.program_year,
+                models.ResidueReferenceRecord.domestic_only == agg.domestic_only,
+                models.ResidueReferenceRecord.source_digest == source_digest,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            unchanged += 1
+            continue
+
+        tol_value, tol_basis, tol_unit = tolerances.get(
+            (agg.pesticide_code, agg.commodity_code), (None, None, None)
+        )
+        db.add(
+            models.ResidueReferenceRecord(
+                commodity_code=agg.commodity_code,
+                commodity_name=commodity_name,
+                commodity_type=agg.commodity_type,
+                pesticide_code=agg.pesticide_code,
+                pesticide_name=pesticide_name,
+                program_year=agg.program_year,
+                samples_tested=agg.samples_tested,
+                samples_with_detection=agg.samples_with_detection,
+                max_concentration=agg.max_concentration,
+                median_detected_concentration=agg.median_detected_concentration,
+                concentration_unit=agg.concentration_unit,
+                unit_conflict=agg.unit_conflict,
+                domestic_only=agg.domestic_only,
+                epa_tolerance_value=tol_value,
+                epa_tolerance_basis=tol_basis,
+                tolerance_unit=tol_unit,
+                source_reference=source_reference,
+                source_digest=source_digest,
+                loaded_by=loaded_by,
+            )
+        )
+        created += 1
+
+    db.commit()
+    return {
+        "aggregates_read": len(aggregates),
+        "records_created": created,
+        "unchanged": unchanged,
+        "skipped_unnamed": skipped_unnamed,
+    }
+
+
+def get_residue_reference_rows(db: Session) -> list[models.ResidueReferenceRecord]:
+    """Every loaded reference row. Small by construction — one summary per pair/year."""
+    return list(
+        db.execute(
+            select(models.ResidueReferenceRecord).order_by(
+                models.ResidueReferenceRecord.commodity_code,
+                models.ResidueReferenceRecord.pesticide_name,
+                models.ResidueReferenceRecord.program_year,
+            )
+        ).scalars()
+    )
+
+
+def residue_reference_coverage(db: Session) -> dict:
+    """What has been loaded, for the operator readiness surface.
+
+    Reports the commodities and program years present, so "we have no strawberry data
+    since 2016" is visible rather than something a reader infers from a refusal.
+    """
+    rows = get_residue_reference_rows(db)
+    by_commodity: dict[str, dict] = {}
+    for row in rows:
+        entry = by_commodity.setdefault(
+            row.commodity_name,
+            {"commodity_name": row.commodity_name, "program_years": set(), "pairs": 0},
+        )
+        entry["program_years"].add(row.program_year)
+        entry["pairs"] += 1
+    return {
+        "loaded": bool(rows),
+        "total_rows": len(rows),
+        "commodities": sorted(
+            (
+                {
+                    "commodity_name": e["commodity_name"],
+                    "program_years": sorted(e["program_years"]),
+                    "pairs": e["pairs"],
+                }
+                for e in by_commodity.values()
+            ),
+            key=lambda e: e["commodity_name"],
+        ),
+    }

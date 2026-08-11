@@ -317,6 +317,51 @@ are all written down there with the reason each points the way it does.**
   `GET /internal/transcription-status` (operator worklist, generated from the domain registry so it
   cannot drift). The profile abstains **per field** and computes no overall score.
 
+### Measured residue reference (USDA PDP) — the first empirical source
+
+Added 2026-08-10. The first layer whose data is neither transcribed from a regulation nor
+recorded by the farm: a national measurement programme's published findings.
+
+- **Source:** USDA AMS Pesticide Data Program annual databases, 1992–2024, free zips at
+  `https://www.ams.usda.gov/datasets/pdp/pdpdata`. Machine-readable, so it is READ as
+  published rather than transcribed — the empty-source pattern does not apply.
+- **`app/pdp_dataset.py`** (pure) parses the pipe-delimited Samples/Results files and
+  aggregates per (commodity, pesticide, year). Two invariants carry the weight: a
+  **non-detect is a row, not a missing row**, so the detection-rate denominator is assays
+  run; and a **pair that was never assayed produces no aggregate at all**, because `0 of
+  0` would read as "never found" when the truth is "never looked."
+- **`app/residue_reference.py`** (pure) returns `ResidueProfile | Refusal`. The profile
+  has **no verdict, band, score, or action field** — the `RiskAssessment` technique, so a
+  residue statistic cannot become "do not spray this." Refusal codes distinguish
+  `pesticide_not_analysed` (known compound, not on this crop's panel) from
+  `crop_not_in_program` from `no_residue_reference_loaded`; those are different people's
+  jobs to fix.
+- **Authority is `reference_dataset`** — deliberately weaker than `verified_label`. The
+  EPA tolerance carried here is USDA's transcription into their own workbook, a secondary
+  source, and must never override a label or back a definitive verdict.
+- **Staleness is a field, not a footnote.** PDP rotates commodities: **fresh strawberries
+  were last sampled in 2016** (frozen in 2019); 2024 sampled cherry tomatoes but no
+  strawberries. `program_year` and `years_since_program` are on every profile and baked
+  into the server-owned `basis_text` so a card cannot drop them.
+- **Loader:** `python -m app.pdp_sync <year>PDPDatabase.zip --crops strawberry,tomato`.
+  Explicit like `label_sync`, takes a LOCAL PATH (no network, no key), idempotent by
+  content digest, defaults to US-grown samples only. `ResidueReferenceRecord` is
+  append-only and unique on (pair + release digest), so a corrected USDA re-release lands
+  beside the original rather than overwriting it.
+- **Crop matching goes through `crop_aliases`**, so USDA's "Strawberries" matches our
+  "strawberry" while **"Cherry Tomatoes" does NOT match "tomato"** — it is ambiguous and
+  refuses, which is correct: they are different commodities for residue purposes.
+- **Surfaces:** `GET /residue-reference?crop=&active_ingredient=` (grower/PCA-facing, not
+  farm-scoped — PDP measures nationally, so a farm id would imply a claim about that
+  farm), `GET /internal/residue-reference-coverage` (operator), and
+  `ResidueReferenceCard` on the **Compliance tab of `/evidence`**. Deliberately NOT on
+  `/decisions/{id}` — that would break the shadow study's blinding.
+- **What it says today:** on the loaded 2016 release, cyprodinil was detected in 249 of
+  474 domestic strawberry samples (max 1.7 ppm against a 5.0 ppm tolerance) and
+  fludioxonil in 184 of 474 (max 0.62 ppm against 3.0 ppm) — the two active ingredients
+  in the transcribed Switch 62.5WG label. **Captan has no PDP coverage on strawberries at
+  all**, so the other transcribed product correctly refuses.
+
 ### Other built surfaces
 
 - **Historical opportunity scan** (`app/backtest.py`) — replays a past season's scheduled spray
@@ -381,6 +426,11 @@ are all written down there with the reason each points the way it does.**
   `analytics.py`, `reduction.py`, `weather.py` / `advisory_weather.py`, `pilot_evidence.py`,
   `farm_profile.py`, `procurement_analytics.py`, `rfq_transport.py`, plus the agronomy/finance/
   market set named in §5.
+- **Residue reference (§5):** `app/pdp_dataset.py` (pure parser/aggregator) and
+  `app/residue_reference.py` (pure lookup → `ResidueProfile | Refusal`) with the explicit
+  loader `app/pdp_sync.py`. `pdp_sync` lazily imports `openpyxl`/`xlrd` — the same
+  technique `ingest/cimis.py` uses for `httpx`, so an optional reader never makes a
+  module unimportable where it is unused.
 - **`app/ingest/`** — `base`/`domains`/`registry`/`geo` are PURE (pinned by test); `pipeline.py` is
   the only DB-touching module and `cimis.py` the only one with a network call.
 - **`app/features/`** — derived values that abstain. `base.py`'s invariant: a `FeatureResult` is
@@ -479,6 +529,14 @@ alembic stamp head           # seeding uses create_all and desyncs Alembic
 python -m app.label_sync     # 2 transcribed labels
 python -m app.reference_farm # prints the PCA token ONCE — copy it
 
+# Measured residue reference (USDA PDP). EXPLICIT like label_sync, and OPTIONAL —
+# every residue lookup refuses with `no_residue_reference_loaded` until it runs.
+# Download a release first (a browser; the loader never fetches):
+#   https://www.ams.usda.gov/sites/default/files/media/2016PDPDatabase.zip
+python -m app.pdp_sync 2016PDPDatabase.zip --crops strawberry,tomato
+#   2016 is the LAST release covering fresh strawberries — PDP rotates commodities.
+#   Re-running the same release is a no-op (idempotent by content digest).
+
 # Background worker (ingestion + feature recomputation). Inert without a credential.
 python -m app.jobs.worker --once --queues default,ingest,features
 #   export LUMOS_CIMIS_APP_KEY=...            (free from et.water.ca.gov)
@@ -496,7 +554,8 @@ npm run dev        # http://localhost:3000
 npm run build      # production build = the real compile/lint check
 ```
 
-- **Test count: 1059 passing** as of 2026-08-09. **Always re-run `pytest` and report the real
+- **Test count: 1083 passing** as of 2026-08-10 (1059 + 24 in `test_residue_reference.py`).
+  **Always re-run `pytest` and report the real
   number** — this line goes stale, and a remembered count is not evidence. AI tests run on
   `MockLlmService`; never let tests hit the real API.
 - **Interlocks that will look like a broken build if you forget them:**
@@ -656,7 +715,14 @@ pilot ladder where a lower stage may never make a higher stage's claim.
   cited source. **This is now a purchase we are allowed to make (§4) — make it.**
 - **Thresholds and coefficients are untranscribed** across fourteen empty sources. Every model
   over them refuses. Honest, but it means most of the platform computes nothing today.
-- **No MRL reference data** — destination-market law, a different source from the label layer.
+- **No MRL reference data for export markets.** US **EPA tolerances** now arrive with the
+  PDP residue layer (§5), but those are the US limit only. Destination-market MRLs are a
+  different source; USDA FAS funds free "Starter" access to the Global MRL Database for
+  US-based users, and nobody has registered for it yet.
+- **PDP residue coverage for the wedge is a decade old.** Fresh strawberries were last
+  sampled in 2016. The layer is honest about it (`years_since_program` on every profile),
+  but "measured recently" is not a claim this data can support, and no amount of code
+  fixes that — it is USDA's sampling rotation.
 - **Tenant isolation is not implemented.** There is no auth, only attribution strings plus the
   operator key and PCA credentials. The Strix pentest found a cross-farm attribution path (fixed
   in `b195713`), which is the concrete evidence this is now a real gap rather than a deferred

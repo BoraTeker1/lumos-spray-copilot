@@ -24,6 +24,10 @@ from app import (
     irrigation, land_selection, monitoring, pricing, rfq_transport, seed_selection,
     soil, transcription,
 )
+# The first EMPIRICAL reference layer: USDA PDP measured residues. Unlike the layers
+# above it ships with real loaded data when an operator has run `python -m app.pdp_sync`,
+# and refuses with a specific code when they have not — see app/residue_reference.py.
+from app import residue_reference
 from app.ingest import domains as ingest_domains
 from app.analytics import compute_cost_analytics
 # Imported for its side effect: registering the feature specs and their job handlers.
@@ -3338,3 +3342,106 @@ def internal_post_order_event(
     /orders/{id}/input-applied link."""
     order = _require_purchase_order(db, order_id)
     return _procurement_call(crud.add_order_event, db, order, payload)
+
+
+# ---------------------------------------------------------------------------
+# Residue reference (USDA Pesticide Data Program)
+# ---------------------------------------------------------------------------
+
+@app.get("/residue-reference", tags=["labels"])
+def residue_reference_lookup(
+    crop: str,
+    active_ingredient: str,
+    db: Session = Depends(get_db),
+):
+    """Measured national residue findings for one (crop, active ingredient) pair.
+
+    Grower/PCA-facing, and deliberately NOT farm-scoped: PDP measures commodities
+    nationally, so there is no farm whose data this reflects. Taking a farm id would
+    imply the numbers describe that farm, which is precisely the misreading the payload
+    works to prevent.
+
+    Returns EITHER a profile OR a refusal with a code, never a zero-filled shape — the
+    `/data-readiness` rule (ENGINEERING_GUIDELINES.md §9). `pesticide_not_analysed` in particular must
+    reach the UI intact: "we did not measure this" and "we measured none" are opposite
+    facts, and only the refusal code distinguishes them.
+
+    Carries no verdict, no risk band, and no action, because `ResidueProfile` has no
+    field for one. It also stays OFF the PCA-facing decision payload: adding a national
+    residue statistic to `/decisions/{id}` would break the Botrytis shadow study's
+    blinding (ENGINEERING_GUIDELINES.md §5).
+    """
+    rows = crud.get_residue_reference_rows(db)
+    result = residue_reference.lookup(
+        crop=crop,
+        active_ingredient=active_ingredient,
+        rows=rows,
+        current_year=clock.current_date().year,
+    )
+
+    if isinstance(result, residue_reference.Refusal):
+        return {
+            "query": {"crop": crop, "active_ingredient": active_ingredient},
+            **result.as_payload(),
+            "disclaimer": residue_reference.RESIDUE_REFERENCE_DISCLAIMER,
+        }
+
+    payload = {
+        "query": {"crop": crop, "active_ingredient": active_ingredient},
+        "refused": False,
+        "crop": result.crop,
+        "commodity_name": result.commodity_name,
+        "active_ingredient": result.active_ingredient,
+        "program_year": result.program_year,
+        "years_since_program": result.years_since_program,
+        "samples_tested": result.samples_tested,
+        "samples_with_detection": result.samples_with_detection,
+        "detection_rate": result.detection_rate,
+        "domestic_only": result.domestic_only,
+        "authority": result.authority,
+        # Server-owned wording so a card renders it verbatim and the release year can
+        # never be dropped by a caller that only wanted the percentage.
+        "basis_text": residue_reference.basis_text(result),
+        "source_reference": result.source_reference,
+        "source_digest": result.source_digest,
+        "disclaimer": residue_reference.RESIDUE_REFERENCE_DISCLAIMER,
+    }
+
+    # Concentrations are omitted entirely when nothing was detected. A null
+    # `max_concentration` is what a template turns into 0, and "0 ppm detected" reads as
+    # a measurement rather than an absence.
+    if result.max_concentration is not None:
+        payload["max_concentration"] = result.max_concentration
+        payload["concentration_unit"] = result.concentration_unit
+    if result.median_detected_concentration is not None:
+        payload["median_detected_concentration"] = result.median_detected_concentration
+
+    # Same rule for the tolerance: a non-numeric basis (NT/EX/SU) carries its meaning as
+    # prose and never as a number.
+    if result.epa_tolerance_value is not None:
+        payload["epa_tolerance_value"] = result.epa_tolerance_value
+        payload["tolerance_unit"] = result.tolerance_unit
+    if result.epa_tolerance_basis is not None:
+        payload["epa_tolerance_basis"] = result.epa_tolerance_basis
+        payload["tolerance_note"] = result.tolerance_note
+    if result.max_as_share_of_tolerance is not None:
+        payload["max_as_share_of_tolerance"] = result.max_as_share_of_tolerance
+
+    return payload
+
+
+@app.get("/internal/residue-reference-coverage", tags=["internal"])
+def internal_residue_reference_coverage(db: Session = Depends(get_db)):
+    """Which PDP releases and commodities are loaded — the operator's coverage view.
+
+    Under `/internal` so `app/operator_key.py`'s path-prefix middleware gates it by
+    construction, rather than by a per-route dependency someone can forget.
+    It answers "what should I load next", which is an operator task.
+    The grower-facing route above already explains any individual gap through its
+    refusal code.
+    """
+    return {
+        **crud.residue_reference_coverage(db),
+        "loader": "python -m app.pdp_sync <year>PDPDatabase.zip --crops strawberry,tomato",
+        "releases": "https://www.ams.usda.gov/datasets/pdp/pdpdata",
+    }
