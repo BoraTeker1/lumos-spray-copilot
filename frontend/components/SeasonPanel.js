@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarRange, Plus } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, CalendarRange, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDemoTag } from "@/lib/farm-context";
 import { Badge } from "@/components/ui/badge";
@@ -18,8 +19,10 @@ import {
 } from "@/components/ui/dialog";
 import SectionCard from "@/components/SectionCard";
 import EmptyState from "@/components/EmptyState";
+import SaleRecordForm from "@/components/SaleRecordForm";
 import {
   BLOCK_OUTCOME_TYPE_LABELS,
+  COST_CATEGORY_LABELS,
   CROP_CYCLE_STATUS_LABELS,
   OPERATION_TYPE_LABELS,
 } from "@/lib/labels";
@@ -105,9 +108,15 @@ function StartSeasonForm({ farmId, farm, onDone }) {
   );
 }
 
-function OperationForm({ cycleId, currency, onDone }) {
+function OperationForm({ farmId, cycleId, currency, onDone }) {
+  // Without the demo tag this 409s on a demo farm: one farm's records are all demo
+  // or all real, and an untagged write defaults to real. The other two forms on this
+  // panel already carried it; this one did not, so "Record a cost" was unusable on
+  // every seeded farm.
+  const demoTag = useDemoTag(farmId);
   const [form, setForm] = useState({
     operation_type: "fertilization",
+    cost_category: "",
     performed_on: "",
     cost_amount: "",
     notes: "",
@@ -122,7 +131,11 @@ function OperationForm({ cycleId, currency, onDone }) {
     setError(null);
     try {
       await api.createOperation(cycleId, {
+        ...demoTag,
         operation_type: form.operation_type,
+        // Left blank, the server fills it from the operation type where that is
+        // unambiguous and leaves it unset otherwise. It never guesses.
+        cost_category: form.cost_category || null,
         performed_on: form.performed_on || null,
         cost_amount: form.cost_amount === "" ? null : Number(form.cost_amount),
         notes: form.notes || null,
@@ -146,6 +159,25 @@ function OperationForm({ cycleId, currency, onDone }) {
           >
             {Object.entries(OPERATION_TYPE_LABELS)
               .filter(([key]) => key !== "crop_protection")
+              .map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+          </select>
+        </Field>
+        <Field
+          label="Cost category"
+          hint="Left as “From the operation type”, the server fills it in where that is unambiguous."
+        >
+          <select
+            value={form.cost_category}
+            onChange={set("cost_category")}
+            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
+          >
+            <option value="">From the operation type</option>
+            {Object.entries(COST_CATEGORY_LABELS)
+              .filter(([key]) => key !== "uncategorised")
               .map(([key, label]) => (
                 <option key={key} value={key}>
                   {label}
@@ -178,20 +210,44 @@ function OperationForm({ cycleId, currency, onDone }) {
   );
 }
 
-function HarvestOutcomeForm({ farmId, blocks, onDone }) {
+function HarvestOutcomeForm({ farmId, farm, blocks, onDone, onBlockCreated }) {
   const demoTag = useDemoTag(farmId);
   const [form, setForm] = useState({
     block_id: blocks[0]?.id ? String(blocks[0].id) : "",
     observed_on: "",
-    outcome_type: "marketable_packout",
+    outcome_type: "yield",
     value: "",
-    unit: "pct",
+    unit: "lb",
     denominator: "",
     method: "",
   });
+  // Blocks had a create route and no UI caller at all, so a farm that had never been
+  // seeded simply could not record a harvest outcome. Creating one inline is the
+  // smallest fix that does not fabricate block structure nobody recorded.
+  const [newBlockName, setNewBlockName] = useState("");
+  const [creatingBlock, setCreatingBlock] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  async function createBlock() {
+    setCreatingBlock(true);
+    setError(null);
+    try {
+      const block = await api.createBlock(farmId, {
+        ...demoTag,
+        name: newBlockName,
+        crop: farm?.crop_type || null,
+      });
+      setNewBlockName("");
+      setForm((f) => ({ ...f, block_id: String(block.id) }));
+      await onBlockCreated?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCreatingBlock(false);
+    }
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -218,10 +274,23 @@ function HarvestOutcomeForm({ farmId, blocks, onDone }) {
 
   if (blocks.length === 0) {
     return (
-      <p className="text-sm text-muted">
-        Add a block to this farm first — an outcome is measured per block per harvest,
-        not per farm.
-      </p>
+      <div className="space-y-3">
+        <p className="text-sm text-muted">
+          An outcome is measured per block per harvest, not per farm — so this farm
+          needs at least one block. Name the one you are harvesting.
+        </p>
+        <Field label="Block name" required>
+          <Input
+            value={newBlockName}
+            onChange={(e) => setNewBlockName(e.target.value)}
+            placeholder="Field 7"
+          />
+        </Field>
+        <FormError>{error}</FormError>
+        <Button type="button" onClick={createBlock} disabled={creatingBlock || !newBlockName}>
+          {creatingBlock ? "Adding…" : "Add block"}
+        </Button>
+      </div>
     );
   }
 
@@ -263,7 +332,11 @@ function HarvestOutcomeForm({ farmId, blocks, onDone }) {
         <Field
           label="Unit"
           required
-          hint="Required whenever a value is given — nothing here converts between units."
+          hint={
+            form.outcome_type === "yield"
+              ? "Use a weight unit (lb, kg, t) so the season can total a yield. Trays and flats cannot be combined — no source states what one weighs."
+              : "Required whenever a value is given — nothing here converts between units."
+          }
         >
           <Input value={form.unit} onChange={set("unit")} />
         </Field>
@@ -324,7 +397,12 @@ export default function SeasonPanel({ farmId, farm, cycles, blocks = [], onChang
                   A non-spray operation on {current.season_label || current.crop}.
                 </DialogDescription>
               </DialogHeader>
-              <OperationForm cycleId={current.id} currency={current.currency_code} onDone={done} />
+              <OperationForm
+                farmId={farmId}
+                cycleId={current.id}
+                currency={current.currency_code}
+                onDone={done}
+              />
             </DialogContent>
           </Dialog>
         )
@@ -374,10 +452,39 @@ export default function SeasonPanel({ farmId, farm, cycles, blocks = [], onChang
                 <DialogHeader>
                   <DialogTitle>Record a measured outcome</DialogTitle>
                   <DialogDescription>
-                    Packout, cull, yield or disease incidence for one block.
+                    Yield, packout, cull or disease incidence for one block.
                   </DialogDescription>
                 </DialogHeader>
-                <HarvestOutcomeForm farmId={farmId} blocks={blocks} onDone={done} />
+                <HarvestOutcomeForm
+                  farmId={farmId}
+                  farm={farm}
+                  blocks={blocks}
+                  onDone={done}
+                  onBlockCreated={onChanged}
+                />
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={dialog === "sale"} onOpenChange={(v) => setDialog(v ? "sale" : null)}>
+              <DialogTrigger asChild>
+                <Button variant="secondary" size="sm">
+                  <Plus className="h-3.5 w-3.5" aria-hidden /> Sale
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Record a sale or settlement</DialogTitle>
+                  <DialogDescription>
+                    What the crop actually sold for. A recorded transaction only — a
+                    market price is never revenue.
+                  </DialogDescription>
+                </DialogHeader>
+                <SaleRecordForm
+                  farmId={farmId}
+                  cycleId={current.id}
+                  currency={current.currency_code}
+                  onDone={done}
+                />
               </DialogContent>
             </Dialog>
 
@@ -387,6 +494,17 @@ export default function SeasonPanel({ farmId, farm, cycles, blocks = [], onChang
               </Button>
             )}
           </div>
+
+          <Link
+            href={`/crop-cycles/${current.id}`}
+            className="inline-flex items-center gap-1 text-meta font-medium text-leaf-700 hover:underline"
+          >
+            {CLOSED_STATUSES.includes(current.status)
+              ? "Season closeout"
+              : "Season to date"}{" "}
+            — cost, yield, revenue
+            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+          </Link>
         </div>
       )}
     </SectionCard>

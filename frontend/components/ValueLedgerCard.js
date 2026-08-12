@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Coins, ShieldCheck, Sprout, Wallet } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, ChevronDown, Coins, ShieldCheck, Sprout, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SectionCard from "@/components/SectionCard";
+import SeasonScopeNotice from "@/components/SeasonScopeNotice";
 import EmptyState from "@/components/EmptyState";
 import {
   BLOCK_OUTCOME_TYPE_LABELS,
@@ -167,7 +169,13 @@ function LedgerRow({ item, currency }) {
   );
 }
 
-export default function ValueLedgerCard({ ledger, cycles = [], activeCycleId, onSelectCycle }) {
+export default function ValueLedgerCard({
+  ledger,
+  cycles = [],
+  activeCycleId,
+  onSelectCycle,
+  onChanged,
+}) {
   const [showAll, setShowAll] = useState(false);
   if (!ledger) return null;
 
@@ -207,6 +215,26 @@ export default function ValueLedgerCard({ ledger, cycles = [], activeCycleId, on
           Simulated demo records. These figures illustrate how the ledger works and are
           not value anyone created.
         </p>
+      )}
+
+      {/* What this season's figures LEFT OUT. Returned by the API since the ledger
+          shipped and rendered nowhere until now — a total that silently excluded
+          four sprays looked identical to a complete one. */}
+      <SeasonScopeNotice
+        scope={ledger.scope}
+        cycleId={activeCycleId}
+        onLinked={onChanged}
+        className="mb-3"
+      />
+
+      {activeCycleId && (
+        <Link
+          href={`/crop-cycles/${activeCycleId}`}
+          className="mb-3 inline-flex items-center gap-1 text-meta font-medium text-leaf-700 hover:underline"
+        >
+          Season economics — cost, yield, revenue
+          <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Link>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">

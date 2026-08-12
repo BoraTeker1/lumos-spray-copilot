@@ -714,6 +714,11 @@ class BlockOutcomeObservation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+    # The season this measurement belongs to (2026-08-12). Nullable and stamped like
+    # every other spine link: an outcome recorded before the farm had a cycle is
+    # honestly unattributed, and the closeout reports how many it left out rather
+    # than folding another season's harvest into this one's yield.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
     pilot_protocol_id: Mapped[int | None] = mapped_column(
         ForeignKey("pilot_protocols.id"), index=True
     )
@@ -2386,6 +2391,9 @@ class CropCycle(Base):
     operations: Mapped[list["Operation"]] = relationship(
         back_populates="crop_cycle", cascade="all, delete-orphan"
     )
+    sales: Mapped[list["SaleRecord"]] = relationship(
+        back_populates="crop_cycle", cascade="all, delete-orphan"
+    )
 
 
 class Operation(Base):
@@ -2411,6 +2419,14 @@ class Operation(Base):
     # planting / irrigation / fertilization / crop_protection / scouting / harvest /
     # tillage / other
     operation_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # A LIGHTWEIGHT grouping for the season's cost breakdown — crop_protection /
+    # fertilizer_nutrition / irrigation / labor / equipment_operations /
+    # planting_materials / harvest_postharvest / other. Nullable, and defaulted from
+    # `operation_type` only where the mapping is unambiguous; a fertiliser pass whose
+    # cost is mostly hired labour is a judgement nobody recorded, so the caller may
+    # override and nothing infers past the obvious. This is a breakdown, not a chart of
+    # accounts: no sub-ledgers, no allocation rules, no double entry.
+    cost_category: Mapped[str | None] = mapped_column(String(40), index=True)
     planned_on: Mapped[date | None] = mapped_column(Date)
     performed_on: Mapped[date | None] = mapped_column(Date, index=True)
     area_m2: Mapped[float | None] = mapped_column(Float)
@@ -2426,6 +2442,66 @@ class Operation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     crop_cycle: Mapped["CropCycle | None"] = relationship(back_populates="operations")
+
+
+class SaleRecord(Base):
+    """One recorded sale or settlement of a crop cycle's harvest. Append-only.
+
+    The revenue half of the season, and the first money the platform has ever recorded
+    coming IN. Deliberately a record of a transaction that happened, never a valuation:
+    `market.pricing` can quote a price series, and a quoted price is not revenue. Nothing
+    here reads that module, and nothing here may — a season priced at what the market was
+    doing is a forecast wearing a settlement's clothes.
+
+    Three properties carry the weight.
+
+    GROSS, DEDUCTIONS AND NET ARE THREE NUMBERS, not one. A packer settlement nets out
+    commission, freight and cooling before the grower sees anything, and collapsing that
+    into a single "revenue" figure loses the distinction between what the crop sold for
+    and what the farm received. Both are true and they answer different questions.
+
+    NEVER EDITED, same as `SupplierQuote`: a corrected settlement is a new row pointing at
+    the one it supersedes, so what the grower saw when they closed the season survives.
+
+    `recorded_at` is stamped at persist time and never back-dated (ENGINEERING_GUIDELINES.md section 9) —
+    a settlement entered in March for a January sale was not known in January.
+    """
+    __tablename__ = "sale_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    crop_cycle_id: Mapped[int] = mapped_column(
+        ForeignKey("crop_cycles.id"), nullable=False, index=True
+    )
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    sale_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Quantity sold, in the unit the settlement states. Not converted on the way in;
+    # the closeout normalises for display and refuses when it cannot.
+    quantity: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    unit_price: Mapped[float | None] = mapped_column(Float)
+    # What the crop sold for, before deductions. Stored when stated; otherwise derived
+    # at read time from quantity x unit_price, and the payload says which it was.
+    gross_amount: Mapped[float | None] = mapped_column(Float)
+    # Commission, freight, cooling — what the buyer withheld. NOT a season cost: it never
+    # reaches `_season_costs`, or it would be subtracted twice.
+    deductions_amount: Mapped[float | None] = mapped_column(Float)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    buyer_name: Mapped[str | None] = mapped_column(String(200))
+    # The settlement or PO number, as printed — what a grower matches against a cheque.
+    reference: Mapped[str | None] = mapped_column(String(120))
+    grade: Mapped[str | None] = mapped_column(String(60))
+    market: Mapped[str | None] = mapped_column(String(60))
+    notes: Mapped[str | None] = mapped_column(Text)
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("sale_records.id"))
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime, default=clock.current_datetime, nullable=False
+    )
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    crop_cycle: Mapped["CropCycle"] = relationship(back_populates="sales")
 
 
 class InputProduct(Base):

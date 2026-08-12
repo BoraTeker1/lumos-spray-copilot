@@ -603,10 +603,28 @@ export default function PreSpraySheet({ farmId, onChanged }) {
               onChange={(e) => update("target_pest_or_disease", e.target.value)}
             />
           </Field>
+          {/* Promoted out of the collapsed section, for the same reason
+              `epa_reg_no` was: this is the ONLY figure the value ledger can price
+              an avoided application against. Entered later or not at all, the
+              avoidance is recorded and permanently uncalculated — the ledger will
+              not substitute a farm average. */}
+          <Field
+            label="Estimated cost of this application"
+            hint="What an avoided application is worth. Without it, avoiding this spray is recorded but never valued."
+          >
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              className={inputCls}
+              value={form.estimated_cost}
+              onChange={(e) => update("estimated_cost", e.target.value)}
+            />
+          </Field>
 
           <details className="rounded-control border border-line p-2.5">
             <summary className="cursor-pointer select-none text-xs font-medium text-muted">
-              Compliance values — PHI, REI, active ingredient, cost, who entered them
+              Compliance values — PHI, REI, active ingredient, who entered them
             </summary>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Active ingredient">
@@ -632,15 +650,6 @@ export default function PreSpraySheet({ farmId, onChanged }) {
                   className={inputCls}
                   value={form.re_entry_interval_hours}
                   onChange={(e) => update("re_entry_interval_hours", e.target.value)}
-                />
-              </Field>
-              <Field label="Estimated cost">
-                <input
-                  type="number"
-                  step="0.01"
-                  className={inputCls}
-                  value={form.estimated_cost}
-                  onChange={(e) => update("estimated_cost", e.target.value)}
                 />
               </Field>
               <Field label="Values entered by">

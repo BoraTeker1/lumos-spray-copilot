@@ -603,6 +603,16 @@ export const api = {
     }),
   getValueLedger: (farmId, cropCycleId) =>
     request(`/farms/${farmId}/value-ledger${qs({ crop_cycle_id: cropCycleId })}`),
+  getCropCycle: (cycleId) => request(`/crop-cycles/${cycleId}`),
+  // Sales are append-only: there is no update and no delete. A correction is a new
+  // record carrying `supersedes_id`.
+  listCropCycleSales: (cycleId) => request(`/crop-cycles/${cycleId}/sales`),
+  createSaleRecord: (cycleId, data) =>
+    request(`/crop-cycles/${cycleId}/sales`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getCropCycleCloseout: (cycleId) => request(`/crop-cycles/${cycleId}/closeout`),
   getDecisionEconomics: (plannedId) =>
     request(`/planned-sprays/${plannedId}/economics`),
 

@@ -911,6 +911,53 @@ def get_operations(
     return crud.list_operations(db, farm_id, crop_cycle_id)
 
 
+# ----------------------------------------------------------- Sales and economics
+@app.post(
+    "/crop-cycles/{cycle_id}/sales",
+    response_model=schemas.SaleRecord,
+    status_code=201,
+    tags=["crop-cycles"],
+)
+def post_sale_record(
+    cycle_id: int, payload: schemas.SaleRecordCreate, db: Session = Depends(get_db)
+):
+    """Record a sale or settlement against a crop cycle.
+
+    Append-only: there is no PATCH and no DELETE. A corrected settlement is a new row
+    carrying `supersedes_id`, so the revenue a grower saw when they closed the season
+    is still readable afterwards.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.create_sale_record(db, cycle, payload)
+
+
+@app.get(
+    "/crop-cycles/{cycle_id}/sales",
+    response_model=list[schemas.SaleRecord],
+    tags=["crop-cycles"],
+)
+def get_sale_records(cycle_id: int, db: Session = Depends(get_db)):
+    _require_crop_cycle(db, cycle_id)
+    return crud.list_sale_records(db, cycle_id)
+
+
+@app.get("/crop-cycles/{cycle_id}/closeout", tags=["crop-cycles"])
+def get_crop_cycle_closeout(cycle_id: int, db: Session = Depends(get_db)):
+    """What this season cost, produced, sold for, and what value Lumos can attribute.
+
+    Serves an OPEN cycle and a CLOSED one identically — the payload's `view` field
+    says which framing applies (`season_to_date` / `season_closeout`) and nothing else
+    changes, because a grower mid-season needs the same figures as one closing the
+    books and two surfaces would eventually disagree.
+
+    Farm-record economics, not accounting: every figure is built from records entered
+    on this cycle, and a metric that cannot be computed omits its value key entirely
+    rather than reporting a zero.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.build_crop_cycle_closeout(db, cycle)
+
+
 # --------------------------------------------------------------- Value ledger
 @app.get("/farms/{farm_id}/value-ledger", tags=["value"])
 def get_value_ledger(

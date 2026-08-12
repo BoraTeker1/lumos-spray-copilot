@@ -171,3 +171,42 @@ export const BLOCK_OUTCOME_TYPE_LABELS = {
   cost: "Cost",
   adverse_event: "Adverse event",
 };
+
+// Season cost groupings (mirrors schemas.CostCategory). A breakdown, not a chart of
+// accounts. `uncategorised` is not in the backend Literal — it is the bucket
+// value_ledger uses for a costed row nobody classified, and it stays visibly distinct
+// from "other" because those are different facts.
+export const COST_CATEGORY_LABELS = {
+  crop_protection: "Crop protection",
+  fertilizer_nutrition: "Fertilizer / nutrition",
+  irrigation: "Irrigation",
+  labor: "Labor",
+  equipment_operations: "Equipment / operations",
+  planting_materials: "Planting / materials",
+  harvest_postharvest: "Harvest / post-harvest",
+  other: "Other",
+  uncategorised: "Uncategorised",
+};
+
+// Season economics (mirrors app/season_closeout.py). Every one of these is a
+// farm-record figure, never an accounting claim — the wording matters and lives here
+// so the page and any future surface cannot disagree about what a number is called.
+export const CLOSEOUT_METRIC_LABELS = {
+  revenue: "Revenue",
+  costs: "Recorded costs",
+  revenue_minus_recorded_costs: "Revenue minus recorded costs",
+  harvested_yield: "Harvested yield",
+  planted_area: "Planted area",
+  yield_per_area: "Yield per area",
+  cost_per_area: "Recorded cost per area",
+  revenue_per_area: "Revenue per area",
+  cost_per_yield_unit: "Recorded cost per unit",
+  realised_price_per_yield_unit: "Realised price per unit",
+};
+
+// What a season's economics page is called, per cycle state. Same payload either way
+// — an open season is not a lesser version of a closed one.
+export const CLOSEOUT_VIEW_LABELS = {
+  season_to_date: "Season to date",
+  season_closeout: "Season closeout",
+};

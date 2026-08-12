@@ -403,12 +403,23 @@ def _procurement_items(plan, currency: str | None) -> list[ValueItem]:
 
 
 # ------------------------------------------------------------------ season roll-up
+# A cost row whose category nobody set. An explicit bucket, not a silent drop into
+# "other": "we did not classify this" and "the grower called it other" are different
+# facts, and only the first one is somebody's job to fix.
+COST_CATEGORY_UNCATEGORISED = "uncategorised"
+
+
 def _season_costs(spray_events, operations, currency: str | None) -> dict:
     """What the season actually cost, from records that carry a cost.
 
     Records without a cost are counted and reported rather than treated as zero —
     a spray with no cost entered is an unknown, and folding it in as 0 would make
     the season look cheaper the less diligently it was logged.
+
+    The category breakdown reads `Operation.cost_category` as stored; it never infers
+    one here. `crud.create_operation` fills it from the operation type where that
+    mapping is unambiguous, so a row that reaches this function uncategorised is one
+    nobody could classify — which is worth showing, not worth guessing at.
     """
     spray_costs = [
         float(getattr(s, "cost", None)) for s in (spray_events or [])
@@ -418,9 +429,19 @@ def _season_costs(spray_events, operations, currency: str | None) -> dict:
         1 for s in (spray_events or []) if getattr(s, "cost", None) is None
     )
 
+    by_category: dict[str, float] = {}
+
+    def _add_category(name: str, amount: float) -> None:
+        by_category[name] = round(by_category.get(name, 0.0) + amount, 2)
+
+    # An application IS crop protection. That is the record's type, not an inference.
+    if spray_costs:
+        _add_category("crop_protection", sum(spray_costs))
+
     op_costs: list[float] = []
     ops_without = 0
     ops_other_currency = 0
+    ops_uncategorised = 0
     by_type: dict[str, float] = {}
     for op in operations or []:
         amount = getattr(op, "cost_amount", None)
@@ -434,6 +455,11 @@ def _season_costs(spray_events, operations, currency: str | None) -> dict:
         op_costs.append(float(amount))
         op_type = getattr(op, "operation_type", None) or "other"
         by_type[op_type] = round(by_type.get(op_type, 0.0) + float(amount), 2)
+        category = getattr(op, "cost_category", None)
+        if not category:
+            category = COST_CATEGORY_UNCATEGORISED
+            ops_uncategorised += 1
+        _add_category(category, float(amount))
 
     total = sum(spray_costs) + sum(op_costs)
     return {
@@ -447,6 +473,8 @@ def _season_costs(spray_events, operations, currency: str | None) -> dict:
         "operations_without_cost": ops_without,
         "operations_in_other_currency": ops_other_currency,
         "operations_by_type": by_type,
+        "by_cost_category": by_category,
+        "operations_uncategorised": ops_uncategorised,
         "note": (
             "Recorded costs only. "
             f"{sprays_without} application(s) and {ops_without} operation(s) carry no "

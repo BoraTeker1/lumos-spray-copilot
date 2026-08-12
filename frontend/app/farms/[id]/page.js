@@ -63,6 +63,7 @@ import SeverityBadge from "@/components/SeverityBadge";
 import SprayImportCard from "@/components/SprayImportCard";
 import StatusBadge from "@/components/StatusBadge";
 import ValueLedgerCard from "@/components/ValueLedgerCard";
+import OutstandingFollowUpsCard from "@/components/OutstandingFollowUpsCard";
 import WeatherCard from "@/components/WeatherCard";
 
 // "fields" and "conditions" are new views over data this page already fetches.
@@ -409,12 +410,18 @@ function FarmDetail({ farmId }) {
                 />
               </SectionCard>
 
+              {/* Follow-up evidence is the only thing that moves attributable value
+                  from estimated to verified, so the outstanding ones belong on the
+                  page a grower actually opens — not only on a decision's detail. */}
+              <OutstandingFollowUpsCard planned={planned} onChanged={load} />
+
               {/* The loop, closed: recommendation → action → outcome → value. */}
               <ValueLedgerCard
                 ledger={ledger}
                 cycles={cycles}
                 activeCycleId={ledgerCycleId}
                 onSelectCycle={setLedgerCycleId}
+                onChanged={load}
               />
 
               <SectionCard title="Recent activity" icon={<Droplets />}>

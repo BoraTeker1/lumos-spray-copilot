@@ -1218,7 +1218,7 @@ def run() -> None:
         db.add_all([
             models.Operation(
                 farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
-                operation_type="fertilization",
+                operation_type="fertilization", cost_category="fertilizer_nutrition",
                 performed_on=today - timedelta(days=40),
                 cost_amount=1450.0, currency_code="USD",
                 notes="Pre-bloom fertigation pass.",
@@ -1226,9 +1226,28 @@ def run() -> None:
             ),
             models.Operation(
                 farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
-                operation_type="irrigation",
+                operation_type="irrigation", cost_category="irrigation",
                 performed_on=today - timedelta(days=12),
                 cost_amount=380.0, currency_code="USD",
+                data_source="demo", data_confidence="simulated",
+            ),
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="harvest", cost_category="labor",
+                performed_on=today - timedelta(days=8),
+                cost_amount=9200.0, currency_code="USD",
+                notes="First and second pick — contract harvest crew.",
+                data_source="demo", data_confidence="simulated",
+            ),
+            # Deliberately costless: the season is mid-flight and this pass has not
+            # been invoiced. It is what makes the demo show a real cost-coverage gap
+            # instead of a season that looks perfectly documented.
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="tillage",
+                performed_on=today - timedelta(days=52),
+                currency_code="USD",
+                notes="Bed shaping — contractor has not invoiced yet.",
                 data_source="demo", data_confidence="simulated",
             ),
         ])
@@ -1251,6 +1270,55 @@ def run() -> None:
                 data_source="demo",
                 data_confidence="simulated",
             ))
+
+        # Harvest weight per block, in lb — the unit a Watsonville settlement is
+        # written in. The closeout normalises both to kg through exact factors, which
+        # is the whole reason yield is recorded with a unit and never as a bare number.
+        harvest_yields = [
+            (block_field7, 34200.0, 9, "First and second pick, cooler scale tickets."),
+            (block_south, 26800.0, 7, "First pick, cooler scale tickets."),
+        ]
+        for block, pounds, days_ago, method in harvest_yields:
+            db.add(models.BlockOutcomeObservation(
+                block_id=block.id,
+                observed_on=today - timedelta(days=days_ago),
+                outcome_type="yield",
+                value=pounds,
+                unit="lb",
+                method=method,
+                source_type="demo",
+                data_source="demo",
+                data_confidence="simulated",
+            ))
+
+        # Two recorded settlements. Gross, deductions and net stay three numbers:
+        # the packer withholds commission and cooling before the grower sees a cheque,
+        # and collapsing that into one "revenue" figure loses which is which.
+        db.add_all([
+            models.SaleRecord(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id,
+                sale_date=today - timedelta(days=6),
+                quantity=34200.0, unit="lb", unit_price=1.85,
+                gross_amount=63270.0, deductions_amount=5061.60,
+                currency_code="USD",
+                buyer_name="Pajaro Valley Packing (demo)",
+                reference="STL-2411-A",
+                grade="US No. 1", market="fresh",
+                notes="Commission 6% and cooling withheld at settlement.",
+                data_source="demo", data_confidence="simulated",
+            ),
+            models.SaleRecord(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id,
+                sale_date=today - timedelta(days=2),
+                quantity=26800.0, unit="lb", unit_price=1.62,
+                gross_amount=43416.0, deductions_amount=3473.28,
+                currency_code="USD",
+                buyer_name="Pajaro Valley Packing (demo)",
+                reference="STL-2411-B",
+                grade="US No. 1", market="fresh",
+                data_source="demo", data_confidence="simulated",
+            ),
+        ])
 
         db.commit()
         # Attach the farm's existing sprays, decisions, scouting and input plans to

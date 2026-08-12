@@ -15,7 +15,8 @@ from app import (
     backtest, clock, credit_scoring, crop_aliases, csv_import, decision_status,
     disease_risk, insurance, label_data, label_table, models, monitoring,
     pca_authority, procurement_analytics, procurement_status, refusal, rfq_transport,
-    risk_snapshot, schemas, target_aliases, underwriting, units, value_ledger,
+    risk_snapshot, schemas, season_closeout, target_aliases, underwriting, units,
+    value_ledger,
 )
 from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -1020,6 +1021,10 @@ def create_block_outcome(
                 "that pilot protocol belongs to a different farm"
             )
     row = models.BlockOutcomeObservation(**data.model_dump())
+    # The season this measurement belongs to, when the farm has one open. Without it a
+    # harvest recorded this year lands in the same undifferentiated pile as last
+    # year's, and the closeout's yield would sum two seasons into one.
+    stamp_open_cycle(db, farm_id, row)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -1027,7 +1032,10 @@ def create_block_outcome(
 
 
 def list_block_outcomes(
-    db: Session, farm_id: int, block_id: int | None = None
+    db: Session,
+    farm_id: int,
+    block_id: int | None = None,
+    crop_cycle_id: int | None = None,
 ) -> list[models.BlockOutcomeObservation]:
     stmt = (
         select(models.BlockOutcomeObservation)
@@ -1036,6 +1044,10 @@ def list_block_outcomes(
     )
     if block_id is not None:
         stmt = stmt.where(models.BlockOutcomeObservation.block_id == block_id)
+    if crop_cycle_id is not None:
+        stmt = stmt.where(
+            models.BlockOutcomeObservation.crop_cycle_id == crop_cycle_id
+        )
     return list(
         db.scalars(stmt.order_by(models.BlockOutcomeObservation.observed_on.desc()))
     )
@@ -4674,6 +4686,31 @@ def link_records_to_cycle(db: Session, cycle: models.CropCycle) -> dict:
             plan.crop_cycle_id = cycle.id
             linked["input_plans"] = linked.get("input_plans", 0) + 1
 
+    # Block outcomes reach the farm through their block, not directly — they are the
+    # one linked model with no `farm_id` of its own, so the window query joins Block
+    # rather than filtering a column that does not exist.
+    outcomes = list(
+        db.scalars(
+            select(models.BlockOutcomeObservation)
+            .join(
+                models.Block,
+                models.Block.id == models.BlockOutcomeObservation.block_id,
+            )
+            .where(
+                models.Block.farm_id == cycle.farm_id,
+                models.BlockOutcomeObservation.crop_cycle_id.is_(None),
+                models.BlockOutcomeObservation.observed_on >= start,
+            )
+        )
+    )
+    for outcome in outcomes:
+        if end is not None and outcome.observed_on > end:
+            continue
+        outcome.crop_cycle_id = cycle.id
+        linked["block_outcome_observations"] = (
+            linked.get("block_outcome_observations", 0) + 1
+        )
+
     db.commit()
     return linked
 
@@ -4713,6 +4750,14 @@ def create_operation(
     display_area = payload.get("display_area")
     display_unit = payload.get("display_area_unit")
     converted = units.convert(display_area, display_unit, "m2")
+    # The cost category, when the caller did not choose one and the operation type
+    # makes it unambiguous. An irrigation pass is an irrigation cost; a tillage pass
+    # might be owned equipment or a hired operator, so that one stays unset rather
+    # than being filed under a guess.
+    if payload.get("cost_category") is None:
+        payload["cost_category"] = schemas.COST_CATEGORY_FOR_OPERATION.get(
+            payload.get("operation_type")
+        )
     operation = models.Operation(
         farm_id=cycle.farm_id,
         crop_cycle_id=cycle.id,
@@ -4769,7 +4814,10 @@ def build_value_ledger(
         decision.id: list_follow_up_events(db, decision.id) for decision in decisions
     }
     operations = list_operations(db, farm.id, crop_cycle_id)
-    block_outcomes = list_block_outcomes(db, farm.id)
+    all_outcomes = list_block_outcomes(db, farm.id)
+    block_outcomes, outcomes_out = _scoped(
+        models.BlockOutcomeObservation, all_outcomes
+    )
 
     scope = {
         "crop_cycle_id": crop_cycle_id,
@@ -4777,6 +4825,7 @@ def build_value_ledger(
             "planned_sprays": decisions_out,
             "spray_events": sprays_out,
             "input_plans": plans_out,
+            "block_outcomes": outcomes_out,
         } if crop_cycle_id is not None else None,
     }
     return value_ledger.build_ledger(
@@ -4788,4 +4837,129 @@ def build_value_ledger(
         operations=operations,
         block_outcomes=block_outcomes,
         scope=scope,
+    )
+
+
+# ==================================================================== #
+# Sales: the revenue half of the season                                #
+# ==================================================================== #
+def create_sale_record(
+    db: Session, cycle: models.CropCycle, data: schemas.SaleRecordCreate
+) -> models.SaleRecord:
+    """Record one sale or settlement against a crop cycle. Append-only.
+
+    A correction supersedes rather than edits, the same rule `SupplierQuote` follows,
+    so what the grower saw when they read the season's revenue survives the correction.
+    """
+    if data.supersedes_id is not None:
+        prior = db.get(models.SaleRecord, data.supersedes_id)
+        if prior is None or prior.crop_cycle_id != cycle.id:
+            raise CrossFarmReferenceError(
+                "that sale record belongs to a different crop cycle"
+            )
+
+    sale = models.SaleRecord(
+        farm_id=cycle.farm_id,
+        crop_cycle_id=cycle.id,
+        **data.model_dump(),
+    )
+    if sale.currency_code is None:
+        # `value_ledger.currency_for` rather than `farm.currency_code` directly: that
+        # column is nullable and was backfilled from country, so a farm predating it
+        # would leave the settlement unlabelled — and an unlabelled amount is not money.
+        sale.currency_code = cycle.currency_code or value_ledger.currency_for(cycle.farm)
+    ensure_demo_real_separation(db, cycle.farm_id, sale)
+    db.add(sale)
+    db.commit()
+    db.refresh(sale)
+    return sale
+
+
+def list_sale_records(db: Session, crop_cycle_id: int) -> list[models.SaleRecord]:
+    return list(
+        db.scalars(
+            select(models.SaleRecord)
+            .where(models.SaleRecord.crop_cycle_id == crop_cycle_id)
+            .order_by(models.SaleRecord.sale_date.desc(), models.SaleRecord.id.desc())
+        )
+    )
+
+
+# ==================================================================== #
+# Season economics                                                     #
+# ==================================================================== #
+def build_crop_cycle_closeout(db: Session, cycle: models.CropCycle) -> dict:
+    """One crop cycle's economics: cost, yield, revenue, and attributable value.
+
+    The value ledger is EMBEDDED rather than recomputed, and the cost roll-up is the
+    same `value_ledger._season_costs` the ledger itself uses — so the two surfaces
+    cannot report different totals for the same season, which is exactly the failure
+    an independently-derived closeout would eventually produce.
+    """
+    farm = cycle.farm
+    ledger = build_value_ledger(db, farm, cycle.id)
+
+    sprays = [
+        s for s in list_spray_events(db, farm.id) if s.crop_cycle_id == cycle.id
+    ]
+    operations = list_operations(db, farm.id, cycle.id)
+    block_outcomes = list_block_outcomes(db, farm.id, crop_cycle_id=cycle.id)
+    sales = list_sale_records(db, cycle.id)
+
+    costs = value_ledger._season_costs(
+        sprays, operations, value_ledger.currency_for(farm)
+    )
+
+    # Decisions whose value the ledger COULD have priced and could not, plus those
+    # still waiting on follow-up evidence. Both are gaps a human can close today, so
+    # they belong beside the missing costs rather than buried in the ledger's rows.
+    decisions = [
+        d for d in list_planned_sprays(db, farm.id) if d.crop_cycle_id == cycle.id
+    ]
+    unpriced = [
+        d for d in decisions
+        if d.outcome == "avoided" and d.estimated_cost is None
+    ]
+    awaiting = [
+        d for d in decisions
+        if decision_status.evidence_state(d, list_follow_up_events(db, d.id))
+        in (
+            decision_status.EVIDENCE_FOLLOW_UP_REQUIRED,
+            decision_status.EVIDENCE_FOLLOW_UP_IN_PROGRESS,
+        )
+    ]
+    extra_gaps = []
+    if unpriced:
+        extra_gaps.append(season_closeout._gap(
+            "avoided_decisions_without_estimated_cost",
+            f"{len(unpriced)} avoided application(s) carry no estimated cost, so the "
+            "value ledger has no baseline to price them against and leaves them "
+            "uncalculated.",
+            "Enter the estimated cost on those decisions — it is what an avoided "
+            "application is worth.",
+            len(unpriced),
+            decision_ids=[d.id for d in unpriced],
+        ))
+    if awaiting:
+        extra_gaps.append(season_closeout._gap(
+            "decisions_awaiting_follow_up",
+            f"{len(awaiting)} decision(s) have a recorded outcome but no follow-up "
+            "evidence confirming it, so their value stays estimated rather than "
+            "verified.",
+            "Record a follow-up event on each from the farm's Overview tab.",
+            len(awaiting),
+            decision_ids=[d.id for d in awaiting],
+        ))
+
+    return season_closeout.build_closeout(
+        cycle=cycle,
+        farm=farm,
+        sales=sales,
+        spray_events=sprays,
+        operations=operations,
+        block_outcomes=block_outcomes,
+        costs=costs,
+        ledger=ledger,
+        scope=ledger.get("scope"),
+        completeness_extra=extra_gaps,
     )

@@ -571,6 +571,10 @@ class BlockOutcomeObservation(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     block_id: int
+    # Exposed because a caller listing a farm's outcomes has to be able to tell which
+    # season each one belongs to. It was persisted and unreadable at first, and the
+    # season page's client-side filter silently matched nothing as a result.
+    crop_cycle_id: int | None = None
     pilot_protocol_id: int | None = None
     observed_on: date
     recorded_at: datetime
@@ -2062,6 +2066,23 @@ OperationType = Literal[
     "planting", "irrigation", "fertilization", "crop_protection", "scouting",
     "harvest", "tillage", "other",
 ]
+# A lightweight grouping for the season's cost breakdown. Eight buckets, chosen to be
+# the ones a grower would name out loud — not a chart of accounts.
+CostCategory = Literal[
+    "crop_protection", "fertilizer_nutrition", "irrigation", "labor",
+    "equipment_operations", "planting_materials", "harvest_postharvest", "other",
+]
+# Defaulted from the operation type ONLY where the mapping is unambiguous. Scouting,
+# tillage and "other" are deliberately absent: scouting cost is usually labour but may
+# be a contracted service, and tillage may be owned equipment or a hired operator.
+# Guessing there would put a number in a bucket nobody chose.
+COST_CATEGORY_FOR_OPERATION: dict[str, str] = {
+    "planting": "planting_materials",
+    "irrigation": "irrigation",
+    "fertilization": "fertilizer_nutrition",
+    "crop_protection": "crop_protection",
+    "harvest": "harvest_postharvest",
+}
 
 
 class CropCycleCreate(BaseModel):
@@ -2138,6 +2159,9 @@ class OperationCreate(BaseModel):
     had anywhere to go.
     """
     operation_type: OperationType
+    # Left unset, the server fills it from `operation_type` where that mapping is
+    # unambiguous and leaves it None otherwise. Never guessed past the obvious.
+    cost_category: CostCategory | None = None
     performed_on: date | None = None
     planned_on: date | None = None
     field_id: int | None = None
@@ -2160,6 +2184,7 @@ class Operation(BaseModel):
     field_id: int | None = None
     block_id: int | None = None
     operation_type: str
+    cost_category: str | None = None
     planned_on: date | None = None
     performed_on: date | None = None
     area_m2: float | None = None
@@ -2169,6 +2194,121 @@ class Operation(BaseModel):
     currency_code: str | None = None
     performed_by: str | None = None
     notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+# ------------------------------------------------- Sales (the revenue half)
+# The first money the platform records coming IN. A recorded transaction only —
+# a quoted market price is a forecast, not revenue, and nothing here reads one.
+
+# Real settlements round per line, so quantity x unit_price rarely lands exactly on
+# the stated gross. This is the width of that rounding, not a licence to accept a
+# figure that disagrees: 0.5%, or one unit of currency for a small sale.
+_SALE_CONSISTENCY_TOLERANCE_FRACTION = 0.005
+_SALE_CONSISTENCY_TOLERANCE_FLOOR = 1.0
+
+
+class SaleRecordCreate(BaseModel):
+    """A recorded sale or settlement against a crop cycle.
+
+    Gross, deductions and net stay three separate numbers. What the crop sold for and
+    what the farm received are different facts, and a packer settlement nets out
+    commission and freight between them.
+    """
+    sale_date: date
+    quantity: float | None = Field(default=None, gt=0)
+    unit: str | None = None
+    unit_price: float | None = Field(default=None, ge=0)
+    gross_amount: float | None = Field(default=None, ge=0)
+    deductions_amount: float | None = Field(default=None, ge=0)
+    currency_code: str | None = None
+    buyer_name: str | None = None
+    reference: str | None = None
+    grade: str | None = None
+    market: str | None = None
+    notes: str | None = None
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+    @model_validator(mode="after")
+    def _quantity_requires_a_unit(self):
+        if self.quantity is not None and not (self.unit or "").strip():
+            raise ValueError(
+                "a unit is required whenever a quantity is given — an unlabelled "
+                "number is not a measurement, and a season total cannot be built "
+                "from one"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_sale_states_an_amount(self):
+        """Either the gross, or enough to derive it. A sale that states no money is not one."""
+        derivable = self.quantity is not None and self.unit_price is not None
+        if self.gross_amount is None and not derivable:
+            raise ValueError(
+                "a sale needs either a gross amount, or both a quantity and a unit "
+                "price to derive one — nothing here invents a figure from a market "
+                "price"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _stated_figures_agree(self):
+        """All three supplied? They must be consistent. A contradictory settlement is not storable."""
+        if self.quantity is None or self.unit_price is None or self.gross_amount is None:
+            return self
+        expected = self.quantity * self.unit_price
+        tolerance = max(
+            abs(expected) * _SALE_CONSISTENCY_TOLERANCE_FRACTION,
+            _SALE_CONSISTENCY_TOLERANCE_FLOOR,
+        )
+        if abs(expected - self.gross_amount) > tolerance:
+            raise ValueError(
+                f"quantity x unit price is {expected:,.2f} but the gross amount says "
+                f"{self.gross_amount:,.2f} — the record contradicts itself. Correct "
+                "one of the three, or leave the gross blank and let it be derived."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _deductions_do_not_exceed_the_gross(self):
+        if self.deductions_amount is None:
+            return self
+        gross = self.gross_amount
+        if gross is None and self.quantity is not None and self.unit_price is not None:
+            gross = self.quantity * self.unit_price
+        if gross is not None and self.deductions_amount > gross:
+            raise ValueError(
+                "deductions exceed the gross amount, which would make the net "
+                "negative — that is a data-entry error, not a season"
+            )
+        return self
+
+
+class SaleRecord(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    crop_cycle_id: int
+    farm_id: int
+    sale_date: date
+    quantity: float | None = None
+    unit: str | None = None
+    unit_price: float | None = None
+    gross_amount: float | None = None
+    deductions_amount: float | None = None
+    currency_code: str | None = None
+    buyer_name: str | None = None
+    reference: str | None = None
+    grade: str | None = None
+    market: str | None = None
+    notes: str | None = None
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    recorded_at: datetime
     data_source: str | None = None
     data_confidence: str | None = None
     created_at: datetime
