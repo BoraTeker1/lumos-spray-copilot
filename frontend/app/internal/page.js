@@ -1,10 +1,18 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
+import PageHeader from "@/components/PageHeader";
+import SectionCard from "@/components/SectionCard";
+import { Badge } from "@/components/ui/badge";
+import { Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import ConciergePilotCard from "@/components/ConciergePilotCard";
 import ConciergeQuoteCard from "@/components/ConciergeQuoteCard";
 import DomainRegistryTable from "@/components/DomainRegistryTable";
 import IngestionCard from "@/components/IngestionCard";
+import TranscriptionStatusCard from "@/components/TranscriptionStatusCard";
+import OpportunityScanCard from "@/components/OpportunityScanCard";
 import LabelLibraryCard from "@/components/LabelLibraryCard";
 import PilotOperatorCard from "@/components/PilotOperatorCard";
 import { api } from "@/lib/api";
@@ -21,8 +29,8 @@ function InstrumentationSummary() {
     api.getInstrumentation().then(setData).catch((err) => setError(err.message));
   }, []);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading telemetry…</p>;
+  if (error) return <Callout tone="risk">{error}</Callout>;
+  if (!data) return <LoadingState message="Loading telemetry…" />;
 
   const rows = [
     ["Checks started (client-reported)", data.checks_started],
@@ -47,15 +55,15 @@ function InstrumentationSummary() {
 
   return (
     <div>
-      <dl className="divide-y divide-gray-100 text-sm">
+      <dl className="divide-y divide-line text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between gap-3 py-1.5">
-            <dt className="text-gray-500">{label}</dt>
-            <dd className="text-right font-medium text-gray-900">{value}</dd>
+            <dt className="text-muted">{label}</dt>
+            <dd className="text-right font-medium text-ink">{value}</dd>
           </div>
         ))}
       </dl>
-      <ul className="mt-2 space-y-0.5 text-[11px] text-gray-400">
+      <ul className="mt-2 space-y-0.5 text-[11px] text-muted">
         {(data.notes || []).map((n, i) => (
           <li key={i}>• {n}</li>
         ))}
@@ -72,8 +80,8 @@ function AiCalibrationSummary() {
     api.getAiCalibration().then(setData).catch((err) => setError(err.message));
   }, []);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!data) return <p className="text-sm text-gray-500">Loading AI calibration…</p>;
+  if (error) return <Callout tone="risk">{error}</Callout>;
+  if (!data) return <LoadingState message="Loading AI calibration…" />;
 
   const rows = [
     ["Risk notes logged", data.risk_notes_total],
@@ -89,17 +97,17 @@ function AiCalibrationSummary() {
 
   return (
     <div>
-      <dl className="divide-y divide-gray-100 text-sm">
+      <dl className="divide-y divide-line text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between gap-3 py-1.5">
-            <dt className="text-gray-500">{label}</dt>
-            <dd className="text-right font-medium text-gray-900">{value}</dd>
+            <dt className="text-muted">{label}</dt>
+            <dd className="text-right font-medium text-ink">{value}</dd>
           </div>
         ))}
       </dl>
       <table className="mt-3 w-full text-left text-xs">
         <thead>
-          <tr className="text-gray-500">
+          <tr className="text-muted">
             <th className="py-1 pr-3 font-medium">Predicted risk</th>
             <th className="py-1 pr-3 font-medium">Predictions</th>
             <th className="py-1 pr-3 font-medium">With follow-up</th>
@@ -109,7 +117,7 @@ function AiCalibrationSummary() {
         </thead>
         <tbody>
           {Object.entries(data.predictions_by_level || {}).map(([level, block]) => (
-            <tr key={level} className="border-t border-gray-100">
+            <tr key={level} className="border-t border-line">
               <td className="py-1 pr-3 font-medium uppercase">{level}</td>
               <td className="py-1 pr-3">{block.predictions}</td>
               <td className="py-1 pr-3">{block.with_follow_up}</td>
@@ -123,7 +131,7 @@ function AiCalibrationSummary() {
           ))}
         </tbody>
       </table>
-      <ul className="mt-2 space-y-0.5 text-[11px] text-gray-400">
+      <ul className="mt-2 space-y-0.5 text-[11px] text-muted">
         {(data.notes || []).map((n, i) => (
           <li key={i}>• {n}</li>
         ))}
@@ -148,51 +156,68 @@ export default function InternalToolsPage() {
   }, []);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-lg font-semibold text-gray-900">Internal tools</h1>
-        <p className="mt-0.5 max-w-2xl text-xs text-gray-500">
-          Operator-only concierge tooling. Not part of the customer-facing workflow and not
-          linked from the navigation.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        breadcrumbs={[{ label: "Internal tools" }]}
+        title="Internal tools"
+        meta={
+          <span>
+            Operator-only concierge tooling. Not part of the customer-facing
+            workflow and not linked from the navigation.
+          </span>
+        }
+        actions={
+          <Badge variant="amber">
+            <Wrench />
+            Operator only
+          </Badge>
+        }
+      />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <Callout tone="risk">
           {error} — is the backend running on <code>http://localhost:8000</code>?
-        </div>
+        </Callout>
       )}
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Pilot instrumentation</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Workflow telemetry for running a real pilot: the check funnel, review latency,
-          changed decisions, and how data gets entered. Never customer-facing.
-        </p>
+      <SectionCard
+        title="Pilot instrumentation"
+        size="section"
+        description={
+          <>
+            Workflow telemetry for running a real pilot: the check funnel, review latency, changed decisions, and how data gets entered. Never customer-facing.
+          </>
+        }
+      >
         <InstrumentationSummary />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">AI calibration</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Every AI output (extraction, risk note, evidence action) is logged append-only;
-          this compares predicted rescue risk against realized rescues from follow-up
-          records. Rates are published only past the minimum-n gate — counts until then.
-        </p>
+      <SectionCard
+        title="AI calibration"
+        size="section"
+        description={
+          <>
+            Every AI output (extraction, risk note, evidence action) is logged append-only; this compares predicted rescue risk against realized rescues from follow-up records. Rates are published only past the minimum-n gate — counts until then.
+          </>
+        }
+      >
         <AiCalibrationSummary />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Concierge import</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an
-          existing farm, with provenance tags on every row.
-        </p>
+      <SectionCard
+        title="Concierge import"
+        size="section"
+        description={
+          <>
+            Manually transcribe pilot data (calls, WhatsApp, spreadsheets, email) into an existing farm, with provenance tags on every row.
+          </>
+        }
+      >
         {farms.length === 0 ? (
-          <p className="text-sm text-gray-500">No farms yet — create one first.</p>
+          <p className="text-sm text-muted">No farms yet — create one first.</p>
         ) : (
           <>
-            <label className="mb-4 block text-xs font-medium text-gray-600">
+            <label className="mb-4 block text-xs font-medium text-muted">
               Target farm
               <select
                 className="mt-1 w-full max-w-sm rounded border px-2 py-1.5 text-sm"
@@ -215,63 +240,83 @@ export default function InternalToolsPage() {
             )}
           </>
         )}
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Botrytis shadow pilot</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Issue and authorize PCA credentials, review the protocol, and read shadow
-          risk assessments. Assessments are operator-only by construction — they are
-          absent from the PCA-facing decision payload, not merely hidden in their UI.
-        </p>
+      <SectionCard
+        title="Botrytis shadow pilot"
+        size="section"
+        description={
+          <>
+            Issue and authorize PCA credentials, review the protocol, and read shadow risk assessments. Assessments are operator-only by construction — they are absent from the PCA-facing decision payload, not merely hidden in their UI.
+          </>
+        }
+      >
         <PilotOperatorCard farmId={farmId} />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Pesticide label library</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Extract label directions with AI, correct every value against the document,
-          and commit them as UNVERIFIED. A committed value is on file, not in force:
-          only a licensed PCA verifying it for a specific farm lets a decision rely on
-          it. Nothing here shortens that chain.
-        </p>
+      <SectionCard
+        title="Pesticide label library"
+        size="section"
+        description={
+          <>
+            Extract label directions with AI, correct every value against the document, and commit them as UNVERIFIED. A committed value is on file, not in force: only a licensed PCA verifying it for a specific farm lets a decision rely on it. Nothing here shortens that chain.
+          </>
+        }
+      >
         <LabelLibraryCard farmId={farmId} />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Data ingestion</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Enqueue and inspect ingestion runs. The counts matter more than the status: a
-          run that fetched 24 rows and admitted 3 is not a healthy run, and each of the
-          21 dropped rows is explained individually rather than summarised away. Without
-          a provider credential the adapter is inert by construction — it records
-          <span className="font-mono"> skipped_no_credential</span> and makes no network
-          call.
-        </p>
+      <SectionCard
+        title="Data ingestion"
+        size="section"
+        description={
+          <>
+            Enqueue and inspect ingestion runs. The counts matter more than the status: a run that fetched 24 rows and admitted 3 is not a healthy run, and each of the 21 dropped rows is explained individually rather than summarised away. Without a provider credential the adapter is inert by construction — it records <span className="font-mono"> skipped_no_credential</span> and makes no network call.
+          </>
+        }
+      >
         <IngestionCard />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Data domains</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Seventeen domains are declared; eight are deferred to a finance phase that
-          does not exist, and each names the ENGINEERING_GUIDELINES.md clause deferring it. Declaring is
-          not building: a source under a deferred domain cannot have an adapter, and the
-          feature registry refuses a non-MVP domain outright. This table makes that
-          boundary visible rather than leaving it in a document.
-        </p>
+      {/* The most actionable card on this page: every finance, market and agronomy
+          model refuses for one reason, and it is a reading task, not a build task. */}
+      <TranscriptionStatusCard />
+
+      <SectionCard
+        title="Data domains"
+        size="section"
+        description={
+          <>
+            Seventeen domains are declared. Eight were deferred until 2026-08-07, when an explicit instruction admitted them — each now names the EMPTY transcription source that governs it and the constraint admission did not lift. Declaring is still not building: an admitted domain&apos;s source ships empty, every model over it refuses, and the worklist above says which document would change that.
+          </>
+        }
+      >
         <DomainRegistryTable />
-      </section>
+      </SectionCard>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Supplier quotes & financing (concierge)</h2>
-        <p className="mb-3 mt-1 text-xs text-gray-500">
-          Enter supplier quotes against open RFQs, indicative financing offers
-          (never approvals), and append-only order lifecycle events. Phase 1 has
-          no supplier portal — Lumos staff transcribe on suppliers&apos; behalf.
-        </p>
+      <SectionCard
+        title="Historical opportunity scan"
+        size="section"
+        description={
+          <>
+            Pilot ladder Stage 2. Replays a past season&rsquo;s scheduled spray dates and reports what the versioned rule read on each — or, while the threshold table is empty, exactly what stopped each date from being assessable. That reason histogram is a per-farm work list, and it is available before a single coefficient is transcribed. It is <strong>sizing, never evidence</strong>: every historical outcome followed the actual spray, so there is no untreated counterfactual and no date here can be called avoidable.
+          </>
+        }
+      >
+        <OpportunityScanCard />
+      </SectionCard>
+
+      <SectionCard
+        title="Supplier quotes & financing (concierge)"
+        size="section"
+        description={
+          <>
+            Enter supplier quotes against open RFQs, indicative financing offers (never approvals), and append-only order lifecycle events. Phase 1 has no supplier portal — Lumos staff transcribe on suppliers&apos; behalf.
+          </>
+        }
+      >
         {farms.length === 0 ? (
-          <p className="text-sm text-gray-500">No farms yet — create one first.</p>
+          <p className="text-sm text-muted">No farms yet — create one first.</p>
         ) : (
           farmId && (
             <ConciergeQuoteCard
@@ -281,7 +326,7 @@ export default function InternalToolsPage() {
             />
           )
         )}
-      </section>
+      </SectionCard>
     </div>
   );
 }

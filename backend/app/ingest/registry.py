@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from app.ingest import domains
 from app.ingest.base import (
-    SOURCE_DEFERRED_TO_FINANCE_PHASE,
+    SOURCE_AWAITING_TRANSCRIPTION,
     SOURCE_NOT_IMPLEMENTED,
     SourceAdapter,
     SourceDescriptor,
@@ -56,14 +56,18 @@ def _reset_for_tests() -> None:
 # ---------------------------------------------------------------------------
 # Declared placeholders.
 #
-# Every deferred-finance domain gets one, because mechanism (1) of the finance
-# boundary is a test asserting that no source under such a domain is
-# implementable — and a test over an empty set proves nothing.
+# The finance and market sources were `deferred_to_finance_phase` until 2026-08-07.
+# They are now `awaiting_transcription`, which is a different and more actionable
+# statement: the layer is built, and what is missing is a document someone must read.
+# `can_fetch` is False for both, so nothing about the pipeline's inertness changed.
 # ---------------------------------------------------------------------------
-_DEFERRED_BLOCKER = (
-    "Deferred to a finance phase that does not exist. See ENGINEERING_GUIDELINES.md §4 and "
-    "DATA_PLATFORM.md; this is a governance decision, not a missing library."
-)
+def _transcription_blocker(module: str) -> str:
+    return (
+        f"The structure is built and the numbers are absent: `{module}` ships EMPTY, "
+        "so every model over it returns a Refusal rather than a value. Unblocked by a "
+        "human transcribing the primary document with its citation — not by an adapter, "
+        "a credential, or a library. See TRANSCRIPTION_TASKS.md."
+    )
 
 PLACEHOLDERS: tuple[SourceDescriptor, ...] = (
     # --- MVP domains, adapters not built ---
@@ -94,46 +98,64 @@ PLACEHOLDERS: tuple[SourceDescriptor, ...] = (
             "phase far more than on a spray decision."
         ),
     ),
-    # --- Deferred to the finance phase ---
+    # --- Admitted 2026-08-07; structure built, transcription source EMPTY ---
     SourceDescriptor(
         source_key="financing_offer_feed", domain="financing",
-        title="Lender offer feed", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Lender product catalogue", provider="(lending partner)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/financing_terms.py"),
     ),
     SourceDescriptor(
         source_key="credit_bureau", domain="credit_scoring",
-        title="Credit bureau data", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Lender credit scorecard", provider="(lending partner)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/scorecard_table.py"),
+        notes=(
+            "Named `credit_bureau` historically; the source that actually governs this "
+            "domain is the lender's own scorecard, not a bureau file."
+        ),
     ),
     SourceDescriptor(
         source_key="underwriting_rules", domain="underwriting",
-        title="Underwriting rule set", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Underwriting rule set", provider="(lending partner)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/underwriting_rules.py"),
     ),
     SourceDescriptor(
         source_key="insurance_policy_feed", domain="insurance",
-        title="Crop insurance policy data", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Crop insurance product terms", provider="(insurer)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/insurance_products.py"),
+        notes="Premium rates are deliberately never transcribed — coverage is matched, not priced.",
     ),
     SourceDescriptor(
         source_key="collateral_registry", domain="collateralization",
-        title="Collateral registry", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Collateral advance-rate schedule", provider="(lending partner)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/collateral_valuation.py"),
     ),
     SourceDescriptor(
         source_key="futures_curve", domain="hedging",
-        title="Futures & options curve", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Exchange settlement prices", provider="(exchange)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/futures_curve.py"),
+        notes="Recording positions only. Nothing executes and nothing is advised.",
     ),
     SourceDescriptor(
         source_key="offer_pricing_feed", domain="pricing",
-        title="Supplier offer pricing", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Reported commodity price series", provider="(reporting service)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/price_series.py"),
+        notes=(
+            "Commodity prices for sale timing. Ranking supplier quotes remains "
+            "forbidden — quotes stay in entry order."
+        ),
     ),
     SourceDescriptor(
         source_key="portfolio_monitoring", domain="monitoring",
-        title="Portfolio & collateral monitoring", provider="(none)",
-        status=SOURCE_DEFERRED_TO_FINANCE_PHASE, blocker=_DEFERRED_BLOCKER,
+        title="Facility covenant schedule", provider="(lending partner)",
+        status=SOURCE_AWAITING_TRANSCRIPTION,
+        blocker=_transcription_blocker("app/monitoring_covenants.py"),
     ),
 )
 

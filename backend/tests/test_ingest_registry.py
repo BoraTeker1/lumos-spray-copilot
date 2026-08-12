@@ -1,15 +1,20 @@
-"""The declaration layer, and the three mechanisms that keep declaring from becoming building.
+"""The declaration layer, and the four mechanisms that keep declaring from becoming inventing.
 
 The user asked for seventeen data domains. Eight of them — credit scoring, underwriting,
-collateralization, hedging, pricing, insurance, financing, portfolio monitoring — are
-things `ENGINEERING_GUIDELINES.md` §4 forbids this product from building. Declaring them anyway is the
-right call: the platform's intended shape should be legible. But a declaration that
-nothing enforces is how a guardrail dies quietly, so the boundary is tested here rather
-than described in a document.
+collateralization, hedging, pricing, insurance, financing, portfolio monitoring — were
+forbidden by `ENGINEERING_GUIDELINES.md` §4 until **2026-08-07**, when they were admitted by explicit
+instruction (see `domains.ADMISSION`).
 
-The failure this file exists to catch is not someone maliciously adding a credit model.
-It is someone six months from now adding `debt_service_capacity` to the feature registry
-because it was easy, in a session where nobody re-read §4.
+What changed is which failure this file guards against. Before admission the risk was
+*building* a credit model at all. After it, the risk is subtler and more likely: building
+the structure correctly and then filling the scorecard in from intuition, because the
+module is right there and a plausible number passes every other test in this suite.
+Mechanism 4 exists for exactly that — an admitted domain must name its EMPTY transcription
+source, and the source must still be empty.
+
+The original failure mode has not gone away, it has moved: not someone maliciously adding
+a credit model, but someone six months from now writing weights into `scorecard_table.py`
+because a demo needed a number.
 """
 import inspect
 import re
@@ -17,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from app import transcription
 from app.ingest import base, domains, geo, registry
 
 CLAUDE_MD = Path(__file__).resolve().parents[2] / "ENGINEERING_GUIDELINES.md"
@@ -65,13 +71,87 @@ def test_no_future_finance_domain_owns_an_implementable_source():
                 registry.build_adapter(descriptor.source_key)
 
 
-def test_the_deferred_set_is_not_empty_so_the_boundary_test_has_teeth():
-    """Guards the guard: a test that loops over nothing passes forever."""
-    deferred = [
-        d for d in registry.describe_all()
-        if d.domain in domains.FUTURE_FINANCE_DOMAINS
-    ]
-    assert len(deferred) == len(domains.FUTURE_FINANCE_DOMAINS) == 8
+def test_the_deferred_boundary_machinery_survives_an_empty_deferred_set():
+    """Guards the guard, now that nothing is deferred.
+
+    The eight finance domains were admitted on 2026-08-07, so
+    `FUTURE_FINANCE_DOMAINS` is empty and the loop above proves nothing today. That is
+    a real weakening and it should be visible rather than silent — which is why the
+    machinery is kept rather than deleted: it is how the NEXT domain gets deferred, and
+    rebuilding this discipline later, under pressure, is how it ends up not existing.
+
+    If a domain is ever deferred again, the loop above regains its teeth automatically
+    and this test should be replaced by the count assertion it had before.
+    """
+    assert domains.FUTURE_FINANCE_DOMAINS == frozenset(), (
+        "a domain is deferred again — restore the count assertion in this test so the "
+        "boundary check is proven non-vacuous"
+    )
+    # The mechanism itself must still work. Constructing a deferred domain without a
+    # citation must still raise, so the discipline is intact and merely unused.
+    with pytest.raises(ValueError, match="must quote the clause that defers it"):
+        domains.Domain(
+            "probe", "Probe", domains.PHASE_FUTURE_FINANCE, "rationale with no citation",
+        )
+
+
+# --------------------------------------------------------------------------
+# Mechanism 4 — every admitted domain names an EMPTY source, and it is empty.
+# --------------------------------------------------------------------------
+
+
+def test_every_admitted_domain_names_an_importable_empty_source():
+    """Admission built the structure. This proves it did not invent the numbers.
+
+    Without this, "the finance layer ships with empty tables" is a claim in a docstring.
+    With it, a scorecard quietly filled in from intuition changes a test result.
+    """
+    assert domains.ADMITTED_DOMAINS, "no admitted domains — this test is vacuous"
+
+    for key, module_path in domains.empty_sources():
+        status = transcription.status_of(module_path, title=domains.get(key).title)
+        assert status.primary_source, (
+            f"{module_path} must name the document that would fill it"
+        )
+        assert not status.populated, (
+            f"{module_path} is populated ({status.row_count} entries). If someone "
+            "transcribed a real primary document, that is the intended event — confirm "
+            "every row carries a Citation and update this assertion deliberately. If "
+            "the values were invented, delete them: a plausible number here passes "
+            "every other test in this suite."
+        )
+
+
+def test_an_admitted_domain_must_declare_what_admission_did_not_authorise():
+    """A domain admitted without a recorded surviving constraint reads as unconstrained."""
+    with pytest.raises(ValueError, match="must record what admission did"):
+        domains.Domain(
+            "probe", "Probe", domains.PHASE_ADMITTED, "rationale",
+            empty_source="app.scorecard_table",
+        )
+
+
+def test_an_admitted_domain_must_name_its_empty_source():
+    with pytest.raises(ValueError, match="must name the EMPTY transcription source"):
+        domains.Domain(
+            "probe", "Probe", domains.PHASE_ADMITTED, "rationale",
+            surviving_constraint="no money movement",
+        )
+
+
+def test_no_admitted_source_can_fetch():
+    """Admission changed the status vocabulary, not the pipeline's inertness.
+
+    `awaiting_transcription` must be as unrunnable as `deferred_to_finance_phase` was —
+    the pipeline asks exactly one question before touching a network, and the answer
+    for every one of these must still be no.
+    """
+    for descriptor in registry.describe_all():
+        if descriptor.domain in domains.ADMITTED_DOMAINS:
+            assert descriptor.status == base.SOURCE_AWAITING_TRANSCRIPTION
+            assert descriptor.can_fetch is False
+            with pytest.raises(registry.SourceError):
+                registry.build_adapter(descriptor.source_key)
 
 
 # --------------------------------------------------------------------------

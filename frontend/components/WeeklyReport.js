@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { Check, Copy, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { FormError } from "@/components/ui/field";
+import { Textarea } from "@/components/ui/textarea";
 
 // Fetches the plain-text weekly report and offers a one-click copy (for WhatsApp).
 export default function WeeklyReport({ farmId }) {
@@ -37,32 +41,25 @@ export default function WeeklyReport({ farmId }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end">
-        <div className="flex gap-2">
-          <button
-            onClick={load}
-            disabled={loading}
-            className="rounded border px-3 py-1.5 text-sm disabled:opacity-50"
-          >
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={load} disabled={loading}>
+            <RefreshCw className={loading ? "animate-spin" : undefined} aria-hidden />
             {loading ? "Loading…" : text ? "Refresh" : "Build report"}
-          </button>
+          </Button>
           {text && (
-            <button
-              onClick={copy}
-              className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white"
-            >
+            <Button type="button" onClick={copy}>
+              {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
               {copied ? "Copied" : "Copy for WhatsApp"}
-            </button>
+            </Button>
           )}
         </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <FormError>{error}</FormError>
       {text && (
-        <textarea
-          readOnly
-          value={text}
-          rows={12}
-          className="w-full rounded border bg-white p-3 font-mono text-xs"
-        />
+        <label className="block">
+          <span className="sr-only">Weekly report text</span>
+          <Textarea readOnly value={text} rows={12} className="p-3 font-mono text-xs" />
+        </label>
       )}
     </div>
   );

@@ -1,9 +1,12 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
+  Building2,
   CalendarClock,
   ClipboardCheck,
   CloudSun,
@@ -18,6 +21,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { tone } from "@/lib/tones";
 import { useFarmContext } from "@/lib/farm-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +36,6 @@ import {
 import ActivityTimeline from "@/components/ActivityTimeline";
 import DecisionQueue from "@/components/DecisionQueue";
 import EmptyState from "@/components/EmptyState";
-import MetricCard from "@/components/MetricCard";
 import NextActionBanner from "@/components/NextActionBanner";
 import PageHeader from "@/components/PageHeader";
 import PreSpraySheet from "@/components/PreSpraySheet";
@@ -94,12 +97,12 @@ export default function OperationsPage() {
     load();
   }, [load]);
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading farms…</p>;
+  if (farmsLoading) return <LoadingState message="Loading farms…" />;
   if (farmsError) {
     return (
-      <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+      <Callout tone="risk">
         {farmsError} — is the backend running on <code>http://localhost:8000</code>?
-      </div>
+      </Callout>
     );
   }
   if (!activeFarm) {
@@ -188,7 +191,7 @@ export default function OperationsPage() {
     <div className="space-y-6">
       <PageHeader
         breadcrumbs={[{ label: "Operations" }, { label: "Today" }]}
-        title="Operations"
+        title="Today's operations"
         meta={
           <>
             <span className="font-medium text-leaf-700">
@@ -243,9 +246,9 @@ export default function OperationsPage() {
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       {overview && (
@@ -257,7 +260,7 @@ export default function OperationsPage() {
           secondary={
             <Link
               href="/decisions"
-              className="text-xs font-medium text-gray-600 underline-offset-2 hover:underline"
+              className="text-xs font-medium text-muted underline-offset-2 hover:underline"
             >
               View decision queue
             </Link>
@@ -265,117 +268,19 @@ export default function OperationsPage() {
         />
       )}
 
-      {/* KPI row — counts come from the same array the queue below renders. */}
-      {overview && (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <MetricCard
-            icon={TriangleAlert}
-            label="Needs action"
-            value={needsAction.length}
-            hint="open decisions waiting on you"
-            tone={needsAction.length > 0 ? "warn" : "neutral"}
-          />
-          <MetricCard
-            icon={Users}
-            label="Awaiting PCA"
-            value={awaitingPca.length}
-            hint="reviews still outstanding"
-            tone={awaitingPca.length > 0 ? "info" : "neutral"}
-          />
-          <MetricCard
-            icon={FileWarning}
-            label="Follow-ups due"
-            value={followUpsDue.length}
-            hint="outcomes needing follow-up evidence"
-            tone={followUpsDue.length > 0 ? "warn" : "neutral"}
-          />
-          {harvestOverdue ? (
-            <MetricCard
-              icon={CalendarClock}
-              label="Harvest date passed"
-              value={`${-days} day${days === -1 ? "" : "s"} overdue`}
-              hint={`Expected ${formatDate(overview.expected_harvest_date)}`}
-              tone="risk"
-              action={
-                <UpdateHarvestDialog
-                  farmId={farmId}
-                  currentDate={overview.expected_harvest_date}
-                  onUpdated={refreshAll}
-                  trigger={
-                    <button className="text-xs font-medium text-leaf-700 hover:underline">
-                      Update harvest date
-                    </button>
-                  }
-                />
-              }
-            />
-          ) : (
-            <MetricCard
-              icon={CalendarClock}
-              label={days === 0 ? "Harvest" : "Days to harvest"}
-              value={days == null ? "—" : days === 0 ? "Today" : days}
-              hint={
-                overview.expected_harvest_date
-                  ? `expected ${formatDate(overview.expected_harvest_date)}`
-                  : "no harvest date entered"
-              }
-              tone="neutral"
-            />
-          )}
-        </div>
-      )}
-
-      {/* Main grid: decision queue (8) | upcoming work + field risk (4) */}
-      <div className="grid gap-4 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-8">
+      {/* Main column | context rail */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-4">
           <SectionCard
             title="Decision queue"
             icon={<ShieldCheck />}
+            size="section"
             description="Verdict = the engine's historical decision. State = what (if anything) is still owed."
           >
             <DecisionQueue planned={queueRows} limit={5} viewAllHref="/decisions" />
           </SectionCard>
-        </div>
-        <div className="space-y-4 lg:col-span-4">
-          <SectionCard
-            title="Upcoming work"
-            icon={<CalendarClock />}
-            description="Open decisions by intended date."
-          >
-            {openByDate.length === 0 ? (
-              <p className="text-sm text-gray-500">No open decisions.</p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {openByDate.slice(0, 4).map((p) => (
-                  <li key={p.id}>
-                    <Link
-                      href={`/decisions/${p.id}`}
-                      className="group flex items-center justify-between gap-2 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-gray-900">
-                          {p.product_name}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {formatDate(p.intended_date)}
-                          {p.field_block ? ` · ${p.field_block}` : ""}
-                        </div>
-                      </div>
-                      <StatusBadge kind="workflow" value={p.workflow_state} />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SectionCard>
 
-        </div>
-      </div>
-
-      {/* Bottom grid: recent activity (7) | pilot evidence (5) */}
-      <div className="grid gap-4 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-7">
-          <SectionCard title="Recent activity" icon={<Eye />}>
+          <SectionCard title="Recent activity" icon={<Eye />} size="section">
             <ActivityTimeline
               sprays={sprays}
               observations={observations}
@@ -384,7 +289,54 @@ export default function OperationsPage() {
             />
           </SectionCard>
         </div>
-        <div className="space-y-4 lg:col-span-5">
+
+        {/* ------------------------------------------------------- context rail */}
+        <div className="space-y-4">
+          {overview && (
+            <SectionCard title="Farm context" icon={<Building2 />}>
+              <div className="flex items-start justify-between gap-3">
+                <span className="inline-flex items-center gap-2 text-sm text-ink">
+                  <CalendarClock className="h-4 w-4 text-muted" aria-hidden />
+                  Harvest
+                </span>
+                <span className="text-right">
+                  <span className="tabular block text-sm font-medium text-ink">
+                    {overview.expected_harvest_date
+                      ? formatDate(overview.expected_harvest_date)
+                      : "Not entered"}
+                  </span>
+                  {days != null && (
+                    <span
+                      className={`tabular block text-xs font-medium ${
+                        harvestOverdue ? "text-risk-fg" : "text-leaf-700"
+                      }`}
+                    >
+                      {harvestOverdue
+                        ? `${-days} day${days === -1 ? "" : "s"} overdue`
+                        : days === 0
+                          ? "Today"
+                          : `${days} day${days === 1 ? "" : "s"}`}
+                    </span>
+                  )}
+                </span>
+              </div>
+              {harvestOverdue && (
+                <div className="mt-2 border-t border-line pt-2">
+                  <UpdateHarvestDialog
+                    farmId={farmId}
+                    currentDate={overview.expected_harvest_date}
+                    onUpdated={refreshAll}
+                    trigger={
+                      <button className="text-xs font-medium text-leaf-700 hover:underline">
+                        Update harvest date
+                      </button>
+                    }
+                  />
+                </div>
+              )}
+            </SectionCard>
+          )}
+
           {/* Weather is a mock service — shown on demo farms only; a real pilot
               farm never renders a simulated widget. */}
           {overview?.is_demo && (
@@ -394,6 +346,82 @@ export default function OperationsPage() {
               description="Simulated demo weather — not a live feed."
             >
               <WeatherCard farmId={farmId} />
+            </SectionCard>
+          )}
+
+          {/* Outstanding work — the same arrays the queue above renders, so a
+              count here can never disagree with the rows there. */}
+          {overview && (
+            <SectionCard title="Outstanding work" icon={<ListChecks />}>
+              <ul className="divide-y divide-line">
+                {[
+                  {
+                    icon: TriangleAlert,
+                    label: "Needs action",
+                    value: needsAction.length,
+                    tone: needsAction.length > 0 ? "warn" : "neutral",
+                  },
+                  {
+                    icon: Users,
+                    label: "Awaiting PCA",
+                    value: awaitingPca.length,
+                    tone: awaitingPca.length > 0 ? "info" : "neutral",
+                  },
+                  {
+                    icon: FileWarning,
+                    label: "Follow-ups due",
+                    value: followUpsDue.length,
+                    tone: followUpsDue.length > 0 ? "warn" : "neutral",
+                  },
+                ].map((row) => {
+                  const RowIcon = row.icon;
+                  return (
+                    <li
+                      key={row.label}
+                      className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
+                    >
+                      <span className="inline-flex items-center gap-2 text-sm text-ink">
+                        <RowIcon
+                          className={`h-4 w-4 ${tone(row.tone).icon}`}
+                          aria-hidden
+                        />
+                        {row.label}
+                      </span>
+                      <span className="tabular text-sm font-semibold text-ink">
+                        {row.value}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {openByDate.length > 0 && (
+                <div className="mt-3 border-t border-line pt-3">
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                    Open by intended date
+                  </div>
+                  <ul className="divide-y divide-line">
+                    {openByDate.slice(0, 4).map((p) => (
+                      <li key={p.id}>
+                        <Link
+                          href={`/decisions/${p.id}`}
+                          className="group flex items-center justify-between gap-2 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-ink">
+                              {p.product_name}
+                            </div>
+                            <div className="tabular text-xs text-muted">
+                              {formatDate(p.intended_date)}
+                              {p.field_block ? ` · ${p.field_block}` : ""}
+                            </div>
+                          </div>
+                          <StatusBadge kind="workflow" value={p.workflow_state} />
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </SectionCard>
           )}
 
@@ -415,12 +443,12 @@ export default function OperationsPage() {
             }
           >
             {!scope || scope.decisions_checked === 0 ? (
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted">
                 No decisions recorded yet — run a pre-spray check to start the
                 evidence trail.
               </p>
             ) : (
-              <div className="space-y-3 text-xs text-gray-600">
+              <div className="space-y-3 text-xs text-muted">
                 {useDemoScope && (
                   <Badge variant="outline">
                     <FlaskConical />
@@ -430,7 +458,7 @@ export default function OperationsPage() {
                 <div>
                   <div className="mb-1 flex items-center justify-between">
                     <span>PCA-reviewed decisions</span>
-                    <span className="font-medium text-gray-900">
+                    <span className="font-medium text-ink">
                       {scope.decisions_reviewed}/{scope.decisions_checked}
                     </span>
                   </div>
@@ -446,7 +474,7 @@ export default function OperationsPage() {
                   <div>
                     <div className="mb-1 flex items-center justify-between">
                       <span>Follow-up recorded</span>
-                      <span className="font-medium text-gray-900">
+                      <span className="font-medium text-ink">
                         {scope.follow_up.follow_up_with_events}/
                         {scope.follow_up.follow_up_required}
                       </span>
@@ -459,9 +487,9 @@ export default function OperationsPage() {
                     />
                   </div>
                 )}
-                <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+                <div className="flex items-center justify-between border-t border-line pt-2">
                   <span>Sprays changed / delayed / avoided</span>
-                  <span className="font-medium text-gray-900">
+                  <span className="font-medium text-ink">
                     {scope.sprays_changed_delayed_or_avoided}/{scope.decisions_checked}
                   </span>
                 </div>
@@ -471,13 +499,13 @@ export default function OperationsPage() {
 
           <Link
             href={`/farms/${farmId}`}
-            className="flex items-center justify-between rounded-[10px] border border-gray-200 bg-white p-3 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:border-gray-400"
+            className="flex items-center justify-between rounded-card border border-line bg-surface p-3 text-sm font-medium text-ink shadow-sm transition-colors hover:border-muted"
           >
             <span className="inline-flex items-center gap-2">
               <ListChecks className="h-4 w-4 text-leaf" />
               Full farm record
             </span>
-            <ArrowRight className="h-3.5 w-3.5 text-gray-300" />
+            <ArrowRight className="h-4 w-4 text-muted" />
           </Link>
         </div>
       </div>

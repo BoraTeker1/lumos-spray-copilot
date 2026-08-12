@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import SectionCard from "@/components/SectionCard";
 import { Database } from "lucide-react";
+import { FormError } from "@/components/ui/field";
 
 // Whether this farm's data can yet support a measurement.
 //
@@ -55,13 +56,13 @@ function Measure({ name, measure }) {
 
   if (measure.abstained) {
     return (
-      <div className="flex flex-col gap-0.5 border-l-2 border-gray-200 pl-3">
+      <div className="flex flex-col gap-0.5 border-l-2 border-line pl-3">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-sm text-gray-700">{label}</span>
+          <span className="text-sm text-ink">{label}</span>
           {/* Deliberately not a number, not a dash-in-a-value-slot. */}
-          <span className="text-xs font-medium text-gray-500">Not calculated</span>
+          <span className="text-xs font-medium text-muted">Not calculated</span>
         </div>
-        <ul className="text-xs text-gray-500">
+        <ul className="text-xs text-muted">
           {measure.reasons.map((reason) => (
             <li key={reason}>{reason}</li>
           ))}
@@ -71,9 +72,9 @@ function Measure({ name, measure }) {
   }
 
   return (
-    <div className="flex items-baseline justify-between gap-2 border-l-2 border-emerald-200 pl-3">
-      <span className="text-sm text-gray-700">{label}</span>
-      <span className="text-sm font-semibold tabular-nums text-gray-900">
+    <div className="flex items-baseline justify-between gap-2 border-l-2 border-ok-line pl-3">
+      <span className="text-sm text-ink">{label}</span>
+      <span className="text-sm font-semibold tabular-nums text-ink">
         {formatValue(measure)}
       </span>
     </div>
@@ -84,7 +85,7 @@ function EntityGroup({ title, entries }) {
   if (!entries?.length) return null;
   return (
     <div className="flex flex-col gap-2">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
         {title}
       </h4>
       {entries.map((entry) => (
@@ -116,14 +117,14 @@ export default function DataReadinessCard({ farmId }) {
   if (error) {
     return (
       <SectionCard title="Data readiness" icon={<Database />}>
-        <p className="text-sm text-red-600">{error}</p>
+        <FormError>{error}</FormError>
       </SectionCard>
     );
   }
   if (!data) {
     return (
       <SectionCard title="Data readiness" icon={<Database />}>
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-muted">Loading…</p>
       </SectionCard>
     );
   }
@@ -145,13 +146,13 @@ export default function DataReadinessCard({ farmId }) {
             <EntityGroup title="Blocks" entries={data.blocks} />
           </>
         ) : (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted">
             No measures have been computed for this farm yet.
           </p>
         )}
 
         {/* Server-owned. Never replace this with wording written in the component. */}
-        <p className="border-t pt-3 text-xs text-gray-500">{data.basis_text}</p>
+        <p className="border-t pt-3 text-xs text-muted">{data.basis_text}</p>
       </div>
     </SectionCard>
   );

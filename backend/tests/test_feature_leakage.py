@@ -66,6 +66,22 @@ def sample_row(id, observed_at, recorded_at, **kw):
     return SimpleNamespace(**row)
 
 
+def base_row(id, observed_at, recorded_at, **kw):
+    """A generic point-in-time row: the dual-timestamp shape `pit.admissible` reads.
+
+    Structurally identical to `sample_row` — kept separate because the agronomy features
+    consume soil tests, irrigation events and energy records, and calling all three
+    `sample_row` would read as scouting data at every use site.
+    """
+    row = {
+        "id": id, "observed_at": observed_at, "recorded_at": recorded_at,
+        "quality_flag": None, "supersedes_id": None,
+        "data_source": "manual_entry", "data_confidence": "user_provided",
+    }
+    row.update(kw)
+    return SimpleNamespace(**row)
+
+
 CONCENTRATIONS = {"100-953": (62.5, "%w/w")}
 
 
@@ -85,6 +101,18 @@ def clean_inputs() -> dict:
         "planted_area_ha": 1.62,
         "concentrations": CONCENTRATIONS,
         "as_of": AS_OF,
+        # Agronomy inputs (2026-08-07). Given real rows rather than empty lists so the
+        # loop below actually exercises these features — an empty list in and an empty
+        # list out would make them pass this test vacuously forever.
+        "soil_tests": [base_row(1, AS_OF - timedelta(days=30), AS_OF - timedelta(days=30))],
+        "irrigation_events": [
+            base_row(1, AS_OF - timedelta(days=5), AS_OF - timedelta(days=5),
+                     depth_mm=12.0),
+        ],
+        "records_irrigation": True,
+        "energy_records": [
+            base_row(1, AS_OF - timedelta(days=5), AS_OF - timedelta(days=5), kwh=140.0),
+        ],
     }
 
 
@@ -105,6 +133,18 @@ def poisoned_inputs() -> dict:
     ]
     inputs["samples"] = inputs["samples"] + [
         sample_row(99, BEFORE + timedelta(hours=3), AFTER)
+    ]
+    # Agronomy poison rows, each chosen to move its feature if admitted: a NEWER soil
+    # test (would cut recency days), extra irrigation depth and extra energy (would both
+    # raise their totals).
+    inputs["soil_tests"] = inputs["soil_tests"] + [
+        base_row(99, AS_OF - timedelta(days=1), AFTER)
+    ]
+    inputs["irrigation_events"] = inputs["irrigation_events"] + [
+        base_row(99, AS_OF - timedelta(days=1), AFTER, depth_mm=999.0)
+    ]
+    inputs["energy_records"] = inputs["energy_records"] + [
+        base_row(99, AS_OF - timedelta(days=1), AFTER, kwh=9999.0)
     ]
     return inputs
 
@@ -143,7 +183,7 @@ def test_the_poison_rows_would_actually_change_the_answer_if_admitted():
     inputs = poisoned_inputs()
     inputs["as_of"] = late
 
-    from app.features import pest, weather
+    from app.features import agronomy, pest, weather
 
     # 600 minutes of wetness lands.
     assert weather.leaf_wetness_hours(**inputs).value > 2.0
@@ -151,6 +191,16 @@ def test_the_poison_rows_would_actually_change_the_answer_if_admitted():
     assert pest.active_ingredient_kg_per_ha(**inputs).abstained
     # The MoA-less application forces an abstention.
     assert pest.moa_rotation_diversity(**inputs).abstained
+
+    # Agronomy: the newer soil test cuts recency well below the clean 30 days, and the
+    # oversized irrigation and energy rows dominate their totals.
+    clean = clean_inputs()
+    clean["as_of"] = late
+    assert agronomy.soil_test_recency_days(**inputs).value < (
+        agronomy.soil_test_recency_days(**clean).value
+    )
+    assert agronomy.applied_irrigation_mm(**inputs).value > 900.0
+    assert agronomy.energy_use_kwh_per_ha(**inputs).value > 900.0
 
 
 def test_recomputing_at_a_fixed_as_of_reproduces_the_digest_after_more_data_arrives(

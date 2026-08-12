@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Droplets, Eye, Gauge, Info, Sprout } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { fieldClass } from "@/components/ui/input";
-import Breadcrumbs from "@/components/Breadcrumbs";
+import PageHeader from "@/components/PageHeader";
+import SectionCard from "@/components/SectionCard";
 import SprayImportCard from "@/components/SprayImportCard";
+import { FormError } from "@/components/ui/field";
 
 const EMPTY_SPRAY = {
   product_name: "",
@@ -31,6 +35,17 @@ export default function PilotFarmIntakePage() {
   });
   const [sprays, setSprays] = useState([{ ...EMPTY_SPRAY }, { ...EMPTY_SPRAY }, { ...EMPTY_SPRAY }]);
   const [concern, setConcern] = useState({ text: "", severity: "" });
+  // The reduction denominator. Asked here because it is a 20-second question during
+  // onboarding and an awkward one six weeks later — and without it the farm can never
+  // report a reduction figure at all.
+  const [baseline, setBaseline] = useState({
+    method: "",
+    cadence_days: "",
+    season_spray_count: "",
+    calendar_program: "",
+    baseline_period_start: "",
+    baseline_period_end: "",
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -52,6 +67,34 @@ export default function PilotFarmIntakePage() {
     };
   }
 
+  // Only the fields the chosen method actually uses are sent — a cadence left over
+  // from switching method must not travel with a prior_period baseline.
+  function cleanBaseline() {
+    if (!baseline.method) return null;
+    const b = {
+      method: baseline.method,
+      declared_by: "Grower, at intake",
+      cadence_days: null,
+      season_spray_count: null,
+      calendar_program: null,
+      baseline_period_start: null,
+      baseline_period_end: null,
+    };
+    if (baseline.method === "stated_cadence") {
+      if (baseline.cadence_days === "") return null;
+      b.cadence_days = Number(baseline.cadence_days);
+    } else if (baseline.method === "calendar_program") {
+      if (!baseline.calendar_program) return null;
+      b.calendar_program = baseline.calendar_program;
+    } else if (baseline.method === "prior_period") {
+      if (baseline.season_spray_count === "") return null;
+      b.season_spray_count = Number(baseline.season_spray_count);
+      b.baseline_period_start = baseline.baseline_period_start || null;
+      b.baseline_period_end = baseline.baseline_period_end || null;
+    }
+    return b;
+  }
+
   async function submit(e) {
     e.preventDefault();
     setSaving(true);
@@ -69,6 +112,7 @@ export default function PilotFarmIntakePage() {
         spray_events: sprays.map(cleanSpray).filter(Boolean),
         scouting_concern: concern.text || null,
         scouting_severity_1_to_5: concern.severity === "" ? null : Number(concern.severity),
+        spray_baseline: cleanBaseline(),
       };
       const created = await api.createPilotFarm(payload);
       // Stay on this page: offer the full spray-history import before opening the farm.
@@ -81,7 +125,7 @@ export default function PilotFarmIntakePage() {
   }
 
   const input = fieldClass;
-  const label = "text-xs font-medium text-gray-600";
+  const label = "text-xs font-medium text-muted";
 
   if (createdFarm) {
     return (
@@ -90,19 +134,19 @@ export default function PilotFarmIntakePage() {
           <h1 className="text-lg font-semibold">
             {createdFarm.name} created
           </h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-muted">
             Optional: import their full spray history now — paste rows from a
             spreadsheet or upload a CSV. You can also do this later from the farm&apos;s
             Records tab.
           </p>
         </div>
-        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <section className="rounded-card border border-line bg-surface p-5 shadow-sm">
           <h2 className="mb-3 font-semibold">Import spray history</h2>
           <SprayImportCard farmId={createdFarm.id} />
         </section>
         <Link
           href={`/farms/${createdFarm.id}`}
-          className="inline-block rounded-lg bg-leaf-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-leaf-800"
+          className="inline-block rounded-control bg-leaf-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-leaf-800"
         >
           Open {createdFarm.name} →
         </Link>
@@ -111,20 +155,34 @@ export default function PilotFarmIntakePage() {
   }
 
   return (
+    // ONE flat page, ONE submit. Deliberately not a wizard: this intake is a
+    // single POST, and a stepper would add flow state and gating that the
+    // request does not have.
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: "Pilot setup" }]} />
-      <div>
-        <h1 className="text-lg font-semibold text-gray-900">Pilot setup</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Capture a real grower&apos;s farm, their last 3 sprays, and the latest scouting
-          concern — then run their next planned spray through the decision check live. No
-          login needed.
-        </p>
+      <PageHeader
+        breadcrumbs={[{ label: "Pilot setup" }]}
+        title="Add pilot farm"
+        meta={
+          <>
+            <Badge variant="outline">Real operations intake</Badge>
+            <span>
+              Capture the farm, recent spray history, and the latest scouting concern
+              before running the next planned-spray check.
+            </span>
+          </>
+        }
+      />
+
+      <div className="flex items-start gap-2 rounded-card border border-line bg-canvas px-4 py-2.5 text-sm text-muted">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        Records entered here are operator-provided until reviewed. Regulatory values
+        are never guessed — leave a field blank if you do not have it.
       </div>
 
-      <form onSubmit={submit} className="space-y-6">
+      <form onSubmit={submit} className="space-y-4">
         {/* Farm */}
-        <section className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-2">
+        <SectionCard title="Farm details" icon={<Sprout />} size="section">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <span className={label}>Farm name *</span>
             <input className={input} required value={farm.name} onChange={(e) => setFarmField("name", e.target.value)} />
@@ -161,27 +219,161 @@ export default function PilotFarmIntakePage() {
             </select>
           </div>
         </section>
+        </SectionCard>
 
         {/* Last 3 sprays */}
-        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-3 font-semibold">Last 3 spray events</h2>
+        <SectionCard
+          title="Last 3 spray events"
+          icon={<Droplets />}
+          size="section"
+          description="Recent chemistry and timing give the rotation and interval checks something to work from."
+        >
+          {/* A column-header row once, instead of a placeholder in all eighteen
+              inputs: a placeholder is not a label, and it disappears exactly when
+              the person needs to check which column they are in. The headers are
+              hidden on one-column mobile, where each input needs its own label. */}
           <div className="space-y-3">
+            <div className="hidden gap-2 sm:grid sm:grid-cols-6">
+              {[
+                "Product",
+                "Active ingredient",
+                "Date",
+                "Cost",
+                "PHI days",
+                "REI hours",
+              ].map((h) => (
+                <span
+                  key={h}
+                  className="text-[11px] font-semibold uppercase tracking-wider text-muted"
+                >
+                  {h}
+                </span>
+              ))}
+            </div>
             {sprays.map((s, i) => (
-              <div key={i} className="grid gap-2 sm:grid-cols-6">
-                <input className={input} placeholder="Product" value={s.product_name} onChange={(e) => setSpray(i, "product_name", e.target.value)} />
-                <input className={input} placeholder="Active ingredient" value={s.active_ingredient} onChange={(e) => setSpray(i, "active_ingredient", e.target.value)} />
-                <input type="date" className={input} value={s.application_date} onChange={(e) => setSpray(i, "application_date", e.target.value)} />
-                <input type="number" className={input} placeholder="Cost" value={s.cost} onChange={(e) => setSpray(i, "cost", e.target.value)} />
-                <input type="number" className={input} placeholder="PHI days" value={s.pre_harvest_interval_days} onChange={(e) => setSpray(i, "pre_harvest_interval_days", e.target.value)} />
-                <input type="number" className={input} placeholder="REI hours" value={s.re_entry_interval_hours} onChange={(e) => setSpray(i, "re_entry_interval_hours", e.target.value)} />
+              <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-6">
+                <input className={input} aria-label={`Spray ${i + 1} product`} placeholder="Product" value={s.product_name} onChange={(e) => setSpray(i, "product_name", e.target.value)} />
+                <input className={input} aria-label={`Spray ${i + 1} active ingredient`} placeholder="Active ingredient" value={s.active_ingredient} onChange={(e) => setSpray(i, "active_ingredient", e.target.value)} />
+                <input type="date" className={input} aria-label={`Spray ${i + 1} date`} value={s.application_date} onChange={(e) => setSpray(i, "application_date", e.target.value)} />
+                <input type="number" className={input} aria-label={`Spray ${i + 1} cost`} placeholder="Cost" value={s.cost} onChange={(e) => setSpray(i, "cost", e.target.value)} />
+                <input type="number" className={input} aria-label={`Spray ${i + 1} PHI days`} placeholder="PHI days" value={s.pre_harvest_interval_days} onChange={(e) => setSpray(i, "pre_harvest_interval_days", e.target.value)} />
+                <input type="number" className={input} aria-label={`Spray ${i + 1} REI hours`} placeholder="REI hours" value={s.re_entry_interval_hours} onChange={(e) => setSpray(i, "re_entry_interval_hours", e.target.value)} />
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-gray-400">Leave a row blank to skip it.</p>
-        </section>
+          <p className="mt-3 text-meta text-muted">Leave a row blank to skip it.</p>
+        </SectionCard>
+
+        {/* Spray baseline — the reduction denominator */}
+        <SectionCard
+          title="Spray baseline"
+          icon={<Gauge />}
+          size="section"
+          description="What their normal programme looks like, in their words. Without this, Lumos cannot report a reduction figure for this farm at all — it has nothing to measure against."
+        >
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <span className={label}>How do they describe it?</span>
+              <select
+                className={input}
+                value={baseline.method}
+                onChange={(e) => setBaseline((b) => ({ ...b, method: e.target.value }))}
+              >
+                <option value="">Skip for now</option>
+                <option value="stated_cadence">They spray every N days</option>
+                <option value="calendar_program">A named calendar programme</option>
+                <option value="prior_period">A count from a past season</option>
+              </select>
+            </div>
+
+            {baseline.method === "stated_cadence" && (
+              <div>
+                <span className={label}>Every how many days?</span>
+                <input
+                  type="number"
+                  min="1"
+                  className={input}
+                  value={baseline.cadence_days}
+                  onChange={(e) => setBaseline((b) => ({ ...b, cadence_days: e.target.value }))}
+                  placeholder="7"
+                />
+              </div>
+            )}
+
+            {baseline.method === "calendar_program" && (
+              <div>
+                <span className={label}>Which programme?</span>
+                <select
+                  className={input}
+                  value={baseline.calendar_program}
+                  onChange={(e) =>
+                    setBaseline((b) => ({ ...b, calendar_program: e.target.value }))
+                  }
+                >
+                  <option value="">—</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="every_10_days">Every 10 days</option>
+                  <option value="biweekly">Every 2 weeks</option>
+                  <option value="every_3_weeks">Every 3 weeks</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            )}
+
+            {baseline.method === "prior_period" && (
+              <>
+                <div>
+                  <span className={label}>Sprays in that period</span>
+                  <input
+                    type="number"
+                    min="1"
+                    className={input}
+                    value={baseline.season_spray_count}
+                    onChange={(e) =>
+                      setBaseline((b) => ({ ...b, season_spray_count: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <span className={label}>Period start</span>
+                  <input
+                    type="date"
+                    className={input}
+                    value={baseline.baseline_period_start}
+                    onChange={(e) =>
+                      setBaseline((b) => ({ ...b, baseline_period_start: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <span className={label}>Period end</span>
+                  <input
+                    type="date"
+                    className={input}
+                    value={baseline.baseline_period_end}
+                    onChange={(e) =>
+                      setBaseline((b) => ({ ...b, baseline_period_end: e.target.value }))
+                    }
+                  />
+                </div>
+              </>
+            )}
+          </section>
+          <p className="mt-2 text-xs text-muted">
+            Recorded as the grower&apos;s own statement, not a Lumos estimate. An early or
+            weak figure is still reported as illustrative until enough real sprays are
+            logged against it.
+          </p>
+        </SectionCard>
 
         {/* Scouting concern */}
-        <section className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-3">
+        <SectionCard
+          title="Latest scouting concern"
+          icon={<Eye />}
+          size="section"
+          description="Field evidence focuses the check on what matters right now."
+        >
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <span className={label}>Latest scouting concern</span>
             <input className={input} value={concern.text} onChange={(e) => setConcern((c) => ({ ...c, text: e.target.value }))} placeholder="gray mold on fruit, spreading" />
@@ -194,11 +386,19 @@ export default function PilotFarmIntakePage() {
             </select>
           </div>
         </section>
+        </SectionCard>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <Button type="submit" disabled={saving}>
-          {saving ? "Creating…" : "Create pilot farm"}
-        </Button>
+        <FormError>{error}</FormError>
+        <div className="flex items-center gap-2">
+          <Button type="submit" disabled={saving}>
+            {saving ? "Creating…" : "Create pilot farm"}
+          </Button>
+          <Link href="/farms">
+            <Button type="button" variant="outline">
+              Cancel
+            </Button>
+          </Link>
+        </div>
       </form>
     </div>
   );

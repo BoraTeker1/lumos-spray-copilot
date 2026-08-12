@@ -258,13 +258,19 @@ def test_seeded_scenarios_share_one_anchor_and_agree_with_engine_columns(
     seed.run()
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
     planned = client.get(f"/farms/{us['id']}/planned-sprays").json()
-    assert len(planned) == 3
+    # Four scenarios; the fourth is deliberately still open (see seed.py).
+    assert len(planned) == 4
     # Scenarios 1 & 2 (captan block, PyGanic avoidance) resolve on the demo day;
     # the captan check/review happen the MORNING BEFORE (its procurement chain —
     # plan, quotes, order, delivery — must fit between review and application),
     # while PyGanic stays a same-day story. The failed-delay story (Agri-Mek)
     # deliberately spans the preceding days.
-    captan = next(p for p in planned if p["product_name"] == "Captan 80 WDG")
+    # Two Captan decisions now exist — the resolved scenario 1 and the still-open
+    # scenario 4. This block is about the resolved one.
+    captan = next(
+        p for p in planned
+        if p["product_name"] == "Captan 80 WDG" and p["outcome"] != "planned"
+    )
     assert captan["intended_date"] == PINNED
     assert captan["outcome_date"] == PINNED
     assert captan["created_at"][:10] < PINNED  # checked the day before
@@ -314,7 +320,12 @@ def test_pca_authorized_replaces_definitive_everywhere(client, pinned_clock):
     seed.run()
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
     planned = client.get(f"/farms/{us['id']}/planned-sprays").json()
-    captan = next(p for p in planned if p["product_name"] == "Captan 80 WDG")
+    # Two Captan decisions now exist — the resolved scenario 1 and the still-open
+    # scenario 4. This block is about the resolved one.
+    captan = next(
+        p for p in planned
+        if p["product_name"] == "Captan 80 WDG" and p["outcome"] != "planned"
+    )
     assert captan["decision_authority"] == "pca_authorized"
     for p in planned:
         assert "definitive" not in json.dumps(p["decision_payload"]).lower()

@@ -1,8 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { AlertTriangle, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDemoTag } from "@/lib/farm-context";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 
 // "Do I really need to spray?" photo copilot. Upload a field photo, a multimodal model
 // (Claude) describes what it appears to see, and the finding pre-fills a scouting note the
@@ -71,130 +77,113 @@ export default function PhotoScoutCard({ farmId, onCreated }) {
     }
   }
 
-  const input = "w-full rounded border px-2 py-1 text-sm";
-  const confidenceColor =
+  // Higher confidence in a *problem* is the more actionable state, which is why
+  // this scale runs neutral → amber → red rather than the other way round.
+  const confidenceVariant =
     result?.confidence === "high"
-      ? "bg-red-100 text-red-800"
+      ? "red"
       : result?.confidence === "medium"
-      ? "bg-amber-100 text-amber-800"
-      : "bg-gray-100 text-gray-700";
+      ? "amber"
+      : "neutral";
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
-        <span className="rounded bg-leaf/10 px-1.5 py-0.5 text-[10px] font-medium text-leaf">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Badge variant="purple">
+          <Sparkles aria-hidden />
           AI · decision support
-        </span>
-        <span className="text-xs text-gray-500">
+        </Badge>
+        <span className="min-w-0 flex-1 text-xs text-muted">
           The model describes what it appears to see and drafts a scouting note for you to
           review — it does not diagnose disease or tell you to spray.
         </span>
       </div>
 
-      <form onSubmit={analyze} className="space-y-2">
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => pickFile(e.target.files?.[0] || null)}
-          className="block w-full text-sm file:mr-3 file:rounded file:border-0 file:bg-leaf file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
-        />
+      <form onSubmit={analyze} className="space-y-3">
+        <Field label="Field photo" required>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => pickFile(e.target.files?.[0] || null)}
+            className="block w-full cursor-pointer text-sm text-muted file:mr-3 file:cursor-pointer file:rounded-control file:border-0 file:bg-leaf-700 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-leaf-800"
+          />
+        </Field>
         {preview && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={preview} alt="field preview" className="max-h-48 rounded border" />
+          <img
+            src={preview}
+            alt="Selected field photo, awaiting analysis"
+            className="max-h-48 rounded-control border border-line"
+          />
         )}
-        <input
-          className={input}
-          placeholder="What are you worried about? (optional, e.g. spots on leaves)"
-          value={concern}
-          onChange={(e) => setConcern(e.target.value)}
-        />
-        <button
-          type="submit"
-          disabled={!file || analyzing}
-          className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <Field label="What are you worried about?" hint="Optional, e.g. spots on leaves">
+          <Input value={concern} onChange={(e) => setConcern(e.target.value)} />
+        </Field>
+        <Button type="submit" disabled={!file || analyzing}>
           {analyzing ? "Analyzing…" : "Analyze photo"}
-        </button>
+        </Button>
       </form>
 
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      <FormError className="mt-2">{error}</FormError>
 
       {result && (
-        <div className="mt-4 space-y-3 rounded-lg border bg-gray-50 p-3">
+        <div className="mt-4 space-y-3 rounded-control border border-line bg-canvas p-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${confidenceColor}`}>
-              {result.confidence} confidence
-            </span>
-            <span className="rounded bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-800">
-              AI-suggested · not confirmed
-            </span>
-            {result.is_mock && (
-              <span className="rounded bg-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-700">
-                demo model (no API key)
-              </span>
-            )}
+            <Badge variant={confidenceVariant}>{result.confidence} confidence</Badge>
+            <Badge variant="purple">AI-suggested · not confirmed</Badge>
+            {result.is_mock && <Badge variant="neutral">demo model (no API key)</Badge>}
           </div>
 
           {result.observations?.length > 0 && (
-            <ul className="space-y-1 text-sm text-gray-700">
+            <ul className="list-disc space-y-1 pl-4 text-sm text-ink">
               {result.observations.map((o, i) => (
-                <li key={i} className="flex gap-1">
-                  <span>•</span>
-                  <span>{o}</span>
-                </li>
+                <li key={i}>{o}</li>
               ))}
             </ul>
           )}
 
           {result.caveats?.length > 0 && (
-            <ul className="space-y-1 text-[11px] text-gray-500">
+            <ul className="space-y-1 text-[11px] text-muted">
               {result.caveats.map((c, i) => (
-                <li key={i} className="flex gap-1">
-                  <span>⚠</span>
-                  <span>{c}</span>
+                <li key={i} className="flex gap-1.5">
+                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-warn-fg" aria-hidden />
+                  <span className="min-w-0">{c}</span>
                 </li>
               ))}
             </ul>
           )}
 
           {/* Human-in-the-loop confirmation: edit, then save as a real scouting note. */}
-          <div className="rounded border bg-white p-2">
-            <p className="mb-2 text-xs font-medium text-gray-600">
+          <div className="rounded-control border border-line bg-surface p-3">
+            <p className="mb-2 text-xs font-medium text-muted">
               Review &amp; confirm as a scouting note (you can edit before saving):
             </p>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                className={input}
-                placeholder="Visible issue"
-                value={issue}
-                onChange={(e) => setIssue(e.target.value)}
-              />
-              <label className="text-xs text-gray-500">
-                Severity (1–5)
-                <select
-                  className={input}
-                  value={severity}
-                  onChange={(e) => setSeverity(e.target.value)}
-                >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Visible issue">
+                <Input value={issue} onChange={(e) => setIssue(e.target.value)} />
+              </Field>
+              <Field label="Severity (1–5)">
+                <Select value={severity} onChange={(e) => setSeverity(e.target.value)}>
                   <option value="">—</option>
                   {[1, 2, 3, 4, 5].map((n) => (
                     <option key={n} value={n}>
                       {n}
                     </option>
                   ))}
-                </select>
-              </label>
+                </Select>
+              </Field>
             </div>
-            <button
+            <Button
+              type="button"
               onClick={confirmAsNote}
               disabled={saving}
-              className="mt-2 rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              className="mt-3"
             >
               {saving ? "Saving…" : "Confirm as scouting note"}
-            </button>
+            </Button>
           </div>
 
-          <p className="text-[11px] text-gray-500">{result.disclaimer}</p>
+          <p className="text-[11px] text-muted">{result.disclaimer}</p>
         </div>
       )}
     </div>

@@ -98,13 +98,13 @@ export default function SprayImportCard({ farmId, onImported }) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-muted">
         Paste rows straight from a spreadsheet (or upload a CSV). Column order:{" "}
-        <span className="font-medium text-gray-700">{EXPECTED_COLUMNS.join(" · ")}</span>.
+        <span className="font-medium text-ink">{EXPECTED_COLUMNS.join(" · ")}</span>.
         Only product and date are required.
       </p>
       <textarea
-        className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 font-mono text-xs"
+        className="w-full rounded-control border border-line px-2.5 py-1.5 font-mono text-xs"
         rows={4}
         placeholder={PLACEHOLDER}
         value={text}
@@ -115,14 +115,14 @@ export default function SprayImportCard({ farmId, onImported }) {
           <Upload />
           {saving ? "Importing…" : "Import rows"}
         </Button>
-        <label className="cursor-pointer text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline">
+        <label className="cursor-pointer text-xs font-medium text-muted underline-offset-2 hover:text-ink hover:underline">
           …or upload a CSV file
           <input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onFile} />
         </label>
       </div>
-      {result && <p className="text-sm text-green-700">{result}</p>}
+      {result && <p className="text-sm text-ok-fg">{result}</p>}
       {errors.length > 0 && (
-        <ul className="space-y-0.5 text-xs text-red-600">
+        <ul className="space-y-0.5 text-xs text-risk-fg">
           {errors.map((e, i) => (
             <li key={i}>{e}</li>
           ))}

@@ -8,8 +8,8 @@ import { REVIEW_STATE_TONES, tone } from "@/lib/tones";
 // which via the server-owned `basis_text` below rather than assuming either.
 function Row({ label, danger, okText = "OK", warnText = "Review" }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-gray-100 py-1.5 last:border-0">
-      <span className="text-xs text-gray-600">{label}</span>
+    <div className="flex items-center justify-between gap-2 border-b border-line py-1.5 last:border-0">
+      <span className="text-xs text-muted">{label}</span>
       <Badge variant={danger ? "amber" : "green"} className="shrink-0 uppercase">
         {danger ? <TriangleAlert /> : <CircleCheck />}
         {danger ? warnText : okText}
@@ -25,7 +25,7 @@ const REVIEW_VARIANTS = Object.fromEntries(
 // Compact compliance snapshot for the right rail. Receives `data` from the page
 // (the farm detail page already fetches /compliance for the header KPIs).
 export default function ComplianceCard({ data }) {
-  if (!data) return <p className="text-sm text-gray-500">Loading compliance…</p>;
+  if (!data) return <p className="text-sm text-muted">Loading compliance…</p>;
 
   return (
     <div>
@@ -50,23 +50,23 @@ export default function ComplianceCard({ data }) {
           strictly separate from the weekly recommendation's review status so an
           edited decision can never read as "review: none". */}
       {data.decision_review && (
-        <div className="mt-2 border-t border-gray-100 pt-2">
+        <div className="mt-2 border-t border-line pt-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-gray-600">Pre-spray decisions</span>
+            <span className="text-xs text-muted">Pre-spray decisions</span>
             <Badge variant={data.decision_review.needs_review_count > 0 ? "amber" : "neutral"}>
               {data.decision_review.needs_review_count > 0
                 ? `${data.decision_review.needs_review_count} pending review`
                 : "none pending"}
             </Badge>
           </div>
-          <p className="mt-1 text-[11px] text-gray-500">
+          <p className="mt-1 text-[11px] text-muted">
             {data.decision_review.approved} approved · {data.decision_review.edited} edited ·{" "}
             {data.decision_review.rejected} rejected
           </p>
         </div>
       )}
-      <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2">
-        <span className="text-xs text-gray-600">
+      <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
+        <span className="text-xs text-muted">
           Weekly review (recommendations)
         </span>
         <Badge variant={REVIEW_VARIANTS[data.recommendation_review_status] || "neutral"}>
@@ -76,7 +76,7 @@ export default function ComplianceCard({ data }) {
       {/* Server-owned basis sentence. Four surfaces used to hardcode their own
           wording, which could drift apart and could never become conditional.
           The fallback is the pre-label wording, byte-for-byte. */}
-      <p className="mt-2 border-t border-gray-100 pt-2 text-[11px] leading-snug text-gray-500">
+      <p className="mt-2 border-t border-line pt-2 text-[11px] leading-snug text-muted">
         {data.basis_text ||
           "These signals come from PHI/REI values entered by the user, not from verified label data. Confirm them against the product label and a licensed PCA."}
       </p>

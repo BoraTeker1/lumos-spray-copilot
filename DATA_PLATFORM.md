@@ -339,7 +339,21 @@ with `no_field_geolocation` — set `Field.centroid_lat`/`centroid_lon` first. T
 deliberate (see stage 5) but looks like a broken feed if you have not read this section.
 
 Schema changes go through Alembic. Rehearse on a **copy** of `lumos.db` first; never the
-real file.
+real file — and note the variable name, because getting it wrong silently rehearses on
+the real database:
+
+```bash
+cp lumos.db /tmp/rehearse.db
+LUMOS_DATABASE_URL="sqlite:////tmp/rehearse.db" alembic upgrade head   # NOT DATABASE_URL
+```
+
+`alembic/env.py` resolves the URL through `app.database`, so `alembic.ini`'s
+`sqlalchemy.url` is ignored and so is a bare `DATABASE_URL`. Two further traps, both hit
+on 2026-08-06: SQLite DDL here is **non-transactional**, so a migration that fails
+halfway leaves its already-created tables behind and the retry dies with "table X
+already exists" — drop them before re-running. And in `batch_alter_table`, the table is
+rebuilt on block exit, so a data `UPDATE` touching a newly added column must be issued
+**after** the block, not inside it.
 
 ---
 

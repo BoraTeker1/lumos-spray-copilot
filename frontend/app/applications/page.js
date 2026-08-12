@@ -1,11 +1,14 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Droplets, Plus } from "lucide-react";
+import { Droplets, FileCheck, FlaskConical, Info, Plus, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCost, formatDate } from "@/lib/format";
 import { useFarmContext } from "@/lib/farm-context";
+import { statusMeta } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,6 +22,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import DataTable from "@/components/DataTable";
+import DetailPanel, {
+  DetailChain,
+  DetailRow,
+  DetailSection,
+} from "@/components/DetailPanel";
 import { inDateRange } from "@/components/DateRangeFilter";
 import EmptyState from "@/components/EmptyState";
 import FilterBar from "@/components/FilterBar";
@@ -36,6 +44,7 @@ export default function ApplicationsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [fieldFilter, setFieldFilter] = useState("");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
+  const [selectedId, setSelectedId] = useState(null);
 
   const load = useCallback(async () => {
     if (!farmId) return;
@@ -79,14 +88,25 @@ export default function ApplicationsPage() {
     [sprays, fieldFilter, dateRange]
   );
 
+  // Selection follows the FILTERED rows: a row hidden by a filter must not
+  // keep a stale panel open beside a table that no longer lists it.
+  const selected = rows.find((s) => s.id === selectedId) || null;
+
   const fields = [...new Set(sprays.map((s) => s.field_block).filter(Boolean))].sort();
 
+  // Column budget. Widths are declared rather than left to content length:
+  // without them the free-text Product and Target cells were squeezed by the
+  // short ones and wrapped to four lines each, turning a one-line record into a
+  // 100px row. Provenance (source, confidence, order link) lives in the detail
+  // rail on row click, so it is a secondary column here rather than a primary one.
   const columns = [
     {
       key: "date",
       header: "Date",
+      width: "12%",
+      nowrap: true,
       render: (s) => (
-        <span className="whitespace-nowrap text-gray-700">
+        <span className="whitespace-nowrap text-ink">
           {formatDate(s.application_date)}
         </span>
       ),
@@ -94,16 +114,20 @@ export default function ApplicationsPage() {
     {
       key: "field",
       header: "Field",
-      render: (s) => <span className="text-gray-700">{s.field_block || "—"}</span>,
+      width: "6%",
+      render: (s) => <span className="text-ink">{s.field_block || "—"}</span>,
     },
     {
       key: "product",
       header: "Product",
+      width: "19%",
       render: (s) => (
         <div className="min-w-0">
-          <div className="font-medium text-gray-900">{s.product_name}</div>
+          <div className="truncate font-medium text-ink" title={s.product_name}>
+            {s.product_name}
+          </div>
           {(s.active_ingredient || s.dose) && (
-            <div className="text-xs text-gray-500">
+            <div className="truncate text-xs text-muted">
               {[s.active_ingredient, s.dose].filter(Boolean).join(" · ")}
             </div>
           )}
@@ -111,11 +135,22 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "target",
+      header: "Target",
+      priority: "secondary",
+      width: "14%",
+      render: (s) => (
+        <span className="text-xs text-muted">{s.target_pest_or_disease || "—"}</span>
+      ),
+    },
+    {
       key: "rate",
       header: "Rate / acres",
       priority: "secondary",
+      width: "12%",
+      nowrap: true,
       render: (s) => (
-        <span className="whitespace-nowrap text-xs text-gray-600">
+        <span className="whitespace-nowrap text-xs text-muted">
           {s.rate_amount != null ? `${s.rate_amount} ${s.rate_unit || ""}`.trim() : "—"}
           {" · "}
           {s.treated_acres != null ? `${s.treated_acres} ac` : "—"}
@@ -123,19 +158,13 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "target",
-      header: "Target",
-      priority: "secondary",
-      render: (s) => (
-        <span className="text-xs text-gray-600">{s.target_pest_or_disease || "—"}</span>
-      ),
-    },
-    {
       key: "phi",
       header: "PHI / REI",
       priority: "secondary",
+      width: "8%",
+      nowrap: true,
       render: (s) => (
-        <span className="whitespace-nowrap text-gray-700">
+        <span className="whitespace-nowrap text-ink">
           {s.pre_harvest_interval_days != null ? `${s.pre_harvest_interval_days}d` : "—"}
           {" / "}
           {s.re_entry_interval_hours != null ? `${s.re_entry_interval_hours}h` : "—"}
@@ -145,17 +174,20 @@ export default function ApplicationsPage() {
     {
       key: "source",
       header: "Source",
-      priority: "secondary",
+      priority: "tertiary",
+      width: "9%",
       render: (s) => (
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted">
           {(s.data_source || "—").replace(/_/g, " ")}
         </span>
       ),
     },
     {
       key: "order",
-      header: "Source order",
-      priority: "secondary",
+      header: "Order",
+      priority: "tertiary",
+      width: "7%",
+      nowrap: true,
       // Only applications procured through Inputs & finance carry an order link —
       // most applications are not procured through Lumos, and that stays visible.
       render: (s) =>
@@ -164,15 +196,17 @@ export default function ApplicationsPage() {
             href={`/inputs/orders/${s.source_order_id}`}
             className="text-xs font-medium text-leaf-700 hover:underline"
           >
-            Order #{s.source_order_id}
+            #{s.source_order_id}
           </Link>
         ) : (
-          <span className="text-xs text-gray-500">—</span>
+          <span className="text-xs text-muted">—</span>
         ),
     },
     {
       key: "doc",
       header: "Documentation",
+      width: "12%",
+      nowrap: true,
       render: (s) => {
         const decision = decisionBySprayId.get(s.id);
         return decision ? (
@@ -188,14 +222,17 @@ export default function ApplicationsPage() {
       key: "cost",
       header: "Cost",
       align: "right",
+      width: "7%",
+      nowrap: true,
       render: (s) => (
-        <span className="whitespace-nowrap font-medium text-gray-900">
+        <span className="whitespace-nowrap font-medium text-ink">
           {s.cost != null ? formatCost(s.cost, activeFarm?.country) : "—"}
         </span>
       ),
     },
     {
       key: "action",
+      priority: "action",
       header: <span className="sr-only">Action</span>,
       align: "right",
       render: (s) => {
@@ -217,10 +254,10 @@ export default function ApplicationsPage() {
     },
   ];
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading applications…" />;
   if (!activeFarm) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         No farms yet — seed the demo data or add a pilot farm first.
       </p>
     );
@@ -265,50 +302,192 @@ export default function ApplicationsPage() {
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
-      <Card>
-        <CardContent className="p-5">
-          <FilterBar dateRange={{ value: dateRange, onChange: setDateRange }}>
-            <Select
-              value={fieldFilter}
-              onChange={(e) => setFieldFilter(e.target.value)}
-              className="h-9 w-auto text-xs"
-              aria-label="Filter by field"
-            >
-              <option value="">All fields</option>
-              {fields.map((f) => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </Select>
-          </FilterBar>
+      {/* Entered values are not label values. Stated once, above the table. */}
+      <Callout tone="warn" icon={Info}>
+        PHI and REI values below are entered per application; confirm against the
+        product label.
+      </Callout>
 
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(s) => s.id}
-            minWidth={760}
-            empty={
-              <EmptyState
-                icon={Droplets}
-                title={
-                  sprays.length === 0
-                    ? "No spray applications recorded yet"
-                    : "Nothing matches these filters"
-                }
-                description={
-                  sprays.length === 0
-                    ? "Log applied sprays (or import a spray history) so PHI/REI and rotation checks have records to work from."
-                    : "Clear a filter to see more applications."
-                }
-              />
-            }
+      <div
+        className={`grid grid-cols-1 gap-4 ${
+          selected ? "2xl:grid-cols-[minmax(0,1fr)_340px]" : "grid-cols-1"
+        }`}
+      >
+        <Card>
+          <CardContent className="p-5">
+            <FilterBar dateRange={{ value: dateRange, onChange: setDateRange }}>
+              <Select
+                value={fieldFilter}
+                onChange={(e) => setFieldFilter(e.target.value)}
+                className="h-9 w-auto text-xs"
+                aria-label="Filter by field"
+              >
+                <option value="">All fields</option>
+                {fields.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </Select>
+            </FilterBar>
+
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(s) => s.id}
+              minWidth={860}
+              onRowClick={(s) => setSelectedId((cur) => (cur === s.id ? null : s.id))}
+              selectedKey={selected?.id ?? null}
+              empty={
+                <EmptyState
+                  size="sm"
+                  icon={Droplets}
+                  title={
+                    sprays.length === 0
+                      ? "No spray applications recorded yet"
+                      : "Nothing matches these filters"
+                  }
+                  description={
+                    sprays.length === 0
+                      ? "Log applied sprays (or import a spray history) so PHI/REI and rotation checks have records to work from."
+                      : "Clear a filter to see more applications."
+                  }
+                />
+              }
+            />
+            <p className="mt-3 border-t border-line pt-3 text-meta text-muted">
+              Entered values are not a substitute for the current product label.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Detail rail. Renders the row the table already has plus the decision
+            link the table column already derives — no extra fetch. */}
+        {selected && (
+          <ApplicationDetail
+            spray={selected}
+            decision={decisionBySprayId.get(selected.id) || null}
+            country={activeFarm?.country}
+            onClose={() => setSelectedId(null)}
           />
-        </CardContent>
-      </Card>
+        )}
+      </div>
     </div>
+  );
+}
+
+function ApplicationDetail({ spray: s, decision, country, onClose }) {
+  // The record chain restates links that already exist on the row: a planned
+  // decision (only if one points at this spray), the application itself, and the
+  // decision's server-derived evidence state. Nothing is inferred.
+  const chain = [
+    {
+      label: "Planned-spray decision",
+      value: decision ? "Linked" : "Not linked",
+      icon: ShieldCheck,
+      tone: decision ? "good" : "neutral",
+    },
+    { label: "Application", value: "Logged", icon: Droplets, tone: "neutral" },
+    {
+      label: "Follow-up",
+      value: decision ? statusMeta("evidence", decision.evidence_state).label : "—",
+      icon: FileCheck,
+      tone: decision?.evidence_state === "verified" ? "good" : "neutral",
+    },
+  ];
+  return (
+    <DetailPanel
+      className="h-fit 2xl:sticky 2xl:top-20"
+      title={s.product_name}
+      subtitle={`Applied ${formatDate(s.application_date)}${
+        s.field_block ? ` · ${s.field_block}` : ""
+      }`}
+      badges={
+        <>
+          {decision ? (
+            <StatusBadge kind="evidence" value={decision.evidence_state} />
+          ) : (
+            <Badge variant="neutral">Logged</Badge>
+          )}
+          {(s.data_source === "demo" || s.data_confidence === "simulated") && (
+            <Badge variant="outline">
+              <FlaskConical />
+              Simulated demo
+            </Badge>
+          )}
+        </>
+      }
+      onClose={onClose}
+      footer={
+        decision ? (
+          <Link href={`/decisions/${decision.id}`}>
+            <Button className="w-full">View decision record</Button>
+          </Link>
+        ) : (
+          <p className="text-meta text-muted">
+            This application was logged directly — no pre-spray decision record points
+            at it.
+          </p>
+        )
+      }
+    >
+      <DetailSection title="Application details">
+        <DetailRow
+          label="Rate"
+          value={
+            s.rate_amount != null
+              ? `${s.rate_amount} ${s.rate_unit || ""}`.trim()
+              : null
+          }
+        />
+        <DetailRow label="Active ingredients" value={s.active_ingredient} />
+        <DetailRow label="Target" value={s.target_pest_or_disease} />
+        <DetailRow
+          label="Entered PHI"
+          value={
+            s.pre_harvest_interval_days != null
+              ? `${s.pre_harvest_interval_days} days`
+              : null
+          }
+        />
+        <DetailRow
+          label="Entered REI"
+          value={
+            s.re_entry_interval_hours != null
+              ? `${s.re_entry_interval_hours} hours`
+              : null
+          }
+        />
+        <DetailRow
+          label="Cost"
+          value={s.cost != null ? formatCost(s.cost, country) : null}
+        />
+      </DetailSection>
+      <DetailSection title="Record chain">
+        <DetailChain stages={chain} />
+      </DetailSection>
+      <DetailSection title="Provenance">
+        <DetailRow
+          label="Source"
+          value={(s.data_source || "—").replace(/_/g, " ")}
+        />
+        <DetailRow
+          label="Confidence"
+          value={(s.data_confidence || "—").replace(/_/g, " ")}
+        />
+        {/* Always stated, never conditional: no label record backs these values. */}
+        <DetailRow
+          label="Label verification"
+          value="Not independently verified"
+          tone="warn"
+        />
+        {s.source_order_id && (
+          <DetailRow label="Source order" value={`Order #${s.source_order_id}`} />
+        )}
+      </DetailSection>
+    </DetailPanel>
   );
 }

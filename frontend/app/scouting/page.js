@@ -1,12 +1,15 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Eye, Plus } from "lucide-react";
+import { Eye, FlaskConical, Plus, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { useFarmContext } from "@/lib/farm-context";
 import { severityLabel } from "@/lib/status";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -19,6 +22,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import DataTable from "@/components/DataTable";
+import DetailPanel, { DetailRow, DetailSection } from "@/components/DetailPanel";
 import { inDateRange } from "@/components/DateRangeFilter";
 import EmptyState from "@/components/EmptyState";
 import FilterBar from "@/components/FilterBar";
@@ -47,16 +51,16 @@ function relatedDecision(observation, planned) {
 // Two-line clamped notes with an accessible expand toggle.
 function ClampedNotes({ text }) {
   const [expanded, setExpanded] = useState(false);
-  if (!text) return <span className="text-gray-400">—</span>;
+  if (!text) return <span className="text-muted">—</span>;
   return (
     <div className="max-w-[280px]">
-      <p className={`text-xs text-gray-600 ${expanded ? "" : "line-clamp-2"}`}>{text}</p>
+      <p className={`text-xs text-muted ${expanded ? "" : "line-clamp-2"}`}>{text}</p>
       {text.length > 90 && (
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
-          className="mt-0.5 text-[11px] font-medium text-leaf-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          className="mt-0.5 text-[11px] font-medium text-leaf-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         >
           {expanded ? "Show less" : "Expand"}
         </button>
@@ -78,6 +82,7 @@ export default function ScoutingPage() {
   const [severityFilter, setSeverityFilter] = useState("");
   const [observerFilter, setObserverFilter] = useState("");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
+  const [selectedId, setSelectedId] = useState(null);
 
   const load = useCallback(async () => {
     if (!farmId) return;
@@ -112,6 +117,10 @@ export default function ScoutingPage() {
       .sort((a, b) => (a.observation_date < b.observation_date ? 1 : -1));
   }, [observations, fieldFilter, issueFilter, severityFilter, observerFilter, dateRange]);
 
+  // Selection follows the FILTERED rows: a row hidden by a filter must not keep
+  // a stale panel open beside a table that no longer lists it.
+  const selected = rows.find((o) => o.id === selectedId) || null;
+
   const fields = [...new Set(observations.map((o) => o.field_block).filter(Boolean))].sort();
   const issues = [...new Set(observations.map((o) => o.visible_issue).filter(Boolean))].sort();
   const observers = [
@@ -123,18 +132,18 @@ export default function ScoutingPage() {
       key: "date",
       header: "Date",
       render: (o) => (
-        <span className="whitespace-nowrap text-gray-700">{formatDate(o.observation_date)}</span>
+        <span className="whitespace-nowrap text-ink">{formatDate(o.observation_date)}</span>
       ),
     },
     {
       key: "field",
       header: "Field",
-      render: (o) => <span className="text-gray-700">{o.field_block || "—"}</span>,
+      render: (o) => <span className="text-ink">{o.field_block || "—"}</span>,
     },
     {
       key: "issue",
       header: "Visible issue",
-      render: (o) => <span className="font-medium text-gray-900">{o.visible_issue || "—"}</span>,
+      render: (o) => <span className="font-medium text-ink">{o.visible_issue || "—"}</span>,
     },
     {
       key: "severity",
@@ -142,7 +151,7 @@ export default function ScoutingPage() {
       render: (o) => (
         <div className="flex items-center gap-1.5 whitespace-nowrap">
           <SeverityBadge value={o.severity_1_to_5} />
-          <span className="text-xs text-gray-600">{severityLabel(o.severity_1_to_5)}</span>
+          <span className="text-xs text-muted">{severityLabel(o.severity_1_to_5)}</span>
         </div>
       ),
     },
@@ -151,7 +160,7 @@ export default function ScoutingPage() {
       header: "Crop stage",
       priority: "secondary",
       render: (o) => (
-        <span className="capitalize text-gray-700">
+        <span className="capitalize text-ink">
           {o.crop_stage ? o.crop_stage.replace(/_/g, " ") : "—"}
         </span>
       ),
@@ -161,7 +170,7 @@ export default function ScoutingPage() {
       header: "Observer / source",
       priority: "secondary",
       render: (o) => (
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted">
           {(o.observer || o.data_source || "—").replace(/_/g, " ")}
         </span>
       ),
@@ -180,7 +189,7 @@ export default function ScoutingPage() {
             {match.product_name}
           </Link>
         ) : (
-          <span className="text-xs text-gray-400">—</span>
+          <span className="text-xs text-muted">—</span>
         );
       },
     },
@@ -189,7 +198,7 @@ export default function ScoutingPage() {
       header: "Photos",
       priority: "secondary",
       render: (o) => (
-        <span className="text-xs text-gray-600">{o.image_url_optional ? 1 : 0}</span>
+        <span className="text-xs text-muted">{o.image_url_optional ? 1 : 0}</span>
       ),
     },
     {
@@ -199,10 +208,10 @@ export default function ScoutingPage() {
     },
   ];
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading scouting observations…" />;
   if (!activeFarm) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         No farms yet — seed the demo data or add a pilot farm first.
       </p>
     );
@@ -245,11 +254,16 @@ export default function ScoutingPage() {
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
+      <div
+        className={`grid grid-cols-1 gap-4 ${
+          selected ? "2xl:grid-cols-[minmax(0,1fr)_340px]" : "grid-cols-1"
+        }`}
+      >
       <Card>
         <CardContent className="p-5">
           <FilterBar dateRange={{ value: dateRange, onChange: setDateRange }}>
@@ -303,8 +317,11 @@ export default function ScoutingPage() {
             rows={rows}
             rowKey={(o) => o.id}
             minWidth={720}
+            onRowClick={(o) => setSelectedId((cur) => (cur === o.id ? null : o.id))}
+            selectedKey={selected?.id ?? null}
             empty={
               <EmptyState
+                size="sm"
                 icon={Eye}
                 title={
                   observations.length === 0
@@ -321,6 +338,80 @@ export default function ScoutingPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Detail rail. Renders the row the table already has — no extra fetch,
+          no derivation the table does not also perform. */}
+      {selected && (
+        <ObservationDetail
+          observation={selected}
+          decision={relatedDecision(selected, planned)}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
+      </div>
     </div>
+  );
+}
+
+function ObservationDetail({ observation: o, decision, onClose }) {
+  return (
+    <DetailPanel
+      className="h-fit 2xl:sticky 2xl:top-20"
+      title={o.visible_issue || "Observation"}
+      subtitle={`${o.field_block ? `${o.field_block} · ` : ""}observed ${formatDate(
+        o.observation_date
+      )}`}
+      badges={
+        <>
+          <SeverityBadge value={o.severity_1_to_5} />
+          {(o.data_source === "demo" || o.data_confidence === "simulated") && (
+            <Badge variant="outline">
+              <FlaskConical />
+              Simulated demo
+            </Badge>
+          )}
+        </>
+      }
+      onClose={onClose}
+      footer={
+        decision ? (
+          <Link href={`/decisions/${decision.id}`}>
+            <Button className="w-full">
+              <ShieldCheck />
+              View related decision
+            </Button>
+          </Link>
+        ) : (
+          <p className="text-meta text-muted">
+            No planned-spray decision names this exact target. Matching here is exact —
+            the engine&apos;s alias matching is separate and stricter.
+          </p>
+        )
+      }
+    >
+      <DetailSection title="Observation">
+        <DetailRow label="Description" value={o.visible_issue} />
+        <DetailRow label="Severity" value={severityLabel(o.severity_1_to_5)} />
+        <DetailRow
+          label="Crop stage"
+          value={o.crop_stage ? o.crop_stage.replace(/_/g, " ") : null}
+        />
+        <DetailRow label="Field / block" value={o.field_block} />
+        {o.notes && <p className="mt-2 text-sm text-muted">{o.notes}</p>}
+      </DetailSection>
+      <DetailSection title="Provenance">
+        <DetailRow label="Record type" value="Scouting observation" />
+        <DetailRow
+          label="Data origin"
+          value={(o.data_source || "—").replace(/_/g, " ")}
+        />
+        <DetailRow
+          label="Confidence"
+          value={(o.data_confidence || "—").replace(/_/g, " ")}
+        />
+        <DetailRow label="Observer" value={o.observer} />
+        <DetailRow label="Observed on" value={formatDate(o.observation_date)} />
+      </DetailSection>
+    </DetailPanel>
   );
 }

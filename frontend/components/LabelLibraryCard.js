@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { fieldClass } from "@/components/ui/input";
 
 // Operator tooling for the label library. Three separate acts, deliberately shown
 // as three steps rather than one form, because they are three different levels of
@@ -163,28 +165,28 @@ export default function LabelLibraryCard({ farmId }) {
   return (
     <div className="space-y-4">
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+        <p className="rounded-control border border-risk-line bg-risk-bg p-2 text-xs text-risk-fg">
           {error}
         </p>
       )}
       {notice && (
-        <p className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+        <p className="rounded-control border border-ok-line bg-ok-bg p-2 text-xs text-ok-fg">
           {notice}
         </p>
       )}
 
       {/* ---------------------------------------------------- 1. extract */}
-      <div className="rounded-lg border border-gray-200 p-3">
-        <h3 className="text-sm font-semibold text-gray-900">
+      <div className="rounded-control border border-line p-3">
+        <h3 className="text-sm font-semibold text-ink">
           1. Extract from a label document
         </h3>
-        <p className="mt-0.5 text-[11px] text-gray-500">
+        <p className="mt-0.5 text-[11px] text-muted">
           Real AI. Copies only what the label literally states — never converts units
           and never infers a value the label omits. Writes nothing: every row below is
           a draft for you to correct.
         </p>
         <textarea
-          className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+          className={`mt-2 h-auto py-1.5 text-xs ${fieldClass}`}
           rows={3}
           placeholder="Paste label text, or choose a PDF/photo below"
           value={text}
@@ -197,68 +199,66 @@ export default function LabelLibraryCard({ farmId }) {
             className="text-xs"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
-          <button
+          <Button
             type="button"
+            variant="neutral"
+            size="sm"
             onClick={extract}
             disabled={busy || (!text.trim() && !file)}
-            className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
           >
             {busy ? "Working…" : "Extract draft rows"}
-          </button>
-          <button
-            type="button"
-            onClick={sync}
-            disabled={busy}
-            className="rounded border px-3 py-1.5 text-xs font-medium disabled:opacity-40"
-          >
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={sync} disabled={busy}>
             Load transcribed labels
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* ---------------------------------------------------- 2. review */}
       {extraction && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <h3 className="text-sm font-semibold text-amber-900">
+        <div className="rounded-control border border-warn-line bg-warn-bg p-3">
+          <h3 className="text-sm font-semibold text-warn-fg">
             2. Review every value against the document
           </h3>
-          <p className="mt-0.5 text-[11px] text-amber-800">{extraction.disclaimer}</p>
+          <p className="mt-0.5 text-[11px] text-warn-fg">{extraction.disclaimer}</p>
           {extraction.is_mock && (
-            <p className="mt-1 text-[11px] font-medium text-amber-900">
+            <p className="mt-1 text-[11px] font-medium text-warn-fg">
               Mock extraction (no ANTHROPIC_API_KEY) — these values are fictional and
               are not model output.
             </p>
           )}
           {extraction.abstained ? (
-            <p className="mt-2 text-xs text-amber-900">
+            <p className="mt-2 text-xs text-warn-fg">
               The model abstained: {extraction.abstain_reason}
             </p>
           ) : (
             <ul className="mt-2 space-y-1.5">
               {extraction.rows.map((row, i) => (
-                <li key={i} className="rounded bg-white/70 p-2 text-xs text-gray-800">
+                <li key={i} className="rounded bg-surface/70 p-2 text-xs text-ink">
                   <div className="font-medium">
                     {row.registered_crop || "(no crop)"} · {row.product_name || "(no product)"}
                   </div>
                   {row.source_snippet && (
-                    <p className="mt-0.5 text-[11px] italic text-gray-600">
+                    <p className="mt-0.5 text-[11px] italic text-muted">
                       “{row.source_snippet}”
                       {row.source_section_or_page ? ` — ${row.source_section_or_page}` : ""}
                     </p>
                   )}
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-1.5 border-warn-line"
                     onClick={() => setDraft(draftFromExtraction(row))}
-                    className="mt-1.5 rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-medium"
                   >
                     Correct &amp; commit this row
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
           )}
           {extraction.caveats?.length > 0 && (
-            <ul className="mt-2 list-disc pl-4 text-[11px] text-amber-800">
+            <ul className="mt-2 list-disc pl-4 text-[11px] text-warn-fg">
               {extraction.caveats.map((c, i) => (
                 <li key={i}>{c}</li>
               ))}
@@ -268,19 +268,19 @@ export default function LabelLibraryCard({ farmId }) {
       )}
 
       {draft && (
-        <div className="rounded-lg border border-gray-300 p-3">
-          <h3 className="text-sm font-semibold text-gray-900">Commit one label use</h3>
-          <p className="mt-0.5 text-[11px] text-gray-500">
+        <div className="rounded-control border border-line p-3">
+          <h3 className="text-sm font-semibold text-ink">Commit one label use</h3>
+          <p className="mt-0.5 text-[11px] text-muted">
             Leave a value blank when the label does not state it — blank means the
             label is silent, and the matching check correctly keeps reporting that it
             did not run. It never means &ldquo;no limit&rdquo;.
           </p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             {Object.keys(EMPTY_ROW).map((key) => (
-              <label key={key} className="text-[11px] font-medium text-gray-600">
+              <label key={key} className="text-[11px] font-medium text-muted">
                 {key.replace(/_/g, " ")}
                 <input
-                  className="mt-0.5 w-full rounded border px-2 py-1 text-xs"
+                  className={`mt-0.5 h-9 py-1 text-xs ${fieldClass}`}
                   value={draft[key]}
                   onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
                 />
@@ -288,80 +288,79 @@ export default function LabelLibraryCard({ farmId }) {
             ))}
           </div>
           <div className="mt-2 flex gap-2">
-            <button
+            <Button
               type="button"
+              variant="neutral"
+              size="sm"
               onClick={commit}
               disabled={busy}
-              className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
             >
               Commit as unverified
-            </button>
-            <button
-              type="button"
-              onClick={() => setDraft(null)}
-              className="rounded border px-3 py-1.5 text-xs font-medium"
-            >
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setDraft(null)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       {/* ---------------------------------------------------- 3. library */}
-      <div className="rounded-lg border border-gray-200 p-3">
-        <h3 className="text-sm font-semibold text-gray-900">Label library</h3>
+      <div className="rounded-control border border-line p-3">
+        <h3 className="text-sm font-semibold text-ink">Label library</h3>
         {products.length === 0 ? (
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-xs text-muted">
             No products on file. Every label-dependent check reports that it did not
             run, with the reason, on every decision.
           </p>
         ) : (
           <ul className="mt-2 space-y-2">
             {products.map((product) => (
-              <li key={product.id} className="rounded border border-gray-200 p-2">
-                <div className="text-xs font-medium text-gray-900">
+              <li key={product.id} className="rounded border border-line p-2">
+                <div className="text-xs font-medium text-ink">
                   {product.product_name}{" "}
-                  <span className="font-normal text-gray-500">
+                  <span className="font-normal text-muted">
                     · EPA Reg. No. {product.epa_reg_no}
                   </span>
                 </div>
                 {!product.registered_crops_transcription_complete && (
-                  <p className="mt-0.5 text-[11px] text-gray-500">
+                  <p className="mt-0.5 text-[11px] text-muted">
                     Registered-crop list not marked complete — the crop/use
                     registration check stays unevaluated for this product.
                   </p>
                 )}
                 <ul className="mt-1 space-y-1">
                   {product.label_records.map((record) => (
-                    <li key={record.id} className="text-[11px] text-gray-700">
+                    <li key={record.id} className="text-[11px] text-ink">
                       <span className="font-medium">{record.registered_crop}</span>
                       {" · "}
-                      <span className="text-gray-500">
+                      <span className="text-muted">
                         {TIER_LABELS[record.source_tier] || record.source_tier}
                       </span>
                       {record.supersedes_label_record_id && (
-                        <span className="text-gray-400">
+                        <span className="text-muted">
                           {" "}
                           · supersedes #{record.supersedes_label_record_id}
                         </span>
                       )}
                       {record.verifications?.length > 0 && (
-                        <span className="text-emerald-700">
+                        <span className="text-ok-fg">
                           {" "}
                           · verified for {record.verifications.length} farm(s)
                         </span>
                       )}
                       {farmId && (
-                        <button
+                        <Button
                           type="button"
+                          variant="outline"
+                          size="sm"
+                          className="ml-1.5"
                           onClick={() => {
                             setVerifying(record.id);
                             setAttestation("");
                           }}
-                          className="ml-1.5 rounded border px-1.5 py-0.5 text-[10px] font-medium"
                         >
                           Verify for this farm
-                        </button>
+                        </Button>
                       )}
                     </li>
                   ))}
@@ -374,39 +373,35 @@ export default function LabelLibraryCard({ farmId }) {
 
       {/* ---------------------------------------------------- 4. verify */}
       {verifying && (
-        <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3">
-          <h3 className="text-sm font-semibold text-emerald-900">
+        <div className="rounded-control border border-ok-line bg-ok-bg p-3">
+          <h3 className="text-sm font-semibold text-ok-fg">
             3. PCA verification (record #{verifying})
           </h3>
-          <p className="mt-0.5 text-[11px] text-emerald-800">
+          <p className="mt-0.5 text-[11px] text-ok-fg">
             This is a professional act by the farm&apos;s licensed PCA, attributed to
             their credential — not to a name typed here. It requires their token, and
             it applies to THIS farm only. After it, decisions on this farm may rely on
             these values.
           </p>
           <textarea
-            className="mt-2 w-full rounded border px-2 py-1.5 text-xs"
+            className={`mt-2 h-auto py-1.5 text-xs ${fieldClass}`}
             rows={2}
             placeholder="What you checked, against which revision and page"
             value={attestation}
             onChange={(e) => setAttestation(e.target.value)}
           />
           <div className="mt-2 flex gap-2">
-            <button
+            <Button
               type="button"
+              size="sm"
               onClick={verify}
               disabled={busy || attestation.trim().length < 10}
-              className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
             >
               Record verification
-            </button>
-            <button
-              type="button"
-              onClick={() => setVerifying(null)}
-              className="rounded border px-3 py-1.5 text-xs font-medium"
-            >
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setVerifying(null)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}

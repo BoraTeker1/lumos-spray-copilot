@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { FormError } from "@/components/ui/field";
 
 const AVAILABILITIES = ["in_stock", "partial", "backordered", "unknown"];
 // input_applied is deliberately absent: it needs the explicit application link
@@ -17,7 +18,7 @@ const POSTABLE_EVENTS = [
   "cancelled", "exception_reported",
 ];
 
-const labelCls = "block text-xs font-medium text-gray-600";
+const labelCls = "block text-xs font-medium text-muted";
 
 // Concierge entry for supplier quotes, indicative financing offers, and order
 // lifecycle events (Phase 1 has no supplier portal — Lumos staff transcribe).
@@ -30,10 +31,14 @@ export default function ConciergeQuoteCard({ farmId, country }) {
   const [busy, setBusy] = useState(false);
 
   const [quote, setQuote] = useState({
-    supplier_name: "", supplier_contact: "", delivery_cost: "", fees: "",
-    payment_terms_cash: "", expected_delivery_date: "", availability: "unknown",
-    expires_on: "", notes: "", entered_by: "",
+    supplier_name: "", supplier_id: "", supplier_contact: "", delivery_cost: "",
+    fees: "", payment_terms_cash: "", expected_delivery_date: "",
+    availability: "unknown", expires_on: "", notes: "", entered_by: "",
   });
+  // The catalogue. Without these two lists the form can only send free text, every
+  // line lands unlinked, and price dispersion reports 100% unlinked forever.
+  const [suppliers, setSuppliers] = useState([]);
+  const [products, setProducts] = useState([]);
   const [lines, setLines] = useState({}); // item_id -> { unit_price, product_name, substitution_reason }
   const [offer, setOffer] = useState({
     supplier_quote_id: "", provider_name: "", requested_amount: "",
@@ -56,6 +61,20 @@ export default function ConciergeQuoteCard({ farmId, country }) {
       setError(null);
     } catch (err) {
       setError(err.message);
+    }
+    // Catalogue loads separately and never blocks quote entry: a missing catalogue
+    // must degrade to free-text entry (an unlinked line, honestly counted as such),
+    // not stop an operator recording a quote a supplier actually gave.
+    try {
+      const [s, ip] = await Promise.all([
+        api.listSuppliers(),
+        api.listInputProducts(),
+      ]);
+      setSuppliers(s);
+      setProducts(ip);
+    } catch {
+      setSuppliers([]);
+      setProducts([]);
     }
   }, [farmId]);
 
@@ -98,6 +117,9 @@ export default function ConciergeQuoteCard({ farmId, country }) {
       () =>
         api.createSupplierQuote(selectedPlan.id, {
           supplier_name: quote.supplier_name,
+          // The structured link. `supplier_name` above stays authoritative for what
+          // was typed; this is what lets dispersion group across quotes.
+          supplier_id: quote.supplier_id ? Number(quote.supplier_id) : null,
           supplier_contact: quote.supplier_contact || null,
           delivery_cost: Number(quote.delivery_cost || 0),
           fees: Number(quote.fees || 0),
@@ -119,6 +141,12 @@ export default function ConciergeQuoteCard({ farmId, country }) {
               quantity: item.quantity,
               unit: item.unit,
               unit_price: Number(line.unit_price || 0),
+              // The catalogue link. Optional — a supplier may quote something nobody
+              // has catalogued yet — but an unlinked line is EXCLUDED from price
+              // comparison, never bucketed by name.
+              input_product_id: line.input_product_id
+                ? Number(line.input_product_id)
+                : null,
             };
           }),
         }),
@@ -165,12 +193,12 @@ export default function ConciergeQuoteCard({ farmId, country }) {
   return (
     <div className="space-y-6">
       {status && <p className="text-sm text-leaf-700">{status}</p>}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <FormError>{error}</FormError>
 
       <form onSubmit={submitQuote} className="space-y-3">
-        <h3 className="text-sm font-semibold text-gray-900">Enter supplier quote</h3>
+        <h3 className="text-sm font-semibold text-ink">Enter supplier quote</h3>
         {quotablePlans.length === 0 ? (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted">
             No open RFQs on this farm (a plan must be submitted for quotes first).
           </p>
         ) : (
@@ -192,6 +220,30 @@ export default function ConciergeQuoteCard({ farmId, country }) {
                   <label className={labelCls}>
                     Supplier *
                     <Input value={quote.supplier_name} onChange={(e) => setQuote({ ...quote, supplier_name: e.target.value })} className="mt-1" />
+                  </label>
+                  <label className={labelCls}>
+                    Registered supplier
+                    <Select
+                      value={quote.supplier_id}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        const picked = suppliers.find((s) => String(s.id) === id);
+                        // Fill the typed name from the registry as a convenience, but
+                        // never overwrite something the operator already typed — what
+                        // they entered stays authoritative.
+                        setQuote((q) => ({
+                          ...q,
+                          supplier_id: id,
+                          supplier_name: q.supplier_name || picked?.name || "",
+                        }));
+                      }}
+                      className="mt-1"
+                    >
+                      <option value="">Not linked</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </Select>
                   </label>
                   <label className={labelCls}>
                     Delivery cost
@@ -226,16 +278,29 @@ export default function ConciergeQuoteCard({ farmId, country }) {
                     <Input value={quote.entered_by} onChange={(e) => setQuote({ ...quote, entered_by: e.target.value })} className="mt-1" />
                   </label>
                 </div>
-                <div className="space-y-2 rounded-md border border-gray-200 p-3">
+                <div className="space-y-2 rounded-control border border-line p-3">
                   {selectedPlan.items.map((item) => (
-                    <div key={item.id} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                      <div className="text-xs text-gray-700 sm:col-span-1">
+                    <div key={item.id} className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                      <div className="text-xs text-ink sm:col-span-1">
                         <div className="font-medium">{item.product_name}</div>
-                        <div className="text-gray-500">{item.quantity} {item.unit}</div>
+                        <div className="text-muted">{item.quantity} {item.unit}</div>
                       </div>
                       <label className={labelCls}>
                         Unit price *
                         <Input type="number" step="any" min="0" value={lines[item.id]?.unit_price || ""} onChange={(e) => setLines({ ...lines, [item.id]: { ...lines[item.id], unit_price: e.target.value } })} className="mt-1" />
+                      </label>
+                      <label className={labelCls}>
+                        Catalogue product
+                        <Select
+                          value={lines[item.id]?.input_product_id || ""}
+                          onChange={(e) => setLines({ ...lines, [item.id]: { ...lines[item.id], input_product_id: e.target.value } })}
+                          className="mt-1"
+                        >
+                          <option value="">Not linked</option>
+                          {products.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </Select>
                       </label>
                       <label className={labelCls}>
                         Substitute product (optional)
@@ -257,16 +322,16 @@ export default function ConciergeQuoteCard({ farmId, country }) {
         )}
       </form>
 
-      <form onSubmit={submitOffer} className="space-y-3 border-t border-gray-100 pt-4">
-        <h3 className="text-sm font-semibold text-gray-900">
+      <form onSubmit={submitOffer} className="space-y-3 border-t border-line pt-4">
+        <h3 className="text-sm font-semibold text-ink">
           Enter indicative financing offer
         </h3>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted">
           Manually collected terms only — never a credit decision, and only
           possible when the grower requested financing on the plan.
         </p>
         {!selectedPlan || planQuotes.length === 0 ? (
-          <p className="text-sm text-gray-500">Pick a plan with quotes above first.</p>
+          <p className="text-sm text-muted">Pick a plan with quotes above first.</p>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -322,14 +387,14 @@ export default function ConciergeQuoteCard({ farmId, country }) {
         )}
       </form>
 
-      <form onSubmit={submitOrderEvent} className="space-y-3 border-t border-gray-100 pt-4">
-        <h3 className="text-sm font-semibold text-gray-900">Append order event</h3>
-        <p className="text-xs text-gray-500">
+      <form onSubmit={submitOrderEvent} className="space-y-3 border-t border-line pt-4">
+        <h3 className="text-sm font-semibold text-ink">Append order event</h3>
+        <p className="text-xs text-muted">
           Append-only lifecycle events. “Input applied” is not postable here — it
           requires the explicit application link on the order page.
         </p>
         {orders.length === 0 ? (
-          <p className="text-sm text-gray-500">No orders on this farm yet.</p>
+          <p className="text-sm text-muted">No orders on this farm yet.</p>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

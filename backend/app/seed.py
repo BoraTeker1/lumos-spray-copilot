@@ -16,6 +16,8 @@ Idempotent: clears existing rows first so re-running gives a clean demo state.
 """
 from datetime import date, datetime, time, timedelta
 
+from sqlalchemy import select
+
 from app import clock, crud, models, schemas
 from app.database import Base, SessionLocal, engine, init_db
 from app.decision_engine import evaluate_planned_spray
@@ -326,6 +328,143 @@ def run() -> None:
         db.add(farm3_obs)
 
         # ------------------------------------------------------------------ #
+        # Blocks — the Botrytis pilot's unit of comparison.                   #
+        #                                                                     #
+        # Without these, every pilot surface (disposition card, operator      #
+        # card, opportunity scan) renders empty and the product looks half    #
+        # built. They exist ONLY on the U.S. wedge farm; the TR contrast      #
+        # farms are not in the pilot's declared scope.                        #
+        #                                                                     #
+        # The names deliberately echo the free-text `field_block` values      #
+        # already used above, and the link is still made EXPLICITLY on each   #
+        # record below. That distinction is the whole point of Block's        #
+        # docstring: authoring a demo block called "Field 7" is a decision    #
+        # someone made, whereas deriving one from the string would fabricate  #
+        # structure nobody recorded.                                          #
+        # ------------------------------------------------------------------ #
+        block_field7 = models.Block(
+            farm_id=farm3.id,
+            name="Field 7",
+            crop="strawberry",
+            cultivar="Monterey",
+            area=6.0,
+            area_unit="acres",
+            planting_date=farm3.planting_date,
+            expected_harvest_date=farm3.expected_harvest_date,
+            phenology_stage="fruiting",
+            phenology_observed_on=today - timedelta(days=2),
+            notes="Low, shaded rows — the block carrying the gray-mold pressure.",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        block_south = models.Block(
+            farm_id=farm3.id,
+            name="South Block",
+            crop="strawberry",
+            cultivar="Albion",
+            area=5.0,
+            area_unit="acres",
+            planting_date=farm3.planting_date,
+            expected_harvest_date=farm3.expected_harvest_date,
+            phenology_stage="fruiting",
+            phenology_observed_on=today - timedelta(days=6),
+            notes="Warmer, better airflow — the contrast block.",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        db.add_all([block_field7, block_south])
+        db.flush()
+
+        # Station weather, two-hourly across the snapshot's 7-day lookback so the
+        # record has no gap beyond `disease_risk.MAX_GAP_HOURS`.
+        #
+        # `recorded_at` == `observed_at`: the demo story is a station reporting as the
+        # weather happens. It is NOT back-dated history — that distinction is the one
+        # `app/pit.py` exists to protect, and a seed that quietly violated it would
+        # teach exactly the wrong thing to whoever reads this next.
+        #
+        # NOTE WHAT THIS DOES NOT PRODUCE, because it surprises people. These rows are
+        # demo/simulated, so `pit.admissible` excludes every one of them and any
+        # assessment over this block abstains. That is correct and worth demonstrating:
+        # the demo/real guard is not a UI filter, it reaches all the way into the risk
+        # path. A demo farm can never show a risk band, for the same structural reason
+        # it can never show a label-grounded decision (ENGINEERING_GUIDELINES.md §5, reference farm).
+        #
+        # THE CONFUSING PART: the abstention reads `no_weather_in_window`, NOT
+        # `demo_or_simulated_input_present`. Demo rows are filtered out at the snapshot
+        # layer, so `disease_risk._weather_problems` never sees them and honestly
+        # reports that no ADMISSIBLE weather exists. Someone looking at 85 visible
+        # weather rows will read that as a bug. It is not — the real reason is on
+        # `RiskInputSnapshot.excluded`, every row tagged `demo_or_simulated_source`.
+        #
+        # `leaf_wetness_minutes` stays None on purpose: no wetness sensor exists on any
+        # farm in this system, and seeding a wetness number would fabricate the exact
+        # measurement the pilot is blocked on.
+        weather_rows = []
+        for step in range(85):
+            observed = _at(today, 6) - timedelta(hours=2 * step)
+            weather_rows.append(
+                models.WeatherObservation(
+                    farm_id=farm3.id,
+                    block_id=block_field7.id,
+                    station_id="CIMIS-111",
+                    station_name="Watsonville West (demo)",
+                    station_distance_km=4.2,
+                    observed_at=observed,
+                    recorded_at=observed,
+                    temperature_c=round(13.5 + 3.5 * ((step % 12) / 12.0), 1),
+                    relative_humidity_pct=round(78.0 + 14.0 * ((step % 9) / 9.0), 1),
+                    rainfall_mm=0.0,
+                    leaf_wetness_minutes=None,
+                    wetness_is_measured=None,
+                    source_type="manual_entry",
+                    source_reference="Demo station export (simulated)",
+                    data_source="demo",
+                    data_confidence="simulated",
+                )
+            )
+        db.add_all(weather_rows)
+
+        # Standardized scouting samples — the pilot's counted-units format, which is a
+        # different record from the free-text `ScoutObservation` above. Both exist
+        # because a severity 1-5 impression and "9 of 200 fruit affected" are not the
+        # same evidence, and the pilot needs the countable one.
+        db.add_all([
+            models.ScoutingSample(
+                farm_id=farm3.id,
+                block_id=block_field7.id,
+                observed_at=_at(today - timedelta(days=2), 8),
+                recorded_at=_at(today - timedelta(days=2), 8),
+                method="fruit_count",
+                target="botrytis_fruit_rot",
+                units_inspected=200,
+                units_affected=9,
+                incidence_pct=4.5,
+                scout_name="Demo scout (simulated)",
+                notes="Low shaded rows; infected berries clustered.",
+                source_type="manual_entry",
+                data_source="demo",
+                data_confidence="simulated",
+            ),
+            models.ScoutingSample(
+                farm_id=farm3.id,
+                block_id=block_south.id,
+                observed_at=_at(today - timedelta(days=6), 8),
+                recorded_at=_at(today - timedelta(days=6), 8),
+                method="fruit_count",
+                target="botrytis_fruit_rot",
+                units_inspected=200,
+                units_affected=2,
+                incidence_pct=1.0,
+                scout_name="Demo scout (simulated)",
+                notes="Contrast block — better airflow, little pressure.",
+                source_type="manual_entry",
+                data_source="demo",
+                data_confidence="simulated",
+            ),
+        ])
+
+        # ------------------------------------------------------------------ #
         # Demo scenario 1 (risky spray CHANGED after PCA review):             #
         #   a 4th captan cover spray planned 1 day before harvest is BLOCKED  #
         #   (PHI conflict + repeated chemistry), the demo PCA edits the       #
@@ -348,7 +487,10 @@ def run() -> None:
             target_pest_or_disease="gray mold (Botrytis) on ripening fruit, spreading",
             pre_harvest_interval_days=4,
             re_entry_interval_hours=24,
-            estimated_cost=120.0,
+            # Whole-block product + application cost for the 6 acres of Field 7,
+            # not a per-acre rate: `estimated_cost` is the baseline an avoidance is
+            # measured against, so it has to be what the pass would actually cost.
+            estimated_cost=430.0,
             field_block="Field 7",
             values_source="pca_entered",
             values_entered_by="Demo PCA (simulated)",
@@ -406,6 +548,10 @@ def run() -> None:
             created_at=_at(prev, 8),
         )
         db.add(planned1)
+        # Linked EXPLICITLY, not inferred from `field_block="Field 7"` above. Without a
+        # block_id `crud.create_risk_snapshot` refuses outright — a risk assessment is
+        # always about a specific block, and the block is never guessed from free text.
+        planned1.block_id = block_field7.id
 
         # The spray that actually happened after the changed-product outcome —
         # created and LINKED to the decision, exactly like a live recorded outcome.
@@ -488,7 +634,7 @@ def run() -> None:
             target_pest_or_disease="lygus bug",
             pre_harvest_interval_days=0,   # PHI 0 is a real entered value, not missing
             re_entry_interval_hours=12,
-            estimated_cost=95.0,
+            estimated_cost=1080.0,
             field_block="North Block",
             values_source="grower_entered",
             values_entered_by="Demo grower (simulated)",
@@ -537,6 +683,10 @@ def run() -> None:
             created_at=datetime.combine(today, datetime.min.time()),
         )
         db.add(planned2)
+        # DELIBERATELY left unlinked. Its `field_block` is "North Block", for which no
+        # Block row was authored — so this decision shows the real, common state of a
+        # farm partway through adopting blocks. `block_id` is nullable precisely for
+        # this, and a risk snapshot correctly refuses on it rather than guessing.
 
         db.flush()  # assign planned2.id for its provenance/audit/follow-up rows
         _seed_decision_trail(
@@ -620,7 +770,7 @@ def run() -> None:
             target_pest_or_disease="twospotted spider mite",
             pre_harvest_interval_days=3,
             re_entry_interval_hours=12,
-            estimated_cost=190.0,
+            estimated_cost=620.0,
             field_block="South Block",
             values_source="grower_entered",
             values_entered_by="Demo grower (simulated)",
@@ -668,6 +818,7 @@ def run() -> None:
             created_at=check_ts,
         )
         db.add(planned3)
+        planned3.block_id = block_south.id
         db.flush()
         _seed_decision_trail(
             db, planned3, source_type="user_entered",
@@ -753,6 +904,71 @@ def run() -> None:
         ))
 
         # ------------------------------------------------------------------ #
+        # SCENARIO 4 — the OPEN one. Every other seeded decision is finished,  #
+        # which left the farm reading as a closed book: the advisory queue had  #
+        # nothing urgent, and a farm always has live work. This one is checked  #
+        # and NOT yet reviewed, so the queue opens on a real critical item and  #
+        # the demo can walk the loop forwards instead of only reading history.  #
+        #                                                                       #
+        # A pre-harvest interval conflict, which is the failure this product     #
+        # exists to catch: Captan's own 4-day interval against a pick 2 days      #
+        # out. The PHI is the REAL label value (the same 4 days scenario 1 uses,  #
+        # and the number on the transcribed EPA label) — a demo that invents a    #
+        # longer interval to manufacture a conflict would be doing exactly what   #
+        # ENGINEERING_GUIDELINES.md §4 forbids. Nothing here asserts what to do about it: the     #
+        # verdict is the engine's and the resolution is the PCA's.                #
+        # ------------------------------------------------------------------ #
+        open_check_ts = datetime.combine(today, datetime.min.time()) + timedelta(hours=7)
+        planned4_data = schemas.PlannedSprayCreate(
+            intended_date=farm3.expected_harvest_date - timedelta(days=2),
+            product_name="Captan 80 WDG",
+            active_ingredient="captan",
+            target_pest_or_disease="gray mold (Botrytis) on ripening fruit",
+            pre_harvest_interval_days=4,
+            re_entry_interval_hours=24,
+            estimated_cost=430.0,
+            field_block="Field 7",
+            values_source="grower_entered",
+            values_entered_by="Demo grower (simulated)",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        decision4 = evaluate_planned_spray(
+            farm3, planned4_data, farm3_sprays, [farm3_obs], today=today,
+        )
+        # The whole point of the scenario: a 4-day interval cannot clear a pick 2
+        # days out. If the engine ever stops catching that, the seed should fail
+        # loudly rather than quietly ship a demo that proves nothing.
+        assert decision4.outcome == "block", decision4.outcome
+        assert decision4.severity == "critical", decision4.severity
+
+        planned4 = models.PlannedSpray(
+            farm_id=farm3.id,
+            **planned4_data.model_dump(),
+            decision_outcome=decision4.outcome,
+            decision_severity=decision4.severity,
+            decision_confidence=decision4.confidence,
+            decision_authority=decision4.authority_level,
+            required_next_action=decision4.required_next_action,
+            review_required=decision4.review_required,
+            decision_payload=decision4.as_payload(),
+            check_risk_level="high",
+            check_text=decision4.narrative,
+            # Deliberately unreviewed and with no recorded outcome: this is the
+            # live decision the queue leads with.
+            review_status=None,
+            outcome="planned",
+            created_at=open_check_ts,
+        )
+        db.add(planned4)
+        planned4.block_id = block_field7.id
+        db.flush()
+        _seed_decision_trail(
+            db, planned4, source_type="user_entered",
+            entered_by="Demo grower (simulated)", ts=open_check_ts,
+        )
+
+        # ------------------------------------------------------------------ #
         # Demo procurement scenario (Inputs & finance, workflow demo ONLY):   #
         #   the PCA-edited scenario-1 decision (Switch 62.5 WG) becomes an    #
         #   input-plan item -> RFQ -> two materially different simulated      #
@@ -805,7 +1021,9 @@ def run() -> None:
             acres=18.0,
             needed_by_date=today,
             intended_use="gray mold (Botrytis) on ripening fruit",
-            estimated_cost=210.0,
+            # The grower's own pre-quote estimate for the whole 252 oz line — the
+            # documented baseline the value ledger compares the selected quote to.
+            estimated_cost=3900.0,
             created_by="Demo grower (simulated)",
             data_source="demo",
             data_confidence="simulated",
@@ -857,24 +1075,25 @@ def run() -> None:
         )
         db.add_all([quote_a, quote_b])
         db.flush()
-        db.add_all([
-            models.SupplierQuoteItem(
-                supplier_quote_id=quote_a.id,
-                input_plan_item_id=demo_item.id,
-                product_name="Switch 62.5 WG",
-                quantity=252.0,
-                unit="oz",
-                unit_price=15.40,
-            ),
-            models.SupplierQuoteItem(
-                supplier_quote_id=quote_b.id,
-                input_plan_item_id=demo_item.id,
-                product_name="Switch 62.5 WG",
-                quantity=252.0,
-                unit="oz",
-                unit_price=14.50,
-            ),
-        ])
+        # Named so the marketplace block further down can link them to a catalogue
+        # product. Dispersion groups by catalogue id and never by name.
+        quote_a_item = models.SupplierQuoteItem(
+            supplier_quote_id=quote_a.id,
+            input_plan_item_id=demo_item.id,
+            product_name="Switch 62.5 WG",
+            quantity=252.0,
+            unit="oz",
+            unit_price=15.40,
+        )
+        quote_b_item = models.SupplierQuoteItem(
+            supplier_quote_id=quote_b.id,
+            input_plan_item_id=demo_item.id,
+            product_name="Switch 62.5 WG",
+            quantity=252.0,
+            unit="oz",
+            unit_price=14.50,
+        )
+        db.add_all([quote_a_item, quote_b_item])
         demo_offer = models.FinancingOffer(
             supplier_quote_id=quote_b.id,
             provider_name="AgCredit Partners (simulated)",
@@ -1023,7 +1242,469 @@ def run() -> None:
             )
         )
 
+        # ------------------------------------------------------------------ #
+        # The season, for farm 3. `CropCycle` is the economic unit every cost   #
+        # and outcome hangs off; without one seeded, the value ledger has       #
+        # nothing to scope to and reads as broken rather than as empty.         #
+        # Demo/simulated like every other seeded row — an avoided application   #
+        # here is an illustration, never value anyone created (ENGINEERING_GUIDELINES.md §9).   #
+        # ------------------------------------------------------------------ #
+        field3 = models.Field(
+            farm_id=farm3.id,
+            name="Field 7",
+            display_area=18.0,
+            display_area_unit="acres",
+            area_m2=18.0 * 4046.8564224,
+            irrigation_type="drip",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        db.add(field3)
+        db.flush()
+
+        cycle3 = models.CropCycle(
+            farm_id=farm3.id,
+            field_id=field3.id,
+            crop="strawberry",
+            variety_name="Monterey",
+            season_year=today.year,
+            season_label=f"{today.year} spring plant",
+            planting_date=farm3.planting_date,
+            expected_harvest_start=farm3.expected_harvest_date,
+            planted_area_m2=18.0 * 4046.8564224,
+            display_area=18.0,
+            display_area_unit="acres",
+            status="harvesting",
+            currency_code="USD",
+            data_source="demo",
+            data_confidence="simulated",
+        )
+        db.add(cycle3)
+        db.flush()
+
+        # Non-spray costs the season actually carried. These have had a column
+        # (`Operation.cost_amount`) and no writer since the entity-spine phase.
+        db.add_all([
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="fertilization", cost_category="fertilizer_nutrition",
+                performed_on=today - timedelta(days=40),
+                cost_amount=1450.0, currency_code="USD",
+                notes="Pre-bloom fertigation pass.",
+                data_source="demo", data_confidence="simulated",
+            ),
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="irrigation", cost_category="irrigation",
+                performed_on=today - timedelta(days=12),
+                cost_amount=380.0, currency_code="USD",
+                data_source="demo", data_confidence="simulated",
+            ),
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="harvest", cost_category="labor",
+                performed_on=today - timedelta(days=8),
+                cost_amount=9200.0, currency_code="USD",
+                notes="First and second pick — contract harvest crew.",
+                data_source="demo", data_confidence="simulated",
+            ),
+            # Deliberately costless: the season is mid-flight and this pass has not
+            # been invoiced. It is what makes the demo show a real cost-coverage gap
+            # instead of a season that looks perfectly documented.
+            models.Operation(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id, field_id=field3.id,
+                operation_type="tillage",
+                performed_on=today - timedelta(days=52),
+                currency_code="USD",
+                notes="Bed shaping — contractor has not invoiced yet.",
+                data_source="demo", data_confidence="simulated",
+            ),
+        ])
+
+        # A measured harvest outcome. Per block per harvest — one outcome is
+        # evidence for many decisions and for none in particular.
+        block3 = db.scalars(
+            select(models.Block).where(models.Block.farm_id == farm3.id)
+        ).first()
+        if block3 is not None:
+            db.add(models.BlockOutcomeObservation(
+                block_id=block3.id,
+                observed_on=today - timedelta(days=1),
+                outcome_type="marketable_packout",
+                value=87.5,
+                unit="pct",
+                denominator=1200.0,
+                method="Trays graded at the cooler, first pick.",
+                source_type="demo",
+                data_source="demo",
+                data_confidence="simulated",
+            ))
+
+        # Harvest weight per block, in lb — the unit a Watsonville settlement is
+        # written in. The closeout normalises both to kg through exact factors, which
+        # is the whole reason yield is recorded with a unit and never as a bare number.
+        harvest_yields = [
+            (block_field7, 34200.0, 9, "First and second pick, cooler scale tickets."),
+            (block_south, 26800.0, 7, "First pick, cooler scale tickets."),
+        ]
+        for block, pounds, days_ago, method in harvest_yields:
+            db.add(models.BlockOutcomeObservation(
+                block_id=block.id,
+                observed_on=today - timedelta(days=days_ago),
+                outcome_type="yield",
+                value=pounds,
+                unit="lb",
+                method=method,
+                source_type="demo",
+                data_source="demo",
+                data_confidence="simulated",
+            ))
+
+        # Two recorded settlements. Gross, deductions and net stay three numbers:
+        # the packer withholds commission and cooling before the grower sees a cheque,
+        # and collapsing that into one "revenue" figure loses which is which.
+        db.add_all([
+            models.SaleRecord(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id,
+                sale_date=today - timedelta(days=6),
+                quantity=34200.0, unit="lb", unit_price=1.85,
+                gross_amount=63270.0, deductions_amount=5061.60,
+                currency_code="USD",
+                buyer_name="Pajaro Valley Packing (demo)",
+                reference="STL-2411-A",
+                grade="US No. 1", market="fresh",
+                notes="Commission 6% and cooling withheld at settlement.",
+                data_source="demo", data_confidence="simulated",
+            ),
+            models.SaleRecord(
+                farm_id=farm3.id, crop_cycle_id=cycle3.id,
+                sale_date=today - timedelta(days=2),
+                quantity=26800.0, unit="lb", unit_price=1.62,
+                gross_amount=43416.0, deductions_amount=3473.28,
+                currency_code="USD",
+                buyer_name="Pajaro Valley Packing (demo)",
+                reference="STL-2411-B",
+                grade="US No. 1", market="fresh",
+                data_source="demo", data_confidence="simulated",
+            ),
+        ])
+
         db.commit()
+        # Attach the farm's existing sprays, decisions, scouting and input plans to
+        # the season through the same backfill the API calls — so the demo exercises
+        # the real code path rather than a seed-only shortcut.
+        crud.link_records_to_cycle(db, cycle3)
+
+        # ------------------------------------------------------------------ #
+        # PRIOR SEASONS. Two closed cycles so the farm performance profile has  #
+        # something real to compare — a trend needs two seasons, and a profile  #
+        # built on one is a reading, not a history.                             #
+        #                                                                       #
+        # 2024 is deliberately the WORSE season: lower yield, higher cost per   #
+        # kilo, more rescue treatments, and a settlement that does not cover    #
+        # recorded cost. A demo where every season improves is not credible,    #
+        # and the same reasoning put the honest failure story in scenario 3.    #
+        # All simulated (ENGINEERING_GUIDELINES.md §9) — never evidence of real performance.    #
+        # ------------------------------------------------------------------ #
+        prior_seasons = [
+            {
+                "year": today.year - 2,
+                "label": f"{today.year - 2} spring plant",
+                "yield_lb": 41200.0,
+                "gross": 61800.0,
+                "deductions": 4944.0,
+                "operations": [
+                    ("fertilization", "fertilizer_nutrition", 1720.0),
+                    ("irrigation", "irrigation", 460.0),
+                    ("harvest", "labor", 11400.0),
+                    ("pest_management", "crop_protection", 7850.0),
+                ],
+                "rescue_count": 2,
+                "packout": 79.0,
+            },
+            {
+                "year": today.year - 1,
+                "label": f"{today.year - 1} spring plant",
+                "yield_lb": 54600.0,
+                "gross": 92820.0,
+                "deductions": 7425.60,
+                "operations": [
+                    ("fertilization", "fertilizer_nutrition", 1610.0),
+                    ("irrigation", "irrigation", 410.0),
+                    ("harvest", "labor", 10800.0),
+                    ("pest_management", "crop_protection", 5940.0),
+                ],
+                "rescue_count": 1,
+                "packout": 84.0,
+            },
+        ]
+
+        for season in prior_seasons:
+            # Anchor each prior season to the same calendar position as this one,
+            # shifted by whole years — so a pinned demo date keeps every season's
+            # internal chronology intact.
+            offset = timedelta(days=365 * (today.year - season["year"]))
+            cycle = models.CropCycle(
+                farm_id=farm3.id,
+                field_id=field3.id,
+                crop="strawberry",
+                variety_name="Monterey",
+                season_year=season["year"],
+                season_label=season["label"],
+                planting_date=farm3.planting_date - offset,
+                expected_harvest_start=farm3.expected_harvest_date - offset,
+                actual_harvest_start=farm3.expected_harvest_date - offset,
+                planted_area_m2=18.0 * 4046.8564224,
+                display_area=18.0,
+                display_area_unit="acres",
+                status="closed",
+                currency_code="USD",
+                data_source="demo",
+                data_confidence="simulated",
+            )
+            db.add(cycle)
+            db.flush()
+
+            for op_type, category, amount in season["operations"]:
+                db.add(models.Operation(
+                    farm_id=farm3.id, crop_cycle_id=cycle.id, field_id=field3.id,
+                    operation_type=op_type, cost_category=category,
+                    performed_on=today - offset - timedelta(days=30),
+                    cost_amount=amount, currency_code="USD",
+                    data_source="demo", data_confidence="simulated",
+                ))
+
+            db.add(models.SaleRecord(
+                farm_id=farm3.id, crop_cycle_id=cycle.id,
+                sale_date=today - offset - timedelta(days=4),
+                quantity=season["yield_lb"], unit="lb",
+                gross_amount=season["gross"],
+                deductions_amount=season["deductions"],
+                currency_code="USD",
+                buyer_name="Pajaro Valley Packing (demo)",
+                reference=f"STL-{season['year']}-F",
+                grade="US No. 1", market="fresh",
+                data_source="demo", data_confidence="simulated",
+            ))
+
+            db.add(models.BlockOutcomeObservation(
+                block_id=block_field7.id, crop_cycle_id=cycle.id,
+                observed_on=today - offset - timedelta(days=6),
+                outcome_type="yield", value=season["yield_lb"], unit="lb",
+                method="Cooler scale tickets, season total.",
+                source_type="demo",
+                data_source="demo", data_confidence="simulated",
+            ))
+            db.add(models.BlockOutcomeObservation(
+                block_id=block_field7.id, crop_cycle_id=cycle.id,
+                observed_on=today - offset - timedelta(days=6),
+                outcome_type="marketable_packout",
+                value=season["packout"], unit="pct", denominator=1200.0,
+                method="Trays graded at the cooler.",
+                source_type="demo",
+                data_source="demo", data_confidence="simulated",
+            ))
+            # Rescue treatments: the agronomic cost of getting it wrong, and the
+            # metric that most clearly separates the two prior seasons.
+            for n in range(season["rescue_count"]):
+                db.add(models.BlockOutcomeObservation(
+                    block_id=block_field7.id, crop_cycle_id=cycle.id,
+                    observed_on=today - offset - timedelta(days=20 + n * 9),
+                    outcome_type="rescue_treatment", value=1.0, unit="applications",
+                    method="Unplanned application after pressure rose.",
+                    source_type="demo",
+                    data_source="demo", data_confidence="simulated",
+                ))
+
+        # ------------------------------------------------------------------ #
+        # MARKETPLACE. Suppliers and a catalogue, so price dispersion actually  #
+        # computes. Without the catalogue link the seeded quote lines group by   #
+        # nothing and the card renders only its unlinked-lines note — a          #
+        # data-entry gap, not a code one (ENGINEERING_GUIDELINES.md §5).                         #
+        # ------------------------------------------------------------------ #
+        supplier_a = models.Supplier(
+            name="Coastal Ag Supply (simulated)",
+            canonical_name="coastal ag supply (simulated)",
+            contact_name="Sales desk", service_area="Monterey Bay",
+            data_source="demo", data_confidence="simulated",
+        )
+        supplier_b = models.Supplier(
+            name="Valley Farm Inputs (simulated)",
+            canonical_name="valley farm inputs (simulated)",
+            contact_name="Counter", service_area="Salinas Valley",
+            data_source="demo", data_confidence="simulated",
+        )
+        db.add_all([supplier_a, supplier_b])
+        db.flush()
+
+        switch_product = models.InputProduct(
+            category="fungicide",
+            name="Switch 62.5WG",
+            manufacturer="Syngenta",
+            canonical_key="switch 62.5wg",
+            unit_of_sale="oz",
+            data_source="demo", data_confidence="simulated",
+        )
+        db.add(switch_product)
+        db.flush()
+        db.add_all([
+            models.SupplierProduct(
+                supplier_id=supplier_a.id, input_product_id=switch_product.id,
+                pack_size="5 lb bag", typical_lead_time_days=3,
+            ),
+            models.SupplierProduct(
+                supplier_id=supplier_b.id, input_product_id=switch_product.id,
+                pack_size="5 lb bag", typical_lead_time_days=7,
+            ),
+        ])
+        # Link the already-seeded quote lines to the catalogue and to the supplier
+        # records. Dispersion groups by catalogue id and NEVER by name — three
+        # spellings of one product would otherwise read as three products with no
+        # spread at all, i.e. "prices are consistent".
+        quote_a.supplier_id = supplier_a.id
+        quote_b.supplier_id = supplier_b.id
+        for line in (quote_a_item, quote_b_item):
+            line.input_product_id = switch_product.id
+
+        # ------------------------------------------------------------------ #
+        # THE COMMERCIAL AGREEMENT. What Lumos is paid, on what recorded basis. #
+        # A share of VERIFIED value only — estimated value is never chargeable, #
+        # because nothing has corroborated it. Capped, so the demo shows the    #
+        # cap machinery even when it does not bind.                             #
+        # ------------------------------------------------------------------ #
+        db.add(models.CommercialAgreement(
+            farm_id=farm3.id,
+            name="Pilot terms — verified value share",
+            model_type="verified_value_share",
+            currency_code="USD",
+            effective_from=farm3.planting_date - timedelta(days=800),
+            terms={"rate_pct": 15.0, "cap_amount": 25000.0},
+            source_document=(
+                "Simulated pilot agreement, for demonstration only. Not a real "
+                "commercial term with any grower."
+            ),
+            status="active",
+            entered_by="Lumos operator (demo)",
+            notes=(
+                "15% of value verified by the follow-up timeline, capped at "
+                "$25,000 per season."
+            ),
+            data_source="demo", data_confidence="simulated",
+        ))
+
+        # ------------------------------------------------------------------ #
+        # SEASON FINANCING. A lender's written criteria, a request against this  #
+        # season, and one set of indicative terms. The policy is clearly marked  #
+        # simulated: Lumos evaluates a lender's policy and never authors one, so  #
+        # a demo policy has to say out loud that no lender wrote it.             #
+        # ------------------------------------------------------------------ #
+        policy = models.LenderPolicy(
+            lender="Central Coast Ag Credit (simulated)",
+            policy_version="2026-A",
+            effective_from=today - timedelta(days=200),
+            source_document=(
+                "SIMULATED lender criteria, written for this demo. No lender "
+                "supplied these thresholds and they must never be presented as a "
+                "real credit policy."
+            ),
+            rules=[
+                {
+                    "rule_id": "evidence-spray-log",
+                    "description": "Pesticide application log for the financed season",
+                    "kind": "required_evidence",
+                    "evidence_key": "spray_log",
+                },
+                {
+                    "rule_id": "evidence-cost-record",
+                    "description": "Recorded operating costs",
+                    "kind": "required_evidence",
+                    "evidence_key": "cost_record",
+                },
+                {
+                    "rule_id": "evidence-revenue",
+                    "description": "Recorded settlements from the packer",
+                    "kind": "required_evidence",
+                    "evidence_key": "revenue_record",
+                },
+                {
+                    "rule_id": "evidence-history",
+                    "description": "At least one closed season on record",
+                    "kind": "required_evidence",
+                    "evidence_key": "production_history",
+                },
+                {
+                    "rule_id": "max-exposure",
+                    "description": "Maximum exposure to one borrower",
+                    "kind": "maximum_exposure",
+                    "threshold": 250000.0,
+                },
+            ],
+            covenants=[],
+            entered_by="Lumos operator (demo)",
+            entered_on=today - timedelta(days=200),
+            data_source="demo", data_confidence="simulated",
+        )
+        db.add(policy)
+        db.flush()
+
+        financing_request = models.FinancingRequest(
+            farm_id=farm3.id,
+            crop_cycle_id=cycle3.id,
+            purpose="input_purchase",
+            requested_amount=42000.0,
+            currency_code="USD",
+            status="offers_received",
+            lender_policy_id=policy.id,
+            requested_by="Maria Delgado (demo)",
+            notes="Pre-season input purchase for the coming plant.",
+            data_source="demo", data_confidence="simulated",
+        )
+        db.add(financing_request)
+        db.flush()
+        db.add_all([
+            models.FinancingRequestEvent(
+                financing_request_id=financing_request.id,
+                event_type="created", occurred_on=today - timedelta(days=14),
+                actor="Maria Delgado (demo)",
+                notes="Financing request opened.",
+            ),
+            models.FinancingRequestEvent(
+                financing_request_id=financing_request.id,
+                event_type="shared", occurred_on=today - timedelta(days=9),
+                actor="Lumos operator (demo)",
+                notes="Evidence package shared with the lender.",
+            ),
+            models.FinancingRequestEvent(
+                financing_request_id=financing_request.id,
+                event_type="offer_received", occurred_on=today - timedelta(days=4),
+                actor="Lumos operator (demo)",
+                notes="Indicative terms entered from Central Coast Ag Credit.",
+            ),
+        ])
+        # An INDICATIVE offer. Every figure is the lender's own and travels as they
+        # stated it: there is no APR column anywhere, and nothing here is funding.
+        db.add(models.FinancingOffer(
+            financing_request_id=financing_request.id,
+            supplier_quote_id=None,
+            provider_name="Central Coast Ag Credit (simulated)",
+            requested_amount=42000.0,
+            down_payment=7000.0,
+            financed_amount=35000.0,
+            total_repayment=36925.0,
+            fees_total=350.0,
+            schedule_summary=(
+                "Repaid in full from the first two packer settlements after harvest."
+            ),
+            expires_on=today + timedelta(days=21),
+            required_documents="Signed grower agreement; proof of crop insurance.",
+            conditions="Subject to a site visit before drawdown.",
+            status="indicative",
+            entered_by="Lumos operator (demo)",
+            data_source="demo", data_confidence="simulated",
+        ))
+
+        db.commit()
+
         print(f"Seeded HIGH-risk farm:  {farm1.name} (id={farm1.id}, {farm1.country})")
         print(f"Seeded LOW-risk  farm:  {farm2.name} (id={farm2.id}, {farm2.country})")
         print(f"Seeded U.S. wedge farm: {farm3.name} (id={farm3.id}, {farm3.country})")

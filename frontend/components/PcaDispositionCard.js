@@ -102,32 +102,32 @@ export default function PcaDispositionCard({ plannedId }) {
   const live = dispositions.find((d) => !superseded.has(d.id)) || null;
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-white p-4">
+    <section className="rounded-control border border-line bg-surface p-4">
       <div className="flex items-center gap-2">
-        <ClipboardCheck className="h-4 w-4 text-gray-500" aria-hidden="true" />
-        <h3 className="text-sm font-semibold text-gray-900">PCA decision (pilot)</h3>
+        <ClipboardCheck className="h-4 w-4 text-muted" aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-ink">PCA decision (pilot)</h3>
       </div>
-      <p className="mt-1 text-xs text-gray-600">
+      <p className="mt-1 text-xs text-muted">
         Your professional judgement on this scheduled application. Recorded as its own
         attributed, append-only entry — it does not change the compliance check or the
         review above, and deferring does not clear the spray to go ahead.
       </p>
 
       {live && (
-        <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+        <div className="mt-3 rounded-control border border-line bg-canvas p-3">
           <div className="flex items-center justify-between gap-2">
             <StatusBadge kind="disposition" value={live.disposition} />
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted">
               {live.decided_at?.slice(0, 16).replace("T", " ")}
             </span>
           </div>
-          <p className="mt-2 text-sm text-gray-800">{live.rationale}</p>
+          <p className="mt-2 text-sm text-ink">{live.rationale}</p>
         </div>
       )}
 
       {!hasToken ? (
         <form onSubmit={saveToken} className="mt-3 space-y-2">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700">
+          <label className="flex items-center gap-1.5 text-xs font-medium text-ink">
             <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
             PCA credential token
           </label>
@@ -136,9 +136,9 @@ export default function PcaDispositionCard({ plannedId }) {
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder="Paste the token issued to you"
-            className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+            className="w-full rounded-control border border-line px-2 py-1.5 text-sm"
           />
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-muted">
             Held for this browser session only, never saved to the device. A
             disposition is always attributed to a licensed credential — there is no
             anonymous path.
@@ -150,13 +150,13 @@ export default function PcaDispositionCard({ plannedId }) {
       ) : (
         <form onSubmit={submit} className="mt-3 space-y-3">
           <fieldset className="space-y-1.5">
-            <legend className="text-xs font-medium text-gray-700">
+            <legend className="text-xs font-medium text-ink">
               {live ? "Record a corrected decision" : "Record your decision"}
             </legend>
             {OPTIONS.map((option) => (
               <label
                 key={option.value}
-                className="flex cursor-pointer items-start gap-2 rounded-md border border-gray-200 p-2 hover:bg-gray-50"
+                className="flex cursor-pointer items-start gap-2 rounded-control border border-line p-2 hover:bg-canvas"
               >
                 <input
                   type="radio"
@@ -167,8 +167,8 @@ export default function PcaDispositionCard({ plannedId }) {
                   className="mt-0.5"
                 />
                 <span>
-                  <span className="block text-sm text-gray-900">{option.label}</span>
-                  <span className="block text-xs text-gray-500">{option.hint}</span>
+                  <span className="block text-sm text-ink">{option.label}</span>
+                  <span className="block text-xs text-muted">{option.hint}</span>
                 </span>
               </label>
             ))}
@@ -177,7 +177,7 @@ export default function PcaDispositionCard({ plannedId }) {
           <div>
             <label
               htmlFor={`rationale-${plannedId}`}
-              className="text-xs font-medium text-gray-700"
+              className="text-xs font-medium text-ink"
             >
               Reason (required)
             </label>
@@ -187,9 +187,9 @@ export default function PcaDispositionCard({ plannedId }) {
               onChange={(e) => setRationale(e.target.value)}
               rows={3}
               placeholder="What drove this call? Conditions, scouting, timing…"
-              className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              className="mt-1 w-full rounded-control border border-line px-2 py-1.5 text-sm"
             />
-            <p className="mt-1 text-xs text-gray-500">
+            <p className="mt-1 text-xs text-muted">
               A decision without a stated reason cannot be used as pilot evidence.
             </p>
           </div>
@@ -201,21 +201,21 @@ export default function PcaDispositionCard({ plannedId }) {
       )}
 
       {error && (
-        <p className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+        <p className="mt-2 rounded-control border border-risk-line bg-risk-bg p-2 text-xs text-risk-fg">
           {error}
         </p>
       )}
 
       {dispositions.length > 1 && (
-        <div className="mt-4 border-t border-gray-100 pt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
             Earlier decisions (superseded, never removed)
           </h4>
           <ul className="mt-2 space-y-2">
             {dispositions
               .filter((d) => superseded.has(d.id))
               .map((d) => (
-                <li key={d.id} className="text-xs text-gray-500 line-through">
+                <li key={d.id} className="text-xs text-muted line-through">
                   <StatusBadge kind="disposition" value={d.disposition} /> —{" "}
                   {d.rationale} ({d.decided_at?.slice(0, 16).replace("T", " ")})
                 </li>

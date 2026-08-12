@@ -149,10 +149,17 @@ def test_seeded_scenarios_expose_coherent_composed_states(seeded):
     farms = seeded.get("/farms").json()
     us = next(f for f in farms if f["country"] == "US")
     planned = seeded.get(f"/farms/{us['id']}/planned-sprays").json()
-    by_product = {p["product_name"]: p for p in planned}
+    # Scenario 4 is a SECOND Captan decision, deliberately left open, so keying by
+    # product name alone would silently overwrite the resolved scenario-1 story
+    # with it. The three finished stories are the subject here; the open one is
+    # asserted separately below.
+    resolved = [p for p in planned if p["outcome"] != "planned"]
+    open_decisions = [p for p in planned if p["outcome"] == "planned"]
+    by_product = {p["product_name"]: p for p in resolved}
 
-    # All three demo decisions are resolved; verdicts stay visible as history.
-    for p in planned:
+    # The three finished demo decisions; verdicts stay visible as history.
+    assert len(resolved) == 3
+    for p in resolved:
         assert p["workflow_state"] == "resolved"
         assert p["decision_outcome"] in ("block", "inspect_first")
 
@@ -173,6 +180,17 @@ def test_seeded_scenarios_expose_coherent_composed_states(seeded):
     assert agrimek["outcome"] == "delayed"
     assert agrimek["evidence_state"] == "verified"
     assert agrimek["current_next_action"] == "none"
+
+    # Scenario 4: the live one. A critical PHI conflict, checked and not yet
+    # reviewed — this is what the advisory queue leads with, and it is why the
+    # demo farm reads as an operating business rather than a closed book.
+    assert len(open_decisions) == 1
+    live = open_decisions[0]
+    assert live["decision_outcome"] == "block"
+    assert live["decision_severity"] == "critical"
+    assert live["workflow_state"] == "awaiting_pca"
+    assert live["evidence_state"] == "missing_documentation"
+    assert live["current_next_action"] == "await_pca_review"
 
 
 def test_api_open_decision_states(client):

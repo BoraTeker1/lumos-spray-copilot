@@ -28,7 +28,7 @@ export default function EvidencePanel({
   return (
     <div className="space-y-4">
       {isDemoFarm && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        <div className="flex items-start gap-2 rounded-card border border-warn-line bg-warn-bg p-3 text-sm text-warn-fg">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <div className="font-semibold">SIMULATED DEMO DATA — NOT A CUSTOMER RESULT</div>
@@ -99,14 +99,14 @@ export default function EvidencePanel({
         <div className="flex flex-wrap gap-2">
           <a
             href={`${API_BASE_URL}/farms/${farmId}/export/spray-events.csv`}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-control border border-line bg-surface px-3 text-xs font-medium text-ink shadow-sm hover:bg-canvas"
           >
             <Download className="h-3.5 w-3.5" />
             Spray events CSV
           </a>
           <a
             href={`${API_BASE_URL}/farms/${farmId}/export/recommendations.csv`}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-control border border-line bg-surface px-3 text-xs font-medium text-ink shadow-sm hover:bg-canvas"
           >
             <Download className="h-3.5 w-3.5" />
             Recommendations CSV
@@ -115,7 +115,7 @@ export default function EvidencePanel({
             href={`${API_BASE_URL}/farms/${farmId}/audit-packet`}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-control border border-line bg-surface px-3 text-xs font-medium text-ink shadow-sm hover:bg-canvas"
           >
             <Download className="h-3.5 w-3.5" />
             Audit packet (JSON)

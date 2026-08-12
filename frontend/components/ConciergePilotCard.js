@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { formatCost } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
+import { fieldClass } from "@/components/ui/input";
 
 const DATA_SOURCES = [
   "grower_interview",
@@ -27,37 +30,28 @@ const EXAMPLE = `{
   ]
 }`;
 
-function Field({ label, children }) {
-  return (
-    <label className="block text-sm">
-      <span className="mb-1 block text-xs font-medium text-gray-600">{label}</span>
-      {children}
-    </label>
-  );
-}
-
 // One-page case study, rendered founder/demo friendly.
 function CaseStudy({ cs, country }) {
   const Line = ({ label, value }) => (
     <div className="flex justify-between gap-3 border-b py-1 last:border-0">
-      <span className="text-gray-500">{label}</span>
+      <span className="text-muted">{label}</span>
       <span className="text-right font-medium">{value}</span>
     </div>
   );
   return (
-    <div className="mt-4 rounded-lg border bg-gray-50 p-4">
+    <div className="mt-4 rounded-control border bg-canvas p-4">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-semibold">Pilot case study — {cs.farm_name}</h3>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-muted">
           {cs.crop} · {cs.location || "—"}
         </span>
       </div>
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-muted">
         Data source: {cs.pilot_data_source.join(", ")} · Confidence:{" "}
         {cs.data_confidence_levels.join(", ")}
       </div>
       {cs.pilot_import_batches_count > 0 && (
-        <div className="text-xs text-gray-500">
+        <div className="text-xs text-muted">
           {cs.pilot_import_batches_count} import batch(es) · latest:{" "}
           {cs.latest_import_source_label || "—"}
           {cs.latest_imported_by && ` (by ${cs.latest_imported_by})`}
@@ -82,22 +76,22 @@ function CaseStudy({ cs, country }) {
         />
       </div>
       <div className="mt-2 text-sm">
-        <span className="text-gray-500">PCA review: </span>
+        <span className="text-muted">PCA review: </span>
         {cs.pca_review_status_summary}
       </div>
 
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <div>
-          <div className="text-xs font-semibold text-gray-700">What Lumos helped surface</div>
-          <ul className="mt-1 space-y-1 text-sm text-gray-700">
+          <div className="text-xs font-semibold text-ink">What Lumos helped surface</div>
+          <ul className="mt-1 space-y-1 text-sm text-ink">
             {cs.what_lumos_helped_surface.map((b, i) => (
               <li key={i}>• {b}</li>
             ))}
           </ul>
         </div>
         <div>
-          <div className="text-xs font-semibold text-gray-700">What is still unknown</div>
-          <ul className="mt-1 space-y-1 text-sm text-gray-700">
+          <div className="text-xs font-semibold text-ink">What is still unknown</div>
+          <ul className="mt-1 space-y-1 text-sm text-ink">
             {cs.what_is_still_unknown.map((b, i) => (
               <li key={i}>• {b}</li>
             ))}
@@ -105,8 +99,8 @@ function CaseStudy({ cs, country }) {
         </div>
       </div>
 
-      <p className="mt-3 italic text-gray-500">{cs.quote_placeholder}</p>
-      <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">{cs.disclaimer}</p>
+      <p className="mt-3 italic text-muted">{cs.quote_placeholder}</p>
+      <p className="mt-2 rounded bg-warn-bg px-3 py-2 text-xs text-warn-fg">{cs.disclaimer}</p>
     </div>
   );
 }
@@ -167,19 +161,19 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
 
   return (
     <div>
-      <p className="mb-3 text-xs text-gray-500">
+      <p className="mb-3 text-xs text-muted">
         Use this for manually collected pilot data from grower/PCA conversations. This is not an
         automated recommendation or compliance guarantee.
       </p>
 
       <form onSubmit={submit} className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Source label">
             <input
               value={sourceLabel}
               onChange={(e) => setSourceLabel(e.target.value)}
               placeholder="Call with PCA Maria, 20 Jun"
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             />
           </Field>
           <Field label="Imported by (optional)">
@@ -187,14 +181,14 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
               value={importedBy}
               onChange={(e) => setImportedBy(e.target.value)}
               placeholder="you@founder"
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             />
           </Field>
           <Field label="Data source">
             <select
               value={dataSource}
               onChange={(e) => setDataSource(e.target.value)}
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             >
               {DATA_SOURCES.map((s) => (
                 <option key={s} value={s}>
@@ -207,7 +201,7 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
             <select
               value={dataConfidence}
               onChange={(e) => setDataConfidence(e.target.value)}
-              className="w-full rounded border px-2 py-1.5"
+              className={fieldClass}
             >
               {DATA_CONFIDENCES.map((c) => (
                 <option key={c} value={c}>
@@ -223,7 +217,7 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Costs are rough; transcribed from a call."
-            className="w-full rounded border px-2 py-1.5"
+            className={fieldClass}
           />
         </Field>
 
@@ -233,29 +227,26 @@ export default function ConciergePilotCard({ farmId, country, onImported }) {
             onChange={(e) => setJson(e.target.value)}
             placeholder={EXAMPLE}
             rows={9}
-            className="w-full rounded border p-2 font-mono text-xs"
+            className={`${fieldClass} h-auto p-2 font-mono text-xs`}
           />
         </Field>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="submit"
-            className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white"
-          >
-            Import pilot data
-          </button>
-          <button
-            type="button"
-            onClick={viewCaseStudy}
-            className="rounded border px-3 py-1.5 text-sm hover:border-leaf"
-          >
+          <Button type="submit">Import pilot data</Button>
+          <Button type="button" variant="outline" onClick={viewCaseStudy}>
             View pilot case study
-          </button>
+          </Button>
         </div>
       </form>
 
-      {status && <p className="mt-2 text-sm text-green-700">{status}</p>}
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {/* A successful import is announced too: this form's only confirmation is
+          this line, and it sits below a long textarea that is likely offscreen. */}
+      {status && (
+        <p role="status" className="mt-2 text-sm text-ok-fg">
+          {status}
+        </p>
+      )}
+      <FormError className="mt-2">{error}</FormError>
 
       {caseStudy && <CaseStudy cs={caseStudy} country={country} />}
     </div>

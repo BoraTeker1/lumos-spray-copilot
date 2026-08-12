@@ -15,22 +15,25 @@ import {
 } from "@/lib/labels";
 import { DECISION_OUTCOME_TONES, tone } from "@/lib/tones";
 
-// One outcome, one look. Wording stays cautious: BLOCK blocks an application,
-// nothing here ever instructs anyone to spray. Colors come from the shared
-// tone table (lib/tones.js); labels/icons/captions live here.
+// One outcome, one look. Wording stays cautious: BLOCKED blocks an application,
+// nothing here ever instructs anyone to spray — APPROVED means no conflict was
+// found in the entered records, never a clearance to spray. Labels are the
+// state form, matching STATUS.verdict in lib/status.js so the verbose banner
+// and the compact table chip name the same verdict the same way. Colors come
+// from the shared tone table (lib/tones.js); icons/captions live here.
 const OUTCOME_CONTENT = {
   approve: {
-    label: "APPROVE",
+    label: "APPROVED",
     icon: CircleCheck,
     caption: "No conflicts found from entered records",
   },
   block: {
-    label: "BLOCK",
+    label: "BLOCKED",
     icon: OctagonX,
     caption: "Conflicts with entered harvest / re-entry timing",
   },
   delay: {
-    label: "DELAY",
+    label: "DELAYED",
     icon: Clock,
     caption: "A re-entry interval is still active",
   },
@@ -59,8 +62,8 @@ function SourceChip({ rule }) {
     <span
       className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ${
         verified
-          ? "bg-green-50 text-green-800 ring-green-600/20"
-          : "bg-gray-50 text-gray-600 ring-gray-300"
+          ? "bg-ok-bg text-ok-fg ring-leaf/20"
+          : "bg-canvas text-muted ring-line"
       }`}
     >
       {AUTHORITY_SOURCE_LABELS[rule.source_authority] || rule.source_authority}
@@ -75,11 +78,11 @@ function InputsList({ inputs }) {
   const shown = Object.entries(inputs || {}).filter(([, v]) => v !== null && v !== undefined);
   if (!shown.length) return null;
   return (
-    <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-gray-600 sm:grid-cols-3">
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-muted sm:grid-cols-3">
       {shown.map(([k, v]) => (
         <div key={k} className="flex min-w-0 justify-between gap-2 sm:block">
-          <dt className="truncate text-gray-400">{k.replace(/_/g, " ")}</dt>
-          <dd className="truncate font-medium text-gray-700">{String(v)}</dd>
+          <dt className="truncate text-muted">{k.replace(/_/g, " ")}</dt>
+          <dd className="truncate font-medium text-ink">{String(v)}</dd>
         </div>
       ))}
     </dl>
@@ -113,14 +116,14 @@ export default function DecisionResult({ planned, compact = false }) {
   const decided = planned.outcome && planned.outcome !== "planned";
 
   return (
-    <div className={`rounded-lg border p-3 ${meta.box}`}>
+    <div className={`rounded-control border p-3 ${meta.box}`}>
       {/* ------------------------------------------------ 5-second summary */}
       <div className="flex flex-wrap items-center gap-2">
         <span className={`inline-flex items-center gap-1.5 text-sm font-bold ${meta.text}`}>
           <Icon className="h-4 w-4" />
           {showProvisionalPrefix ? `PROVISIONAL ${meta.label}` : meta.label}
         </span>
-        <span className="text-xs text-gray-600">{meta.caption}</span>
+        <span className="text-xs text-muted">{meta.caption}</span>
       </div>
 
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -144,7 +147,7 @@ export default function DecisionResult({ planned, compact = false }) {
       </div>
 
       {/* Why (one sentence) */}
-      <p className="mt-2 text-xs text-gray-700">
+      <p className="mt-2 text-xs text-ink">
         <span className="font-semibold">Why:</span>{" "}
         {topRule ? topRule.detail : "All checks passed from entered records."}
       </p>
@@ -154,27 +157,27 @@ export default function DecisionResult({ planned, compact = false }) {
         Next action: {planned.required_next_action}
       </p>
       {planned.pca_next_action && (
-        <p className="mt-1 rounded-md bg-white/70 p-2 text-sm text-gray-800">
+        <p className="mt-1 rounded-control bg-surface/70 p-2 text-sm text-ink">
           <span className="font-semibold">PCA guidance:</span> {planned.pca_next_action}
         </p>
       )}
 
       {/* Final recorded result */}
       {decided && (
-        <p className="mt-1.5 rounded-md bg-white/70 p-2 text-sm text-gray-800">
+        <p className="mt-1.5 rounded-control bg-surface/70 p-2 text-sm text-ink">
           <span className="font-semibold">
             Final result: {RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
             {planned.outcome_product_name && ` → ${planned.outcome_product_name}`}
           </span>
           {planned.outcome_date && (
-            <span className="text-xs text-gray-600"> · recorded {planned.outcome_date}</span>
+            <span className="text-xs text-muted"> · recorded {planned.outcome_date}</span>
           )}
         </p>
       )}
 
       {/* Stale-snapshot warning: the farm's harvest date changed after this check. */}
       {planned.harvest_date_changed_since_check && (
-        <p className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+        <p className="mt-1.5 rounded-control border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
           The farm&apos;s expected harvest date has changed since this check ran — the
           calculations below use the harvest date entered at check time. Re-run the check
           before relying on this decision.
@@ -185,7 +188,7 @@ export default function DecisionResult({ planned, compact = false }) {
           Shown separately from the harvest warning because the fix is different — a
           revised label needs a fresh check against the new directions. */}
       {planned.label_reference_stale && (
-        <p className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+        <p className="mt-1.5 rounded-control border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
           The pesticide label this check was run against has since been revised — the
           calculations below use the label values on record at check time. Re-run the
           check against the current label before relying on this decision.
@@ -194,8 +197,8 @@ export default function DecisionResult({ planned, compact = false }) {
 
       {/* ------------------------------------------- collapsed audit detail */}
       {payload && (
-        <details className="mt-2 text-xs text-gray-600">
-          <summary className="cursor-pointer select-none font-medium text-gray-500 hover:text-gray-800">
+        <details className="mt-2 text-xs text-muted">
+          <summary className="cursor-pointer select-none font-medium text-muted hover:text-ink">
             Audit detail — {rules.length} check(s) ran, {triggered.length} triggered ·
             calculations, inputs, sources
           </summary>
@@ -203,11 +206,11 @@ export default function DecisionResult({ planned, compact = false }) {
           {triggered.length > 0 && (
             <ul className="mt-1.5 space-y-1.5">
               {triggered.map((r) => (
-                <li key={r.rule_id} className="rounded-md bg-white/70 p-2 text-xs text-gray-800">
+                <li key={r.rule_id} className="rounded-control bg-surface/70 p-2 text-xs text-ink">
                   <div className="flex items-start gap-1.5">
                     <TriangleAlert
                       className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
-                        r.severity === "critical" ? "text-red-600" : "text-amber-600"
+                        r.severity === "critical" ? "text-risk-fg" : "text-warn-fg"
                       }`}
                     />
                     <div className="min-w-0">
@@ -217,7 +220,7 @@ export default function DecisionResult({ planned, compact = false }) {
                       </div>
                       <p className="mt-0.5">{r.detail}</p>
                       {r.calculation && (
-                        <code className="mt-1 block truncate rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-700">
+                        <code className="mt-1 block truncate rounded bg-draft-bg px-1.5 py-0.5 font-mono text-[11px] text-ink">
                           {r.calculation}
                         </code>
                       )}
@@ -229,8 +232,8 @@ export default function DecisionResult({ planned, compact = false }) {
           )}
 
           {missing.length > 0 && (
-            <div className="mt-2 rounded-md bg-white/70 p-2 text-xs text-gray-700">
-              <div className="font-semibold text-gray-800">Missing information</div>
+            <div className="mt-2 rounded-control bg-surface/70 p-2 text-xs text-ink">
+              <div className="font-semibold text-ink">Missing information</div>
               <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
                 {missing.map((m, i) => (
                   <li key={i}>{m}</li>
@@ -240,9 +243,9 @@ export default function DecisionResult({ planned, compact = false }) {
           )}
 
           {notEvaluated.length > 0 && (
-            <div className="mt-2 rounded-md bg-white/70 p-2 text-xs text-gray-700">
-              <div className="font-semibold text-gray-800">Not evaluated</div>
-              <p className="mt-0.5 text-[11px] text-gray-600">
+            <div className="mt-2 rounded-control bg-surface/70 p-2 text-xs text-ink">
+              <div className="font-semibold text-ink">Not evaluated</div>
+              <p className="mt-0.5 text-[11px] text-muted">
                 These checks did not run. Each states why — none was guessed or simulated.
               </p>
               <ul className="mt-1 list-disc space-y-0.5 pl-4">
@@ -259,7 +262,7 @@ export default function DecisionResult({ planned, compact = false }) {
             <ul className="mt-2 space-y-1">
               {passed.map((r) => (
                 <li key={r.rule_id} className="flex items-start gap-1.5">
-                  <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
+                  <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok-fg" />
                   <span>
                     <span className="font-medium">{r.name}:</span> {r.detail}{" "}
                     <SourceChip rule={r} />
@@ -270,19 +273,19 @@ export default function DecisionResult({ planned, compact = false }) {
           )}
 
           {payload.authority_basis && (
-            <p className="mt-2 text-[11px] leading-snug text-gray-600">
+            <p className="mt-2 text-[11px] leading-snug text-muted">
               {payload.authority_basis}
             </p>
           )}
 
-          <div className="mt-2 rounded-md bg-white/70 p-2">
-            <div className="mb-1 font-semibold text-gray-700">Inputs used</div>
+          <div className="mt-2 rounded-control bg-surface/70 p-2">
+            <div className="mb-1 font-semibold text-ink">Inputs used</div>
             <InputsList inputs={payload.inputs_used} />
           </div>
         </details>
       )}
 
-      <p className="mt-2 text-[11px] leading-snug text-gray-500">
+      <p className="mt-2 text-[11px] leading-snug text-muted">
         {payload?.disclaimer ||
           "PHI and REI checks use values entered by the user and are not independently verified against the current pesticide label."}{" "}
         Decision support only — never a prescription.

@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { useDemoTag } from "@/lib/farm-context";
+import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 const EMPTY = {
   product_name: "",
@@ -62,113 +66,115 @@ export default function SprayEventForm({ farmId, onCreated }) {
     }
   }
 
-  const input = "w-full rounded border px-2 py-1 text-sm";
-
   return (
-    <form onSubmit={submit} className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        <input
-          className={input}
-          placeholder="Product name *"
-          required
-          value={form.product_name}
-          onChange={(e) => update("product_name", e.target.value)}
-        />
-        <input
-          className={input}
-          placeholder="Active ingredient"
-          value={form.active_ingredient}
-          onChange={(e) => update("active_ingredient", e.target.value)}
-        />
-        <input
-          className={input}
-          placeholder="Pesticide class"
-          value={form.pesticide_class}
-          onChange={(e) => update("pesticide_class", e.target.value)}
-        />
-        <input
-          className={input}
-          placeholder="Target pest / disease"
-          value={form.target_pest_or_disease}
-          onChange={(e) => update("target_pest_or_disease", e.target.value)}
-        />
-        <input
-          className={input}
-          placeholder="Dose (e.g. 2.5 g/L)"
-          value={form.dose}
-          onChange={(e) => update("dose", e.target.value)}
-        />
-        <input
-          type="number"
-          step="any"
-          min="0"
-          className={input}
-          placeholder="Rate amount (e.g. 3.75)"
-          value={form.rate_amount}
-          onChange={(e) => update("rate_amount", e.target.value)}
-        />
-        <input
-          className={input}
-          placeholder="Rate unit (e.g. lb/acre)"
-          value={form.rate_unit}
-          onChange={(e) => update("rate_unit", e.target.value)}
-        />
-        <input
-          type="number"
-          step="any"
-          min="0"
-          className={input}
-          placeholder="Treated acres"
-          value={form.treated_acres}
-          onChange={(e) => update("treated_acres", e.target.value)}
-        />
-        <label className="text-xs text-gray-500">
-          Application date *
-          <input
-            type="date"
-            className={input}
+    // Fields stack on a phone: two columns of labelled controls inside a farm
+    // detail card left each one about 130px wide, which clipped the longer
+    // regulatory labels outright.
+    <form onSubmit={submit} className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Product name" required>
+          <Input
             required
+            value={form.product_name}
+            onChange={(e) => update("product_name", e.target.value)}
+          />
+        </Field>
+        <Field label="Active ingredient">
+          <Input
+            value={form.active_ingredient}
+            onChange={(e) => update("active_ingredient", e.target.value)}
+          />
+        </Field>
+        <Field label="Pesticide class">
+          <Input
+            value={form.pesticide_class}
+            onChange={(e) => update("pesticide_class", e.target.value)}
+          />
+        </Field>
+        <Field label="Target pest / disease">
+          <Input
+            value={form.target_pest_or_disease}
+            onChange={(e) => update("target_pest_or_disease", e.target.value)}
+          />
+        </Field>
+        <Field label="Dose" hint="e.g. 2.5 g/L">
+          <Input value={form.dose} onChange={(e) => update("dose", e.target.value)} />
+        </Field>
+        <Field label="Rate amount" hint="e.g. 3.75">
+          <Input
+            type="number"
+            step="any"
+            min="0"
+            className="tabular"
+            value={form.rate_amount}
+            onChange={(e) => update("rate_amount", e.target.value)}
+          />
+        </Field>
+        <Field label="Rate unit" hint="e.g. lb/acre">
+          <Input
+            value={form.rate_unit}
+            onChange={(e) => update("rate_unit", e.target.value)}
+          />
+        </Field>
+        <Field label="Treated acres">
+          <Input
+            type="number"
+            step="any"
+            min="0"
+            className="tabular"
+            value={form.treated_acres}
+            onChange={(e) => update("treated_acres", e.target.value)}
+          />
+        </Field>
+        <Field label="Application date" required>
+          <Input
+            type="date"
+            required
+            className="tabular"
             value={form.application_date}
             onChange={(e) => update("application_date", e.target.value)}
           />
-        </label>
-        <input
-          type="number"
-          step="0.01"
-          className={input}
-          placeholder="Cost"
-          value={form.cost}
-          onChange={(e) => update("cost", e.target.value)}
-        />
-        <input
-          type="number"
-          className={input}
-          placeholder="Pre-harvest interval (days)"
-          value={form.pre_harvest_interval_days}
-          onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
-        />
-        <input
-          type="number"
-          className={input}
-          placeholder="Re-entry interval (hours)"
-          value={form.re_entry_interval_hours}
-          onChange={(e) => update("re_entry_interval_hours", e.target.value)}
-        />
+        </Field>
+        <Field label="Cost">
+          <Input
+            type="number"
+            step="0.01"
+            className="tabular"
+            value={form.cost}
+            onChange={(e) => update("cost", e.target.value)}
+          />
+        </Field>
+        {/* PHI and REI were placeholder-only, so the label disappeared as soon
+            as a number was typed — on the two fields the engine's harvest-timing
+            and re-entry checks read. Both now say what unit they are in. */}
+        <Field label="Pre-harvest interval (days)">
+          <Input
+            type="number"
+            className="tabular"
+            value={form.pre_harvest_interval_days}
+            onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
+          />
+        </Field>
+        <Field label="Re-entry interval (hours)">
+          <Input
+            type="number"
+            className="tabular"
+            value={form.re_entry_interval_hours}
+            onChange={(e) => update("re_entry_interval_hours", e.target.value)}
+          />
+        </Field>
       </div>
-      <textarea
-        className={input}
-        placeholder="Notes"
-        value={form.notes}
-        onChange={(e) => update("notes", e.target.value)}
-      />
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <button
-        type="submit"
-        disabled={saving}
-        className="rounded bg-leaf px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      >
+      <Field label="Notes">
+        <Textarea
+          rows={3}
+          value={form.notes}
+          onChange={(e) => update("notes", e.target.value)}
+        />
+      </Field>
+      <FormError>{error}</FormError>
+      <Button type="submit" disabled={saving}>
         {saving ? "Saving…" : "Add spray event"}
-      </button>
+      </Button>
     </form>
   );
 }

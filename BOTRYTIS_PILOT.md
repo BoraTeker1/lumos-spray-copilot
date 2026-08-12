@@ -60,7 +60,17 @@ threshold table gets transcribed from the primary source — author, year, coeff
 and the source's crop, region and validation conditions recorded verbatim — or the rule
 keeps abstaining.
 
-Adding it later is a one-function change. The plumbing and the tests already exist.
+Adding it later is a **data-only** change as of 2026-08-06. `app/botrytis_thresholds.py`
+is the empty transcription source (sibling of `app/label_table.py`: frozen, kw-only, no
+provenance defaults, so an uncited table raises at import), and
+`BotrytisWetnessV1.evaluate` is now implemented and tested against **synthetic** tables
+built in `tests/test_backtest.py` — never against real coefficients, since a test that
+needed real numbers to pass would be pressure to invent them. Fill the table and the
+rule works with no other code change.
+
+If the primary source's table is not shaped like `ThresholdRow`, **change the dataclass
+to match the source — never reshape the source to fit the struct.** Reshaping a
+published table is a transcription error no test can see.
 
 **And once supplied, it stays honest.** The known strawberry Botrytis advisory work is
 Florida-based. `local_validation_status` therefore reads:

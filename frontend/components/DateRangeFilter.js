@@ -17,7 +17,7 @@ export default function DateRangeFilter({ value, onChange }) {
         className="h-9 w-36 text-xs"
         aria-label="From date"
       />
-      <span className="text-xs text-gray-400">–</span>
+      <span className="text-xs text-muted">–</span>
       <label className="sr-only" htmlFor="date-to">To date</label>
       <Input
         id="date-to"

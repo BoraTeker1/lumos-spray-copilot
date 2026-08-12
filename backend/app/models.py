@@ -417,6 +417,15 @@ class RiskInputSnapshot(Base):
     # reproduce this exactly, which is what makes an assessment auditable.
     input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     excluded: Mapped[list | None] = mapped_column(JSON)
+    # Which admissibility rule produced this row: point_in_time (both timestamps, the
+    # proof-grade basis the live pilot uses) or retrospective_reconstruction
+    # (observed_at only, the historical scan's weaker basis). Nullable with a
+    # point-in-time default so every row written before this column existed reads
+    # correctly — they were all point-in-time, because nothing else could build one.
+    # See `app/risk_snapshot.py` for why the two must never be confused.
+    basis: Mapped[str | None] = mapped_column(
+        String(40), default="point_in_time", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
 
@@ -475,6 +484,80 @@ class DiseaseRiskAssessment(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
     data_source: Mapped[str] = mapped_column(String(40), default="rule_engine")
     data_confidence: Mapped[str] = mapped_column(String(40), default="computed")
+
+
+class OpportunityScan(Base):
+    """One historical opportunity scan over a past season. Append-only.
+
+    Deliberately NOT a flag on `DiseaseRiskAssessment`. That table is the prospective
+    pilot's record of what a rule said about an upcoming spray, and the pilot's central
+    design commitment is keeping four moments strictly separate (see `PcaDisposition`).
+    A retrospective scan is a fifth thing: it reads a weaker snapshot basis, it makes a
+    weaker claim, and its rows must never be counted in a calibration join or appear in
+    a PCA-facing serializer. Giving it its own table makes all of that true by
+    construction rather than by a WHERE clause somebody has to remember.
+
+    There is no avoided-spray column and no reduction column, mirroring
+    `backtest.ScanResult`. A scan cannot express that a spray was avoidable, because
+    every historical outcome followed the actual spray.
+    """
+    __tablename__ = "opportunity_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+
+    scan_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    target: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Always retrospective_reconstruction today. Stored rather than assumed so a future
+    # point-in-time scan (possible once a farm has been ingesting prospectively for a
+    # season) is distinguishable from this one without reading the code that wrote it.
+    basis: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    lookback_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    dates_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assessed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    band_counts: Mapped[dict | None] = mapped_column(JSON)
+    # The useful output while the threshold table is empty: a per-farm work list of
+    # exactly what stopped each date from being assessable.
+    reason_counts: Mapped[dict | None] = mapped_column(JSON)
+    grade_counts: Mapped[dict | None] = mapped_column(JSON)
+
+    run_by: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    items: Mapped[list["OpportunityScanItem"]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
+
+
+class OpportunityScanItem(Base):
+    """One replayed decision date within a scan. Append-only.
+
+    Carries its snapshot digest so a reader can reproduce the inputs behind any single
+    date — the same auditability property `RiskInputSnapshot` gives the live pilot.
+    """
+    __tablename__ = "opportunity_scan_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunity_scans.id"), nullable=False, index=True
+    )
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    risk_band: Mapped[str] = mapped_column(String(20), nullable=False)
+    abstained: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Every reason, not just the first.
+    reasons: Mapped[list | None] = mapped_column(JSON)
+    evidence_grade: Mapped[str | None] = mapped_column(String(2))
+    probability_or_index: Mapped[float | None] = mapped_column(Float)
+    input_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    excluded_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    scan: Mapped["OpportunityScan"] = relationship(back_populates="items")
 
 
 class PcaDisposition(Base):
@@ -631,6 +714,11 @@ class BlockOutcomeObservation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     block_id: Mapped[int] = mapped_column(ForeignKey("blocks.id"), nullable=False, index=True)
+    # The season this measurement belongs to (2026-08-12). Nullable and stamped like
+    # every other spine link: an outcome recorded before the farm had a cycle is
+    # honestly unattributed, and the closeout reports how many it left out rather
+    # than folding another season's harvest into this one's yield.
+    crop_cycle_id: Mapped[int | None] = mapped_column(ForeignKey("crop_cycles.id"), index=True)
     pilot_protocol_id: Mapped[int | None] = mapped_column(
         ForeignKey("pilot_protocols.id"), index=True
     )
@@ -1314,6 +1402,11 @@ class SupplierQuote(Base):
     )
     supplier_name: Mapped[str] = mapped_column(String(200), nullable=False)
     supplier_contact: Mapped[str | None] = mapped_column(String(200))
+    # The structured link, added 2026-08-07. NULLABLE on purpose: `supplier_name` above
+    # stays authoritative for what was actually entered, and a quote for a supplier
+    # nobody has registered keeps working rather than being blocked or attached to a
+    # guess. Same discipline as SprayEvent.treated_acres + treated_area_unit.
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), index=True)
     # submitted / selected / withdrawn (stored; expiry/not_selected are derived)
     status: Mapped[str] = mapped_column(String(20), default=procurement_status.QUOTE_SUBMITTED)
     delivery_cost: Mapped[float] = mapped_column(Float, default=0.0)
@@ -1364,6 +1457,14 @@ class SupplierQuoteItem(Base):
         ForeignKey("input_plan_items.id"), nullable=False, index=True
     )
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # The catalogue link, added 2026-08-07, and the reason `InputProduct` stopped being
+    # an orphan. NULLABLE: an unlinked line is EXCLUDED from price dispersion and
+    # counted, never bucketed by name — see procurement_analytics.build_report. Grouping
+    # free text would report three spellings of one product as three products with no
+    # spread each, which reads as "prices are consistent".
+    input_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("input_products.id"), index=True
+    )
     is_substitution: Mapped[bool] = mapped_column(Boolean, default=False)
     substitution_reason: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
@@ -1379,18 +1480,31 @@ class SupplierQuoteItem(Base):
 
 
 class FinancingOffer(Base):
-    """A manually entered INDICATIVE financing offer against one supplier quote.
+    """A manually entered INDICATIVE financing offer.
 
-    Phase 1 never moves money: no underwriting, no origination, no repayment
-    collection. An offer is created `indicative`; the grower's accept/decline is
-    one-shot; `expired` is derived from expires_on and never stored, so a stale
-    offer can never be accepted. Every serialized offer carries the disclaimer.
+    Attached to EXACTLY ONE of a supplier quote (input financing, the original case)
+    or a financing request (season financing, added 2026-08-12). Both columns are
+    nullable and `crud` enforces the exactly-one rule; a SQLite CHECK constraint under
+    Alembic batch mode costs more than it buys, and the invariant is pinned by test.
+
+    Lumos never moves money: no underwriting here, no origination, no repayment
+    collection, and no APR or amortisation column — a lender's cost is carried as the
+    verbatim sentences they stated. An offer is created `indicative`; the grower's
+    select/decline is one-shot; `expired` is derived from expires_on and never stored,
+    so a stale offer can never be selected. Every serialized offer carries the
+    disclaimer.
     """
     __tablename__ = "financing_offers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    supplier_quote_id: Mapped[int] = mapped_column(
-        ForeignKey("supplier_quotes.id"), nullable=False, index=True
+    supplier_quote_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_quotes.id", name="fk_financing_offers_supplier_quote_id"),
+        nullable=True, index=True,
+    )
+    # Season-level financing, as opposed to financing one input purchase.
+    financing_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("financing_requests.id", name="fk_financing_offers_request_id"),
+        nullable=True, index=True,
     )
     provider_name: Mapped[str] = mapped_column(String(200), nullable=False)
     requested_amount: Mapped[float] = mapped_column(Float, nullable=False)
@@ -1413,7 +1527,12 @@ class FinancingOffer(Base):
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
-    supplier_quote: Mapped["SupplierQuote"] = relationship(back_populates="financing_offers")
+    supplier_quote: Mapped["SupplierQuote | None"] = relationship(
+        back_populates="financing_offers"
+    )
+    financing_request: Mapped["FinancingRequest | None"] = relationship(
+        back_populates="offers"
+    )
 
     @property
     def offer_state(self) -> str:
@@ -2290,6 +2409,9 @@ class CropCycle(Base):
     operations: Mapped[list["Operation"]] = relationship(
         back_populates="crop_cycle", cascade="all, delete-orphan"
     )
+    sales: Mapped[list["SaleRecord"]] = relationship(
+        back_populates="crop_cycle", cascade="all, delete-orphan"
+    )
 
 
 class Operation(Base):
@@ -2315,6 +2437,14 @@ class Operation(Base):
     # planting / irrigation / fertilization / crop_protection / scouting / harvest /
     # tillage / other
     operation_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # A LIGHTWEIGHT grouping for the season's cost breakdown — crop_protection /
+    # fertilizer_nutrition / irrigation / labor / equipment_operations /
+    # planting_materials / harvest_postharvest / other. Nullable, and defaulted from
+    # `operation_type` only where the mapping is unambiguous; a fertiliser pass whose
+    # cost is mostly hired labour is a judgement nobody recorded, so the caller may
+    # override and nothing infers past the obvious. This is a breakdown, not a chart of
+    # accounts: no sub-ledgers, no allocation rules, no double entry.
+    cost_category: Mapped[str | None] = mapped_column(String(40), index=True)
     planned_on: Mapped[date | None] = mapped_column(Date)
     performed_on: Mapped[date | None] = mapped_column(Date, index=True)
     area_m2: Mapped[float | None] = mapped_column(Float)
@@ -2330,6 +2460,66 @@ class Operation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
     crop_cycle: Mapped["CropCycle | None"] = relationship(back_populates="operations")
+
+
+class SaleRecord(Base):
+    """One recorded sale or settlement of a crop cycle's harvest. Append-only.
+
+    The revenue half of the season, and the first money the platform has ever recorded
+    coming IN. Deliberately a record of a transaction that happened, never a valuation:
+    `market.pricing` can quote a price series, and a quoted price is not revenue. Nothing
+    here reads that module, and nothing here may — a season priced at what the market was
+    doing is a forecast wearing a settlement's clothes.
+
+    Three properties carry the weight.
+
+    GROSS, DEDUCTIONS AND NET ARE THREE NUMBERS, not one. A packer settlement nets out
+    commission, freight and cooling before the grower sees anything, and collapsing that
+    into a single "revenue" figure loses the distinction between what the crop sold for
+    and what the farm received. Both are true and they answer different questions.
+
+    NEVER EDITED, same as `SupplierQuote`: a corrected settlement is a new row pointing at
+    the one it supersedes, so what the grower saw when they closed the season survives.
+
+    `recorded_at` is stamped at persist time and never back-dated (ENGINEERING_GUIDELINES.md section 9) —
+    a settlement entered in March for a January sale was not known in January.
+    """
+    __tablename__ = "sale_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    crop_cycle_id: Mapped[int] = mapped_column(
+        ForeignKey("crop_cycles.id"), nullable=False, index=True
+    )
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    sale_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Quantity sold, in the unit the settlement states. Not converted on the way in;
+    # the closeout normalises for display and refuses when it cannot.
+    quantity: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    unit_price: Mapped[float | None] = mapped_column(Float)
+    # What the crop sold for, before deductions. Stored when stated; otherwise derived
+    # at read time from quantity x unit_price, and the payload says which it was.
+    gross_amount: Mapped[float | None] = mapped_column(Float)
+    # Commission, freight, cooling — what the buyer withheld. NOT a season cost: it never
+    # reaches `_season_costs`, or it would be subtracted twice.
+    deductions_amount: Mapped[float | None] = mapped_column(Float)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    buyer_name: Mapped[str | None] = mapped_column(String(200))
+    # The settlement or PO number, as printed — what a grower matches against a cheque.
+    reference: Mapped[str | None] = mapped_column(String(120))
+    grade: Mapped[str | None] = mapped_column(String(60))
+    market: Mapped[str | None] = mapped_column(String(60))
+    notes: Mapped[str | None] = mapped_column(Text)
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("sale_records.id"))
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime, default=clock.current_datetime, nullable=False
+    )
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    crop_cycle: Mapped["CropCycle"] = relationship(back_populates="sales")
 
 
 class InputProduct(Base):
@@ -2362,3 +2552,529 @@ class InputProduct(Base):
     data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+# ---------------------------------------------------------------------------
+# Marketplace (2026-08-07).
+#
+# Procurement existed before this as a concierge workflow: an operator typed a
+# supplier's name as free text on each quote, and nothing linked one quote's
+# "Switch 62.5WG" to another's "Switch 62.5 WG". These three tables are what turn
+# that into a marketplace — a supplier is an entity, a quoted line points at a
+# catalogued product, and an RFQ leaving the building is a recorded act.
+#
+# What did NOT change: quotes are still returned in entry order, there is still no
+# ranking column anywhere, and Lumos still takes no commission. The catalogue makes
+# comparison POSSIBLE; it does not make Lumos a broker.
+# ---------------------------------------------------------------------------
+class Supplier(Base):
+    """A supplier as an entity rather than a string on each quote.
+
+    `SupplierQuote.supplier_name` is kept and still populated — the same discipline as
+    `SprayEvent.treated_acres` + `treated_area_unit`: record what the human actually
+    said, and carry the structured link beside it. A quote entered before this table
+    existed, or for a supplier nobody has registered yet, keeps working with
+    `supplier_id` NULL rather than being blocked or silently attached to a guess.
+    """
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Normalised name for exact-match lookup. NOT unique: two legally distinct
+    # businesses can share a trading name, and collapsing them would misattribute a
+    # quote — the same identity rule `PesticideProduct.epa_reg_base` follows.
+    canonical_name: Mapped[str | None] = mapped_column(String(200), index=True)
+    contact_name: Mapped[str | None] = mapped_column(String(200))
+    contact_email: Mapped[str | None] = mapped_column(String(200))
+    contact_phone: Mapped[str | None] = mapped_column(String(60))
+    service_area: Mapped[str | None] = mapped_column(String(200))
+    # active / inactive. A supplier is never deleted: quotes reference them, and a
+    # deleted supplier would orphan a decision a grower already acted on.
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    catalog_entries: Mapped[list["SupplierProduct"]] = relationship(
+        back_populates="supplier", cascade="all, delete-orphan"
+    )
+
+
+class SupplierProduct(Base):
+    """A supplier offers a catalogued product. The catalogue, finally joined up.
+
+    `InputProduct` has existed since the entity-spine phase with zero references
+    anywhere else in the codebase. This is the table that gives it one, and the reason
+    it matters is `procurement_analytics`: dispersion must be grouped by product
+    IDENTITY, because grouping by free-text name reports three spellings of one product
+    as three products with no spread each — which reads as "prices are consistent".
+
+    Carries no price. A price belongs to a quote, at a moment, for a quantity; a price
+    on a catalogue row would be a list price that nobody quoted and that would go stale
+    invisibly.
+    """
+    __tablename__ = "supplier_products"
+    __table_args__ = (
+        Index("uq_supplier_product", "supplier_id", "input_product_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("suppliers.id"), nullable=False, index=True
+    )
+    input_product_id: Mapped[int] = mapped_column(
+        ForeignKey("input_products.id"), nullable=False, index=True
+    )
+    supplier_sku: Mapped[str | None] = mapped_column(String(120))
+    pack_size: Mapped[str | None] = mapped_column(String(60))
+    typical_lead_time_days: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    supplier: Mapped["Supplier"] = relationship(back_populates="catalog_entries")
+
+
+class RfqTransmission(Base):
+    """An append-only record of an RFQ being sent to a supplier.
+
+    Before this, "submit for quotes" set a status and stopped: the RFQ was never
+    transmitted anywhere, and a human was expected to notice it in an operator dropdown.
+    That is a real gap between what the state machine claims and what happens, and it is
+    the kind of gap that only becomes visible when a grower asks why nobody quoted.
+
+    Append-only, like every other consequential act here: a transmission is a thing that
+    either happened or did not, and re-sending is a NEW row rather than an edit of the
+    old one. `status` records the outcome, including `skipped_no_transport` — which is
+    what every row says today, because no transport is configured and the adapter ships
+    inert exactly like `ingest/cimis.py` without an AppKey.
+    """
+    __tablename__ = "rfq_transmissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    input_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("input_plans.id"), nullable=False, index=True
+    )
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), index=True)
+    # As-addressed, kept even when supplier_id is set: what we actually sent to.
+    sent_to: Mapped[str | None] = mapped_column(String(200))
+    transport: Mapped[str] = mapped_column(String(40), nullable=False)
+    # queued / sent / failed / skipped_no_transport
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+# ---------------------------------------------------------------------------
+# Finance persistence (2026-08-07, third pass).
+#
+# The decision models existed and computed on read, so nothing survived the request.
+# `credit_scoring.Score.inputs_digest` was built to answer "what did you know when you
+# declined me" — a question with legal weight — and had nowhere to live.
+#
+# THE INVARIANT ACROSS ALL FOUR ASSESSMENT TABLES: a row records EITHER an outcome OR a
+# refusal, never both and never neither. `refusal_code IS NULL` iff the assessment
+# produced a result. This is the same construction as `FeatureValue` storing an
+# abstention as `value IS NULL` + non-empty `reasons`, and it exists for the same
+# reason: a refusal is a real event about a real farm on a real date, and dropping it
+# would leave a borrower unable to see that no assessment was even possible.
+#
+# All four are APPEND-ONLY. There is no update path and no delete path. A reassessment
+# is a new row at a new `as_of`; a correction to an input produces a new row too. What
+# a lender or a grower saw on a date must stay recoverable.
+# ---------------------------------------------------------------------------
+class CreditAssessment(Base):
+    """One executed scorecard, or one recorded refusal to score. Append-only.
+
+    `inputs_digest` is the point-in-time guarantee: recomputing at the same `as_of` must
+    reproduce it, exactly as `FeatureValue.inputs_digest` does. A digest that moves is
+    proof an input became visible that should not have been — and here that means an
+    assessment was made on information the farm did not have at the time.
+    """
+    __tablename__ = "credit_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    # Which scorecard ran. Recorded per row rather than referenced, because a scorecard
+    # is transcribed from a lender document that may be re-transcribed later — and an
+    # assessment must stay readable against the card as it was when it ran.
+    scorecard_lender: Mapped[str | None] = mapped_column(String(200))
+    scorecard_name: Mapped[str | None] = mapped_column(String(200))
+    scorecard_version: Mapped[str | None] = mapped_column(String(60))
+
+    total: Mapped[float | None] = mapped_column(Float)
+    minimum_score: Mapped[float | None] = mapped_column(Float)
+    maximum_score: Mapped[float | None] = mapped_column(Float)
+    inputs_digest: Mapped[str | None] = mapped_column(String(64), index=True)
+    factors: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    assessed_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class UnderwritingDecision(Base):
+    """One policy evaluation, or one recorded refusal. Append-only.
+
+    `outcome` is never "approved" — the vocabulary is conditions_met /
+    conditions_not_met / referred_to_human, and there is no column here that could
+    carry an approval. Storing the evaluation does not turn it into one.
+    """
+    __tablename__ = "underwriting_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    # The assessment this was evaluated against, when one backed it.
+    credit_assessment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_assessments.id"), index=True
+    )
+
+    policy_lender: Mapped[str | None] = mapped_column(String(200))
+    policy_version: Mapped[str | None] = mapped_column(String(60))
+    outcome: Mapped[str | None] = mapped_column(String(40), index=True)
+    rules: Mapped[list | None] = mapped_column(JSON)
+    # Kept as their own columns, not derived from `rules` at read time: the count of
+    # conditions that could not be tested is the number most likely to be quietly
+    # dropped from a summary, and it is the one that must not be.
+    failed_rule_ids: Mapped[list | None] = mapped_column(JSON)
+    not_evaluated_rule_ids: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    decided_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CollateralAsset(Base):
+    """A registered asset. An INPUT, unlike the three assessment tables.
+
+    Append-only with a supersede chain rather than an update, matching every other
+    correctable record here: a revaluation is a new row superseding the old one, so what
+    an asset was assessed at when a decision referenced it stays recoverable.
+
+    `assessed_value` is nullable on purpose — an asset can be registered before anyone
+    values it, and `collateral.value_assets` refuses on it rather than assuming. The
+    valuation basis is required whenever a value is present, because 60% of an insured
+    value and 60% of a market estimate are different numbers.
+    """
+    __tablename__ = "collateral_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    collateral_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    assessed_value: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    valuation_basis: Mapped[str | None] = mapped_column(String(200))
+    valued_on: Mapped[date | None] = mapped_column(Date)
+    # The legal unit the asset attaches to, when it is land-backed.
+    land_parcel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("land_parcels.id"), index=True
+    )
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("collateral_assets.id"), index=True
+    )
+    registered_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class MonitoringSnapshot(Base):
+    """Covenant standing at one moment, or a recorded refusal. Append-only.
+
+    `standing` carries the three-value vocabulary from `monitoring.py` — good_standing /
+    in_breach / unknown — and `unknown` is reachable and common. A two-value column here
+    would have forced "nothing checked" into whichever value was the default, and the
+    one that reads well is compliant.
+    """
+    __tablename__ = "monitoring_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    lender: Mapped[str | None] = mapped_column(String(200))
+    facility_reference: Mapped[str | None] = mapped_column(String(120))
+    standing: Mapped[str | None] = mapped_column(String(40), index=True)
+    covenants: Mapped[list | None] = mapped_column(JSON)
+    breached_covenant_ids: Mapped[list | None] = mapped_column(JSON)
+    unevaluated_covenant_ids: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CoverageAssessment(Base):
+    """One insurance coverage match, or a recorded refusal. Append-only.
+
+    Carries no premium and has no column that could hold one — coverage is matched here,
+    never priced. The valuable column is `missing_evidence`: telling a grower today which
+    claim evidence they do not have beats discovering it at claim time, months later.
+    """
+    __tablename__ = "coverage_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    crop: Mapped[str | None] = mapped_column(String(80))
+    peril: Mapped[str | None] = mapped_column(String(80))
+    products: Mapped[list | None] = mapped_column(JSON)
+
+    refusal_code: Mapped[str | None] = mapped_column(String(60), index=True)
+    refusal_detail: Mapped[str | None] = mapped_column(Text)
+
+    assessed_by: Mapped[str | None] = mapped_column(String(120))
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class ResidueReferenceRecord(Base):
+    """One (commodity, pesticide, program year) summary from a USDA PDP release.
+
+    APPEND-ONLY, and unique on the pair plus the source digest. Unlike
+    `ProductLabelRecord` there is no supersede chain, and the reason is the same one
+    `feature_values` gives for having none: at a fixed program year computed from fixed
+    published bytes, the aggregate must reproduce forever. A row that changed while its
+    digest stayed the same would be proof of a loader bug, and the uniqueness constraint
+    turns that into an integrity error instead of a silent rewrite. USDA re-releasing a
+    corrected year produces a different digest and therefore a visibly different row.
+
+    NOT a regulatory source. `epa_tolerance_value` is USDA's transcription of an EPA
+    tolerance into their own reference workbook — a secondary source. It travels with
+    `residue_reference.AUTHORITY_REFERENCE_DATASET` and must never back a definitive
+    verdict or override a transcribed label (ENGINEERING_GUIDELINES.md §4, §5 authority gating).
+
+    `epa_tolerance_value` NULL means the workbook stated a non-numeric basis (NT / EX /
+    SU) held in `epa_tolerance_basis`, or stated nothing. As everywhere else in this
+    schema, NULL means THE SOURCE IS SILENT — never "no limit".
+    """
+    __tablename__ = "residue_reference_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "commodity_code", "commodity_type", "pesticide_code", "program_year",
+            "domestic_only", "source_digest",
+            name="uq_residue_reference_pair_release",
+        ),
+        Index("ix_residue_reference_lookup", "commodity_code", "pesticide_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # PDP's own codes and names, stored verbatim. Matching to this product's crop
+    # vocabulary happens at read time through app/crop_aliases.py — never by rewriting
+    # USDA's names on the way in.
+    commodity_code: Mapped[str] = mapped_column(String(4), nullable=False)
+    commodity_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    commodity_type: Mapped[str] = mapped_column(String(4), nullable=False, default="")
+    pesticide_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    pesticide_name: Mapped[str] = mapped_column(String(160), nullable=False)
+
+    program_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # Assays run for this pair, INCLUDING non-detects. The denominator of any rate.
+    samples_tested: Mapped[int] = mapped_column(Integer, nullable=False)
+    samples_with_detection: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL when nothing was detected: there is no maximum of an empty set, and 0.0 would
+    # read as "detected at zero" rather than "never detected".
+    max_concentration: Mapped[float | None] = mapped_column(Float)
+    median_detected_concentration: Mapped[float | None] = mapped_column(Float)
+    concentration_unit: Mapped[str | None] = mapped_column(String(8))
+    unit_conflict: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # True when only ORIGIN=1 (US-grown) samples were counted.
+    domestic_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    epa_tolerance_value: Mapped[float | None] = mapped_column(Float)
+    # NT / EX / SU when the workbook stated a code instead of a number.
+    epa_tolerance_basis: Mapped[str | None] = mapped_column(String(4))
+    tolerance_unit: Mapped[str | None] = mapped_column(String(8))
+
+    # Provenance: the release this came from and a digest of the exact bytes read.
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    source_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    loaded_by: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+# ---------------------------------------------------------------------------
+# Season financing, lender policies, and the commercial agreement.
+#
+# Added 2026-08-12, when the farm-intelligence build connected the operational
+# record to the two things it makes possible: a farm that is legible to a lender,
+# and a commercial model Lumos can actually be paid under.
+#
+# The money-movement boundary still holds, and holds STRUCTURALLY. There is no
+# disbursement, repayment, invoice, or settlement table here and no column that
+# could hold one. `FinancingOffer` carries a lender's stated figures verbatim and
+# still has no APR. `CommercialAgreement` records what was agreed;
+# `app/participation.py` calculates what it comes to on recorded evidence. Neither
+# charges anybody.
+# ---------------------------------------------------------------------------
+
+
+class FinancingRequest(Base):
+    """A grower's request to finance a season or a defined farming need.
+
+    Deliberately NOT an application with an outcome. Lumos assembles the evidence a
+    lender asks for and records the indicative terms that come back; the credit
+    decision is the lender's and has no column here. There is no `approved` status
+    for the same reason `underwriting.Outcome` has no `approved` member.
+    """
+    __tablename__ = "financing_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(
+        ForeignKey("farms.id"), nullable=False, index=True
+    )
+    # Nullable: a grower may finance a season, or a need that spans seasons.
+    crop_cycle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crop_cycles.id"), index=True
+    )
+    # input_purchase / working_capital / equipment / land — the vocabulary in
+    # app/financing_terms.FINANCING_PURPOSES, which comes from lender product sheets.
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False)
+    requested_amount: Mapped[float | None] = mapped_column(Float)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    # draft / evidence_assembled / shared / offers_received / offer_selected /
+    # withdrawn. No `approved`, no `funded`, no `declined` — see the docstring.
+    status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    # The lender's policy this request is being read against, when one is on record.
+    lender_policy_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lender_policies.id", name="fk_financing_requests_lender_policy_id"),
+        index=True,
+    )
+    requested_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship()
+    crop_cycle: Mapped["CropCycle | None"] = relationship()
+    lender_policy: Mapped["LenderPolicy | None"] = relationship()
+    offers: Mapped[list["FinancingOffer"]] = relationship(
+        back_populates="financing_request", cascade="all, delete-orphan"
+    )
+    events: Mapped[list["FinancingRequestEvent"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan",
+        order_by="FinancingRequestEvent.id",
+    )
+
+
+class FinancingRequestEvent(Base):
+    """Append-only history of one financing request. Never updated, never deleted."""
+    __tablename__ = "financing_request_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    financing_request_id: Mapped[int] = mapped_column(
+        ForeignKey("financing_requests.id"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    request: Mapped["FinancingRequest"] = relationship(back_populates="events")
+
+
+class LenderPolicy(Base):
+    """A lending partner's WRITTEN criteria, entered with its source.
+
+    The point of this table is that Lumos can evaluate a policy without authoring
+    one. `rules` and `covenants` hold rows shaped exactly like
+    `underwriting_rules.UnderwritingRule` and `monitoring_covenants.Covenant`, so
+    `underwriting.assess(policy=...)` and `monitoring.evaluate(...)` run against a
+    lender's own thresholds. `source_document` is required at the API boundary for
+    the same reason `transcription.Citation` has no defaults: a threshold with no
+    stated origin is indistinguishable from one Lumos invented, and inventing a
+    credit policy is exactly what ENGINEERING_GUIDELINES.md §4 forbids.
+
+    Append-only with a supersede chain, like `ProductLabelRecord`: a lender revising
+    their policy adds a row, and the assessments made under the old one stay readable.
+    """
+    __tablename__ = "lender_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lender: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    policy_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    # Where the rules came from. Never blank — see the docstring.
+    source_document: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500))
+    rules: Mapped[list | None] = mapped_column(JSON)
+    covenants: Mapped[list | None] = mapped_column(JSON)
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    entered_on: Mapped[date | None] = mapped_column(Date)
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lender_policies.id", name="fk_lender_policies_supersedes_id"),
+        index=True,
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CommercialAgreement(Base):
+    """What Lumos and this farm agreed Lumos is paid, and on what basis.
+
+    `terms` is a small JSON object read only by `app/participation.py` — a rate, a
+    fixed amount, an area unit, a cap. Deliberately not a contract-management schema:
+    there are no parties, no clauses, no signature blocks, and no renewal machinery,
+    because none of that is needed to answer the one question this exists for — what
+    does the agreed model come to on this season's recorded evidence.
+
+    APPEND-ONLY with a supersede chain. Renegotiating adds a row; the figure a past
+    season was calculated under stays reproducible, which is the same reason
+    `SaleRecord` and `ProductLabelRecord` supersede rather than update.
+
+    NO MONEY MOVES. There is no invoice, balance, due date, or paid flag on this
+    table or anywhere downstream of it, and `participation.Participation` has no
+    field that could carry one.
+    """
+    __tablename__ = "commercial_agreements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(
+        ForeignKey("farms.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # One of app/participation.AGREEMENT_MODELS.
+    model_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    # {rate_pct} / {amount} / {rate, area_unit} / {cap_amount} — see participation.py.
+    terms: Mapped[dict | None] = mapped_column(JSON)
+    source_document: Mapped[str | None] = mapped_column(Text)
+    # active / superseded / ended
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("commercial_agreements.id", name="fk_commercial_agreements_supersedes_id"),
+        index=True,
+    )
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship()

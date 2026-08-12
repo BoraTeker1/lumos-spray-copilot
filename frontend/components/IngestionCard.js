@@ -5,6 +5,8 @@ import { api } from "@/lib/api";
 import SectionCard from "@/components/SectionCard";
 import { Button } from "@/components/ui/button";
 import { DownloadCloud } from "lucide-react";
+import { FormError } from "@/components/ui/field";
+import { fieldClass } from "@/components/ui/input";
 
 // Ingestion health, for an operator.
 //
@@ -20,12 +22,12 @@ import { DownloadCloud } from "lucide-react";
 // that actually matters.
 
 const STATUS_STYLES = {
-  succeeded: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  running: "bg-blue-50 text-blue-700 border-blue-200",
-  pending: "bg-gray-50 text-gray-600 border-gray-200",
-  skipped_no_credential: "bg-amber-50 text-amber-700 border-amber-200",
-  failed: "bg-rose-50 text-rose-700 border-rose-200",
-  dead: "bg-rose-100 text-rose-800 border-rose-300",
+  succeeded: "bg-ok-bg text-ok-fg border-ok-line",
+  running: "bg-info-bg text-info-fg border-info-line",
+  pending: "bg-canvas text-muted border-line",
+  skipped_no_credential: "bg-warn-bg text-warn-fg border-warn-line",
+  failed: "bg-risk-bg text-risk-fg border-risk-line",
+  dead: "bg-risk-bg text-risk-fg border-risk-line",
 };
 
 const EMPTY_FORM = { farm_id: "", station_id: "", field_id: "", lookback_hours: "6" };
@@ -45,7 +47,7 @@ function StatusChip({ status }) {
 function Counts({ counts }) {
   // Admitted vs fetched side by side, because the DIFFERENCE is the signal.
   return (
-    <span className="font-mono text-xs text-gray-600">
+    <span className="font-mono text-xs text-muted">
       fetched {counts.fetched} · admitted {counts.admitted} · dup {counts.duplicate} ·
       issues {counts.issues}
     </span>
@@ -109,12 +111,12 @@ export default function IngestionCard() {
     >
       <div className="flex flex-col gap-4">
         <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-          <label className="flex flex-col text-xs text-gray-600">
+          <label className="flex flex-col text-xs text-muted">
             Source
             <select
               value={selected}
               onChange={(e) => setSelected(e.target.value)}
-              className="mt-0.5 rounded border px-2 py-1 text-sm"
+              className={`mt-0.5 h-9 py-1 text-sm ${fieldClass}`}
             >
               {runnable.map((s) => (
                 <option key={s.source_key} value={s.source_key}>
@@ -124,12 +126,12 @@ export default function IngestionCard() {
             </select>
           </label>
           {["farm_id", "station_id", "field_id", "lookback_hours"].map((field) => (
-            <label key={field} className="flex flex-col text-xs text-gray-600">
+            <label key={field} className="flex flex-col text-xs text-muted">
               {field}
               <input
                 value={form[field]}
                 onChange={(e) => setForm({ ...form, [field]: e.target.value })}
-                className="mt-0.5 w-28 rounded border px-2 py-1 text-sm"
+                className={`mt-0.5 h-9 w-28 py-1 text-sm ${fieldClass}`}
                 required={field === "farm_id" || field === "station_id"}
               />
             </label>
@@ -141,35 +143,35 @@ export default function IngestionCard() {
 
         {/* A field without a centroid drops every row. Saying so here saves an hour
             of staring at a run whose admitted count is zero. */}
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted">
           A run whose field has no centroid drops every row with{" "}
           <span className="font-mono">no_field_geolocation</span> — set the field&rsquo;s
           coordinates first.
         </p>
 
-        {message && <p className="text-xs text-emerald-700">{message}</p>}
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {message && <p className="text-xs text-ok-fg">{message}</p>}
+        <FormError size="sm">{error}</FormError>
 
         {runs === null ? (
-          <p className="text-sm text-gray-500">Loading…</p>
+          <p className="text-sm text-muted">Loading…</p>
         ) : runs.length === 0 ? (
-          <p className="text-sm text-gray-500">No ingestion runs yet.</p>
+          <p className="text-sm text-muted">No ingestion runs yet.</p>
         ) : (
           <ul className="flex flex-col gap-3">
             {runs.map((run) => (
-              <li key={run.id} className="border-l-2 border-gray-200 pl-3">
+              <li key={run.id} className="border-l-2 border-line pl-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs text-gray-700">
+                  <span className="font-mono text-xs text-ink">
                     #{run.id} {run.source_key}
                   </span>
                   <StatusChip status={run.status} />
                   <Counts counts={run.counts} />
                 </div>
                 {run.error && (
-                  <div className="text-xs text-red-600">{run.error}</div>
+                  <div className="text-xs text-risk-fg">{run.error}</div>
                 )}
                 {run.issues.length > 0 && (
-                  <ul className="mt-1 text-xs text-gray-500">
+                  <ul className="mt-1 text-xs text-muted">
                     {run.issues.map((issue, i) => (
                       <li key={i}>
                         <span className="font-mono">{issue.code}</span>

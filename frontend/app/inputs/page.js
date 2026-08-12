@@ -1,9 +1,11 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FlaskConical, Package, ShoppingCart, TriangleAlert } from "lucide-react";
+import { ChevronRight, FlaskConical, Package, ShoppingCart, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { useFarmContext } from "@/lib/farm-context";
 import { formatCost, formatDate } from "@/lib/format";
@@ -68,7 +70,7 @@ function planColumns() {
               </Badge>
             )}
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-muted">
             {p.items.map((i) => `${i.product_name} (${i.quantity} ${i.unit})`).join(", ") ||
               "No items"}
           </div>
@@ -84,14 +86,14 @@ function planColumns() {
       key: "next",
       header: "Next action",
       render: (p) => (
-        <span className="text-xs text-gray-600">{planNextStep(p.status)}</span>
+        <span className="text-xs text-muted">{planNextStep(p.status)}</span>
       ),
     },
     {
       key: "needed",
       header: "Needed by",
       render: (p) => (
-        <div className="text-sm text-gray-700">
+        <div className="text-sm text-ink">
           {formatDate(p.needed_by)}
           {p.overdue && (
             <div>
@@ -108,7 +110,7 @@ function planColumns() {
       header: "Selected supplier",
       priority: "secondary",
       render: (p) => (
-        <span className="text-sm text-gray-700">
+        <span className="text-sm text-ink">
           {p.order_id
             ? `Order #${p.order_id}`
             : p.selected_quote_id
@@ -128,18 +130,19 @@ function planColumns() {
       header: "Quotes",
       align: "right",
       priority: "secondary",
-      render: (p) => <span className="text-sm text-gray-700">{p.quote_count}</span>,
+      render: (p) => <span className="text-sm text-ink">{p.quote_count}</span>,
     },
     {
       key: "action",
+      priority: "action",
       header: "",
       align: "right",
       render: (p) => (
-        <Button asChild variant="secondary" size="sm">
-          <Link href={p.order_id ? `/inputs/orders/${p.order_id}` : `/inputs/plans/${p.id}`}>
+        <Link href={p.order_id ? `/inputs/orders/${p.order_id}` : `/inputs/plans/${p.id}`}>
+          <Button variant="secondary" size="sm">
             {p.order_id ? "View order" : "Open plan"}
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       ),
     },
   ];
@@ -169,14 +172,14 @@ function orderColumns(country) {
     {
       key: "supplier",
       header: "Supplier",
-      render: (o) => <span className="text-sm text-gray-700">{o.supplier_name || "—"}</span>,
+      render: (o) => <span className="text-sm text-ink">{o.supplier_name || "—"}</span>,
     },
     {
       key: "total",
       header: "Total",
       align: "right",
       render: (o) => (
-        <span className="text-sm font-medium text-gray-900">
+        <span className="text-sm font-medium text-ink">
           {formatCost(o.total_cost, country)}
         </span>
       ),
@@ -205,7 +208,7 @@ function orderColumns(country) {
         o.spray_event_id || o.applied_planned_spray_id ? (
           <Badge variant="green">Linked</Badge>
         ) : (
-          <span className="text-xs text-gray-500">Not linked</span>
+          <span className="text-xs text-muted">Not linked</span>
         ),
     },
     {
@@ -213,17 +216,18 @@ function orderColumns(country) {
       header: "Placed",
       priority: "secondary",
       render: (o) => (
-        <span className="text-sm text-gray-700">{formatDate(o.created_at)}</span>
+        <span className="text-sm text-ink">{formatDate(o.created_at)}</span>
       ),
     },
     {
       key: "action",
+      priority: "action",
       header: "",
       align: "right",
       render: (o) => (
-        <Button asChild variant="secondary" size="sm">
-          <Link href={`/inputs/orders/${o.id}`}>Open order</Link>
-        </Button>
+        <Link href={`/inputs/orders/${o.id}`}>
+          <Button variant="secondary" size="sm">Open order</Button>
+        </Link>
       ),
     },
   ];
@@ -271,10 +275,10 @@ function InputsPage() {
     [plans, activeFilter]
   );
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading input plans…" />;
   if (!activeFarm) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         No farms yet — seed the demo data or add a pilot farm first.
       </p>
     );
@@ -288,13 +292,15 @@ function InputsPage() {
         meta={
           <span>Turn PCA-reviewed decisions into supplier-ready input orders.</span>
         }
-        actions={<InputPlanForm farmId={farmId} onCreated={load} />}
+        actions={
+          <InputPlanForm farmId={farmId} onCreated={load} triggerVariant="default" />
+        }
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -302,12 +308,33 @@ function InputsPage() {
           <TabsTrigger value="plans">Input plans</TabsTrigger>
           <TabsTrigger value="orders">Orders</TabsTrigger>
         </TabsList>
-        <p className="mt-2 text-xs text-gray-500">
-          Draft plan → quotes requested → quotes received → quote selected →
-          financing (optional) → order confirmed → delivered → applied. Supplier
-          quotes and financing terms are concierge-entered; no money moves through
-          Lumos.
-        </p>
+        <div className="mt-3">
+          <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
+            {[
+              "Draft plan",
+              "Quotes requested",
+              "Quotes received",
+              "Quote selected",
+              "Financing (optional)",
+              "Order confirmed",
+              "Delivered",
+              "Applied",
+            ].map((step, i, all) => (
+              <li key={step} className="flex items-center gap-1.5">
+                <span className="rounded-full border border-line bg-surface px-2.5 py-0.5 text-[11px] font-medium text-muted">
+                  {step}
+                </span>
+                {i < all.length - 1 && (
+                  <ChevronRight className="h-3 w-3 text-line" aria-hidden />
+                )}
+              </li>
+            ))}
+          </ol>
+          <p className="mt-2 text-meta text-muted">
+            Supplier quotes and financing terms are concierge-entered; no money
+            moves through Lumos.
+          </p>
+        </div>
 
         <TabsContent value="plans">
           <Card>
@@ -328,6 +355,7 @@ function InputsPage() {
                 minWidth={680}
                 empty={
                   <EmptyState
+                    size="sm"
                     icon={ShoppingCart}
                     title={
                       plans.length === 0
@@ -356,6 +384,7 @@ function InputsPage() {
                 minWidth={680}
                 empty={
                   <EmptyState
+                    size="sm"
                     icon={Package}
                     title="No orders yet"
                     description="An order is created from a plan's selected quote and tracked here through delivery and application."
@@ -372,7 +401,7 @@ function InputsPage() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>
+    <Suspense fallback={<LoadingState message="Loading input plans…" />}>
       <InputsPage />
     </Suspense>
   );

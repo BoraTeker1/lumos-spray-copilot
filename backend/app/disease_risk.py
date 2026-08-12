@@ -38,6 +38,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from app import botrytis_thresholds
+
 ASSESSMENT_VERSION = "disease-risk-v1"
 
 # ---------------------------------------------------------------- risk vocabulary
@@ -75,6 +77,11 @@ ABSTAIN_CONFLICTING_READINGS = "conflicting_readings_same_hour"
 ABSTAIN_OUT_OF_SCOPE = "crop_or_target_outside_pilot_scope"
 ABSTAIN_DEMO_INPUT = "demo_or_simulated_input_present"
 ABSTAIN_HINDSIGHT_LEAK = "input_observed_after_as_of"
+# Only reachable once a threshold table exists: the transcribed table has no band
+# covering the observed temperature. The table's silence is NOT a low band — a source
+# that never studied 4 °C says nothing about 4 °C, and extrapolating past the edge of a
+# published table is exactly the invention this module refuses everywhere else.
+ABSTAIN_TEMPERATURE_OUTSIDE_TABLE = "temperature_outside_transcribed_table"
 
 # --------------------------------------------------------------- data-quality gates
 # PROVISIONAL. These bound what counts as usable evidence; they do not change any risk
@@ -315,28 +322,48 @@ class RiskModel:
         raise NotImplementedError
 
 
+class CannotAssess(Exception):
+    """A rule ran and found it could not answer. Carries the abstention reason.
+
+    Distinct from the pre-flight checks in `abstention_reasons`, which describe the
+    INPUTS. This describes the RULE's own reach — the transcribed table has no band for
+    what was observed. Raising rather than returning a band keeps `evaluate`'s contract
+    honest: it returns a band or it does not return.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class BotrytisWetnessV1(RiskModel):
     """Botrytis cinerea infection risk from temperature during leaf-wetness duration.
 
     The published rule keys infection risk on how long the crop stays wet and at what
-    temperature. THE COEFFICIENTS ARE NOT PRESENT. See this module's docstring for why
-    they are not being recalled or approximated: `thresholds` stays None, `is_ready()`
-    stays False, and every assessment abstains with `thresholds_not_supplied`.
+    temperature. THE COEFFICIENTS ARE NOT PRESENT — `app/botrytis_thresholds.py` ships
+    with `TRANSCRIBED_TABLE = None`, so `is_ready()` is False and every assessment
+    abstains with `thresholds_not_supplied`. See that module and BOTRYTIS_PILOT.md §3
+    for why they are not being recalled or approximated.
 
-    To supply them: set `thresholds` to the transcribed table, `citation` to the primary
-    source (author, year, publication), and `source_crop` / `source_region` /
-    `source_validation_conditions` to that source's own stated scope verbatim; then
-    implement `evaluate`. is_ready() requires ALL of them. Nothing else in the pipeline
-    changes.
+    The arithmetic below IS implemented, and is tested against synthetic tables built in
+    the test file rather than against real coefficients. That is the same discipline the
+    module docstring describes: filling in the published table is the only remaining
+    step, and when it lands the rule works without another code change.
     """
 
     family = "botrytis_wetness"
     version = "botrytis_wetness_v1"
-    citation = None
-    thresholds = None
-    source_crop = None
-    source_region = None
-    source_validation_conditions = None
+
+    # Read from the transcription module, so there is exactly one place a human edits
+    # and `is_ready()` cannot disagree with what `evaluate` will actually use.
+    _table = botrytis_thresholds.TRANSCRIBED_TABLE
+    thresholds = _table.rows if _table else None
+    citation = _table.citation if _table else None
+    source_crop = _table.source_crop if _table else None
+    source_region = _table.source_region if _table else None
+    source_validation_conditions = (
+        _table.source_validation_conditions if _table else None
+    )
 
     def is_ready(self) -> bool:
         # The coefficients alone are NOT enough. A transcriber who supplies the table
@@ -355,8 +382,67 @@ class BotrytisWetnessV1(RiskModel):
         )
 
     def evaluate(self, payload: dict) -> tuple[float, str, dict]:
-        raise NotImplementedError(
-            "botrytis_wetness_v1 has no thresholds; assess() must abstain before here"
+        """Accumulated leaf wetness vs. the transcribed band for the wet-period temperature.
+
+        Only ever called when `is_ready()` and no input check abstained, so leaf wetness
+        is present and measured by the time we get here.
+
+        The temperature used is the mean over the hours that were ACTUALLY WET, not over
+        the whole window. A wet night at 12 °C inside a week averaging 20 °C is the
+        infection event; averaging the dry hours in would describe a period during which
+        nothing was at risk.
+        """
+        # Defence in depth. `assess()` already abstains before reaching a model that is
+        # not ready, but `evaluate` is a public method and this is the one place a band
+        # could be manufactured without a transcribed table behind it. Refusing here
+        # means the guarantee holds even for a caller that skipped assess().
+        if not self.is_ready():
+            raise NotImplementedError(
+                "botrytis_wetness_v1 has no transcribed thresholds; assess() must "
+                "abstain before here (see app/botrytis_thresholds.py)"
+            )
+
+        rows = payload.get("weather") or []
+        wet = [
+            r for r in rows
+            if (r.get("leaf_wetness_minutes") or 0) > 0
+            and r.get("temperature_c") is not None
+        ]
+        wetness_hours = sum(
+            float(r.get("leaf_wetness_minutes") or 0) for r in rows
+        ) / 60.0
+
+        if not wet:
+            # No wet hour carried a temperature, so no band applies. Reported as the
+            # table being unable to speak, never as low risk.
+            raise CannotAssess(ABSTAIN_TEMPERATURE_OUTSIDE_TABLE)
+
+        mean_temp = sum(float(r["temperature_c"]) for r in wet) / len(wet)
+        row = self._table.row_for(mean_temp) if self._table else None
+        if row is None:
+            raise CannotAssess(ABSTAIN_TEMPERATURE_OUTSIDE_TABLE)
+
+        band = BAND_LOW
+        if row.wetness_hours_moderate is not None and wetness_hours >= row.wetness_hours_moderate:
+            band = BAND_MODERATE
+        if row.wetness_hours_high is not None and wetness_hours >= row.wetness_hours_high:
+            band = BAND_HIGH
+
+        return (
+            round(wetness_hours, 2),
+            band,
+            {
+                "wetness_hours": round(wetness_hours, 2),
+                "mean_temperature_c_during_wetness": round(mean_temp, 2),
+                "wet_hours_counted": len(wet),
+                "threshold_band_c": [row.temperature_c_min, row.temperature_c_max],
+                "wetness_hours_moderate": row.wetness_hours_moderate,
+                "wetness_hours_high": row.wetness_hours_high,
+                # Restated on every assessment so a stored result carries the scope of
+                # the source it came from, not just the number.
+                "source_crop": self.source_crop,
+                "source_region": self.source_region,
+            },
         )
 
 
@@ -409,7 +495,13 @@ def assess(
     if reasons:
         return _abstain(model, payload, horizon, reasons)
 
-    index, band, calculation = model.evaluate(payload)
+    try:
+        index, band, calculation = model.evaluate(payload)
+    except CannotAssess as exc:
+        # The rule ran and found its own table could not cover these inputs. That is an
+        # abstention like any other, and must never degrade to a low band.
+        return _abstain(model, payload, horizon, [exc.reason])
+
     return RiskAssessment(
         model_family=model.family,
         model_version=model.version,

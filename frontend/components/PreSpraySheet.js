@@ -8,9 +8,11 @@ import { useDemoTag, useFarm } from "@/lib/farm-context";
 import { formatCost } from "@/lib/format";
 import { RECORDED_OUTCOME_LABELS, REVIEW_STATE_LABELS } from "@/lib/labels";
 import { RECORDED_OUTCOME_TONES, REVIEW_STATE_TONES, tone } from "@/lib/tones";
+import Callout from "@/components/Callout";
 import DecisionResult, { OUTCOME_META } from "@/components/DecisionResult";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Field, FormError } from "@/components/ui/field";
 import {
   Sheet,
   SheetContent,
@@ -52,7 +54,7 @@ function LabelResolutionNote({ resolution }) {
   if (resolution.promotable && resolution.label_record) {
     const r = resolution.label_record;
     return (
-      <p className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[11px] leading-snug text-emerald-900">
+      <p className="rounded-control border border-ok-line bg-ok-bg p-2 text-[11px] leading-snug text-ok-fg">
         <span className="font-medium">Verified label found.</span> PHI and REI will come
         from it — you don&apos;t need to type them.
         {r.pre_harvest_interval_days != null && ` PHI ${r.pre_harvest_interval_days} days.`}
@@ -64,7 +66,7 @@ function LabelResolutionNote({ resolution }) {
   const reason = resolution.promotion_blocked_reason || resolution.unresolved_reason;
   if (!reason) return null;
   return (
-    <p className="rounded-md border border-gray-200 bg-gray-50 p-2 text-[11px] leading-snug text-gray-600">
+    <p className="rounded-control border border-line bg-canvas p-2 text-[11px] leading-snug text-muted">
       <span className="font-medium">No verified label for this product yet</span> — {reason}{" "}
       Enter PHI and REI below from the product label.
     </p>
@@ -83,7 +85,7 @@ const REVIEW_VARIANTS = Object.fromEntries(
 );
 
 const inputCls =
-  "w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:border-leaf-600 focus:outline-none focus:ring-1 focus:ring-leaf-600";
+  "w-full rounded-control border border-line px-2.5 py-1.5 text-sm focus:border-leaf-600 focus:outline-none focus:ring-1 focus:ring-leaf-600";
 
 // PCA review controls for one pre-spray decision (approve / edit / reject + comment).
 export function DecisionReview({ planned, onChanged }) {
@@ -121,11 +123,11 @@ export function DecisionReview({ planned, onChanged }) {
   }
 
   return (
-    <div className="mt-2 rounded-md border border-gray-200 bg-white p-2.5">
-      <div className="mb-1.5 text-xs font-semibold text-gray-700">
+    <div className="mt-2 rounded-control border border-line bg-surface p-2.5">
+      <div className="mb-1.5 text-xs font-semibold text-ink">
         PCA / agronomist review
         {planned.review_required && (
-          <span className="ml-1.5 font-normal text-blue-700">
+          <span className="ml-1.5 font-normal text-info-fg">
             required before this spray can be logged as applied
           </span>
         )}
@@ -188,7 +190,7 @@ export function DecisionReview({ planned, onChanged }) {
           Reject
         </Button>
       </div>
-      {error && <p className="mt-1.5 text-sm text-red-600">{error}</p>}
+      <FormError className="mt-1.5">{error}</FormError>
     </div>
   );
 }
@@ -233,37 +235,58 @@ export function OutcomeRecorder({ planned, onChanged }) {
   }
 
   return (
-    <div className="mt-2 space-y-1.5">
-      <div className="text-xs font-semibold text-gray-700">What actually happened?</div>
-      <input
-        className={inputCls}
-        placeholder="Reason (required unless sprayed as planned)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-      />
-      <label className="block text-xs text-gray-500">
-        Outcome date (optional — defaults to today; the server rejects impossible
-        chronology, e.g. an application before the intended date)
+    // Every field is LABELLED and the pair STACKS. This form renders in a 320px
+    // context rail, where two inputs side by side clipped their own placeholders
+    // to "Changed to produ" / "…its active ingredi" — and a placeholder that is
+    // also the only label disappears the moment someone types.
+    <div className="mt-2 space-y-2.5">
+      <div className="text-xs font-semibold text-ink">What actually happened?</div>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-muted">
+          Reason <span className="font-normal">(required unless sprayed as planned)</span>
+        </span>
+        <input
+          className={inputCls}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-muted">
+          Outcome date <span className="font-normal">(optional)</span>
+        </span>
         <input
           type="date"
           className={inputCls}
           value={outcomeDate}
           onChange={(e) => setOutcomeDate(e.target.value)}
         />
+        <span className="mt-1 block text-[11px] text-muted">
+          Defaults to today. The server rejects impossible chronology, e.g. an
+          application before the intended date.
+        </span>
       </label>
-      <div className="grid grid-cols-2 gap-1.5">
-        <input
-          className={inputCls}
-          placeholder="Changed to product… (changed product only)"
-          value={changedProduct}
-          onChange={(e) => setChangedProduct(e.target.value)}
-        />
-        <input
-          className={inputCls}
-          placeholder="…its active ingredient"
-          value={changedAi}
-          onChange={(e) => setChangedAi(e.target.value)}
-        />
+      <div className="grid grid-cols-1 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-muted">
+            Changed to product <span className="font-normal">(if changed)</span>
+          </span>
+          <input
+            className={inputCls}
+            value={changedProduct}
+            onChange={(e) => setChangedProduct(e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-muted">
+            Its active ingredient
+          </span>
+          <input
+            className={inputCls}
+            value={changedAi}
+            onChange={(e) => setChangedAi(e.target.value)}
+          />
+        </label>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {RECORDABLE_OUTCOMES.map((outcome) => (
@@ -283,11 +306,11 @@ export function OutcomeRecorder({ planned, onChanged }) {
         ))}
       </div>
       {reviewGateActive && (
-        <p className="text-[11px] text-blue-700">
+        <p className="rounded-control border border-info-line bg-info-bg px-2.5 py-1.5 text-[11px] text-info-fg">
           Applied outcomes unlock after a PCA approves or edits this decision.
         </p>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <FormError>{error}</FormError>
     </div>
   );
 }
@@ -301,9 +324,9 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
   const meta = OUTCOME_META[planned.decision_outcome];
 
   return (
-    <li className="rounded-lg border border-gray-200 bg-white p-3">
+    <li className="rounded-control border border-line bg-surface p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-gray-900">{planned.product_name}</span>
+        <span className="text-sm font-medium text-ink">{planned.product_name}</span>
         {meta && <Badge variant={meta.badge}>{meta.label}</Badge>}
         {reviewed && (
           <Badge variant={REVIEW_VARIANTS[planned.review_state] || "neutral"}>
@@ -316,7 +339,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
           </Badge>
         )}
       </div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-gray-500">
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
         <span>
           Intended {planned.intended_date}
           {planned.active_ingredient && ` · ${planned.active_ingredient}`}
@@ -324,7 +347,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
         </span>
         <Link
           href={`/decisions/${planned.id}`}
-          className="inline-flex items-center gap-1 font-medium text-gray-500 underline-offset-2 hover:text-gray-900 hover:underline"
+          className="inline-flex items-center gap-1 font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
         >
           <FileText className="h-3 w-3" />
           Decision record
@@ -336,7 +359,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
       </div>
 
       {planned.review_comment && (
-        <p className="mt-2 text-xs text-gray-600">
+        <p className="mt-2 text-xs text-muted">
           <span className="font-medium">PCA comment{planned.reviewed_by ? ` (${planned.reviewed_by})` : ""}:</span>{" "}
           {planned.review_comment}
         </p>
@@ -344,7 +367,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
 
       {decided ? (
         <>
-          <p className="mt-2 text-xs text-gray-600">
+          <p className="mt-2 text-xs text-muted">
             <span className="font-medium">
               Recorded outcome: {RECORDED_OUTCOME_LABELS[planned.outcome] || planned.outcome}
               {planned.outcome_product_name && ` → ${planned.outcome_product_name}`}.
@@ -352,7 +375,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
             {planned.outcome_reason && `Stated reason: ${planned.outcome_reason}`}
           </p>
           {planned.outcome === "avoided" && planned.estimated_cost != null && (
-            <p className="mt-1 rounded-md bg-green-50 p-2 text-xs text-green-900">
+            <p className="mt-1 rounded-control bg-ok-bg p-2 text-xs text-ok-fg">
               Entered application cost not spent:{" "}
               <span className="font-semibold">
                 {formatCost(planned.estimated_cost, country)}
@@ -361,7 +384,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
             </p>
           )}
           {planned.follow_up_required && (
-            <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+            <p className="mt-1 rounded-control border border-warn-line bg-warn-bg p-2 text-xs text-warn-fg">
               Follow-up required ({planned.follow_up_event_count} event
               {planned.follow_up_event_count === 1 ? "" : "s"} so far) — this is not a
               confirmed result until follow-up evidence is recorded.{" "}
@@ -388,7 +411,7 @@ export function PlannedSprayItem({ planned, onChanged, compact = false, country 
 export function PlannedSprayList({ planned, onChanged, emptyText, compact = false, country }) {
   if (!planned || planned.length === 0) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         {emptyText || "No pre-spray decisions yet. Run one before the next planned application."}
       </p>
     );
@@ -541,26 +564,27 @@ export default function PreSpraySheet({ farmId, onChanged }) {
         </SheetHeader>
 
         {/* Mobile-first: two required fields + target; everything else is collapsible. */}
-        <form onSubmit={submit} className="space-y-2.5">
-          <input
-            className={inputCls}
-            placeholder="Product name *"
-            required
-            value={form.product_name}
-            onChange={(e) => update("product_name", e.target.value)}
-          />
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Product name" required>
+            <input
+              className={inputCls}
+              required
+              value={form.product_name}
+              onChange={(e) => update("product_name", e.target.value)}
+            />
+          </Field>
           {/* The join key to the label library. Without it no label check can run,
               which is why it sits here rather than behind the collapsed section. */}
-          <input
-            className={inputCls}
-            placeholder="EPA Reg. No. (unlocks label checks)"
-            value={form.epa_reg_no}
-            onChange={(e) => update("epa_reg_no", e.target.value)}
-            onBlur={lookUpLabel}
-          />
+          <Field label="EPA Reg. No." hint="Unlocks the label checks.">
+            <input
+              className={inputCls}
+              value={form.epa_reg_no}
+              onChange={(e) => update("epa_reg_no", e.target.value)}
+              onBlur={lookUpLabel}
+            />
+          </Field>
           <LabelResolutionNote resolution={labelResolution} />
-          <label className="block text-xs text-gray-500">
-            Intended date *
+          <Field label="Intended date" required>
             <input
               type="date"
               className={inputCls}
@@ -568,84 +592,106 @@ export default function PreSpraySheet({ farmId, onChanged }) {
               value={form.intended_date}
               onChange={(e) => update("intended_date", e.target.value)}
             />
-          </label>
-          <input
-            className={inputCls}
-            placeholder="Target pest / disease (links scouting evidence)"
-            value={form.target_pest_or_disease}
-            onChange={(e) => update("target_pest_or_disease", e.target.value)}
-          />
+          </Field>
+          <Field
+            label="Target pest / disease"
+            hint="Links this check to your scouting evidence."
+          >
+            <input
+              className={inputCls}
+              value={form.target_pest_or_disease}
+              onChange={(e) => update("target_pest_or_disease", e.target.value)}
+            />
+          </Field>
+          {/* Promoted out of the collapsed section, for the same reason
+              `epa_reg_no` was: this is the ONLY figure the value ledger can price
+              an avoided application against. Entered later or not at all, the
+              avoidance is recorded and permanently uncalculated — the ledger will
+              not substitute a farm average. */}
+          <Field
+            label="Estimated cost of this application"
+            hint="What an avoided application is worth. Without it, avoiding this spray is recorded but never valued."
+          >
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              className={inputCls}
+              value={form.estimated_cost}
+              onChange={(e) => update("estimated_cost", e.target.value)}
+            />
+          </Field>
 
-          <details className="rounded-md border border-gray-200 p-2.5">
-            <summary className="cursor-pointer select-none text-xs font-medium text-gray-600">
-              Compliance values — PHI, REI, active ingredient, cost, who entered them
+          <details className="rounded-control border border-line p-2.5">
+            <summary className="cursor-pointer select-none text-xs font-medium text-muted">
+              Compliance values — PHI, REI, active ingredient, who entered them
             </summary>
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input
-                className={inputCls}
-                placeholder="Active ingredient"
-                value={form.active_ingredient}
-                onChange={(e) => update("active_ingredient", e.target.value)}
-              />
-              <input
-                type="number"
-                min="0"
-                className={inputCls}
-                placeholder="PHI (days, from label)"
-                value={form.pre_harvest_interval_days}
-                onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
-              />
-              <input
-                type="number"
-                min="0"
-                className={inputCls}
-                placeholder="REI (hours, from label)"
-                value={form.re_entry_interval_hours}
-                onChange={(e) => update("re_entry_interval_hours", e.target.value)}
-              />
-              <input
-                type="number"
-                step="0.01"
-                className={inputCls}
-                placeholder="Estimated cost"
-                value={form.estimated_cost}
-                onChange={(e) => update("estimated_cost", e.target.value)}
-              />
-              <select
-                className={inputCls}
-                value={form.values_source}
-                onChange={(e) => update("values_source", e.target.value)}
-              >
-                <option value="grower_entered">Values entered by grower</option>
-                <option value="pca_entered">Values entered by PCA</option>
-              </select>
-              <input
-                className={inputCls}
-                placeholder="Entered by (name)"
-                value={form.values_entered_by}
-                onChange={(e) => update("values_entered_by", e.target.value)}
-              />
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Active ingredient">
+                <input
+                  className={inputCls}
+                  value={form.active_ingredient}
+                  onChange={(e) => update("active_ingredient", e.target.value)}
+                />
+              </Field>
+              <Field label="PHI (days, from label)">
+                <input
+                  type="number"
+                  min="0"
+                  className={inputCls}
+                  value={form.pre_harvest_interval_days}
+                  onChange={(e) => update("pre_harvest_interval_days", e.target.value)}
+                />
+              </Field>
+              <Field label="REI (hours, from label)">
+                <input
+                  type="number"
+                  min="0"
+                  className={inputCls}
+                  value={form.re_entry_interval_hours}
+                  onChange={(e) => update("re_entry_interval_hours", e.target.value)}
+                />
+              </Field>
+              <Field label="Values entered by">
+                <select
+                  className={inputCls}
+                  value={form.values_source}
+                  onChange={(e) => update("values_source", e.target.value)}
+                >
+                  <option value="grower_entered">Grower</option>
+                  <option value="pca_entered">PCA</option>
+                </select>
+              </Field>
+              <Field label="Name of the person entering">
+                <input
+                  className={inputCls}
+                  value={form.values_entered_by}
+                  onChange={(e) => update("values_entered_by", e.target.value)}
+                />
+              </Field>
             </div>
-            <p className="mt-1.5 text-[11px] text-gray-400">
+            <p className="mt-1.5 text-[11px] text-muted">
               Only PCA-entered values can make a BLOCK PCA-authorized; grower-entered
               values always yield a provisional result a PCA must confirm. (Verified-label
               grounding requires label data that does not exist in Lumos yet.)
             </p>
           </details>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <Button type="submit" disabled={saving} className="w-full sm:w-auto">
-            {saving ? "Checking…" : "Run the decision check"}
-          </Button>
-          <p className="text-[11px] text-gray-400">
+          {error && <Callout tone="risk">{error}</Callout>}
+          {/* The caveat sits ABOVE the button: it qualifies what pressing the
+              button will do, and below it was read after the decision to press. */}
+          <p className="border-t border-line pt-3 text-[11px] text-muted">
             Leaving PHI, REI, harvest date, or the active ingredient blank never yields an
             APPROVE — checks that can’t run escalate to PCA review.
           </p>
+          <Button type="submit" disabled={saving} size="lg" className="w-full">
+            {saving ? "Checking…" : "Run the decision check"}
+          </Button>
         </form>
 
         {lastCheck && (
           <div className="mt-4">
-            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
               Decision
             </h4>
             <ul>

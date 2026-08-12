@@ -102,6 +102,13 @@ def test_every_registered_feature_obeys_the_invariant_over_empty_inputs():
     empty = {
         "observations": [], "applications": [], "samples": [],
         "planted_area_ha": None, "concentrations": {}, "as_of": AS_OF,
+        # Agronomy inputs (2026-08-07). Adding a key here is the cost of adding a
+        # feature that needs a new input, and it is the right cost: a feature given a
+        # default for a missing input would silently answer instead of abstaining.
+        # `records_irrigation=False` is the honest empty case — a farm that does not
+        # keep an irrigation log, which must abstain rather than report zero water.
+        "soil_tests": [], "irrigation_events": [], "records_irrigation": False,
+        "energy_records": [],
     }
     for spec in base.REGISTRY.values():
         result = spec.compute(**empty)
@@ -116,37 +123,58 @@ def test_every_registered_feature_obeys_the_invariant_over_empty_inputs():
 # --------------------------------------------------------------------------
 
 
-def test_a_feature_in_a_deferred_finance_domain_cannot_be_registered():
+def test_a_feature_in_an_undeclared_domain_cannot_be_registered():
     """The guardrail as a line of code rather than a paragraph.
 
-    This is the failure mode the whole domain registry exists for: not a malicious
-    credit model, but someone adding `debt_service_capacity` because it was easy, in a
-    session where nobody re-read ENGINEERING_GUIDELINES.md §4.
+    `credit_scoring` was the example here until 2026-08-07, when it was admitted (see
+    `domains.ADMISSION`). The mechanism did not go away with it — it now gates on
+    COMPUTABLE_DOMAINS, so a feature in a domain nobody has declared at all still
+    cannot be registered. The failure mode is unchanged: not a malicious model, but
+    someone adding a plausible-sounding feature in a session where nobody re-read the
+    domain registry.
     """
-    with pytest.raises(FeatureError, match="not an MVP domain"):
+    with pytest.raises(FeatureError, match="neither an MVP domain nor an admitted one"):
         base.register(
             base.FeatureSpec(
-                name="debt_service_capacity", version=1,
-                entity_type=base.ENTITY_CROP_CYCLE, domain="credit_scoring",
+                name="speculative_metric", version=1,
+                entity_type=base.ENTITY_CROP_CYCLE, domain="not_a_declared_domain",
                 unit="ratio", description="", compute=lambda **_: None,
             )
         )
 
 
-def test_the_registration_refusal_quotes_the_guardrail():
-    with pytest.raises(FeatureError, match="credit scoring"):
+def test_the_registration_refusal_says_the_domain_is_undeclared():
+    with pytest.raises(FeatureError, match="not declared at all"):
         base.register(
             base.FeatureSpec(
-                name="probe_underwrite", version=1, entity_type=base.ENTITY_FARM,
-                domain="credit_scoring", unit=None, description="",
+                name="probe_undeclared", version=1, entity_type=base.ENTITY_FARM,
+                domain="reinsurance", unit=None, description="",
                 compute=lambda **_: None,
             )
         )
 
 
-def test_every_registered_feature_is_in_an_mvp_domain():
+def test_an_admitted_finance_domain_can_now_host_a_feature():
+    """The other half of the admission, asserted rather than assumed.
+
+    Registering here is exactly what was forbidden before 2026-08-07. What still binds
+    is that any such feature must abstain without a transcribed source — that is the
+    finance modules' contract, tested in their own files, not this one.
+    """
+    spec = base.register(
+        base.FeatureSpec(
+            name="probe_admitted_domain", version=1, entity_type=base.ENTITY_FARM,
+            domain="credit_scoring", unit=None, description="",
+            compute=lambda **_: None,
+        )
+    )
+    assert spec.domain in domains.ADMITTED_DOMAINS
+    del base.REGISTRY[spec.key]  # probe only; do not leak into the real registry
+
+
+def test_every_registered_feature_is_in_a_computable_domain():
     for spec in base.REGISTRY.values():
-        assert spec.domain in domains.MVP_DOMAINS, spec.name
+        assert spec.domain in domains.COMPUTABLE_DOMAINS, spec.name
 
 
 def test_resolve_order_detects_a_cycle():

@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app import backtest
 from app.procurement_status import FINANCING_OFFER_DISCLAIMER
 
 # Concierge-pilot provenance vocabularies (validated, so bad values give a clean 422).
@@ -362,6 +363,69 @@ class DiseaseRiskAssessment(BaseModel):
     computed_at: datetime
 
 
+# ------------------------------------------------------- historical opportunity scan
+class OpportunityScanCreate(BaseModel):
+    """Operator-triggered replay of past decision dates for one block.
+
+    `decision_dates` are the dates sprays were ACTUALLY scheduled for — supplied by the
+    operator from the partner's records, never inferred from the spray table. A spray
+    that happened is evidence of a decision; a date nobody scheduled is not, and
+    generating a regular grid of dates would silently invent the denominator that the
+    whole opportunity figure is a fraction of.
+    """
+    block_id: int
+    decision_dates: list[datetime] = Field(min_length=1)
+    horizon_hours: int = 72
+    lookback_hours: int = 168
+    run_by: str | None = None
+
+
+class OpportunityScanItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    as_of: datetime
+    risk_band: str
+    abstained: bool
+    reasons: list | None = None
+    evidence_grade: str | None = None
+    probability_or_index: float | None = None
+    input_digest: str
+    excluded_count: int
+
+
+class OpportunityScan(BaseModel):
+    """OPERATOR-FACING ONLY, like its shadow-assessment neighbour.
+
+    Note the fields that do not exist, and must not be added: no avoided count, no
+    reduction percentage, no recommendation. `backtest.SCAN_CANNOT_CONCLUDE` travels on
+    the response instead, stating why each of those is absent.
+    """
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+    id: int
+    farm_id: int
+    block_id: int
+    scan_version: str
+    model_version: str
+    target: str
+    basis: str
+    horizon_hours: int
+    lookback_hours: int
+    dates_scanned: int
+    assessed_count: int
+    band_counts: dict | None = None
+    reason_counts: dict | None = None
+    grade_counts: dict | None = None
+    run_by: str | None = None
+    created_at: datetime
+    items: list[OpportunityScanItem] = []
+    # Defaulted, never read from the ORM row, so EVERY serialization of a scan carries
+    # its own claim ceiling. A caller cannot receive the histogram without also
+    # receiving the statement of what it does not establish.
+    cannot_conclude: dict = Field(
+        default_factory=lambda: dict(backtest.SCAN_CANNOT_CONCLUDE)
+    )
+
+
 PcaDispositionValue = Literal[
     "follow_baseline", "defer", "rescout", "insufficient_evidence"
 ]
@@ -487,6 +551,11 @@ class BlockOutcomeObservationCreate(BaseModel):
     notes: str | None = None
     source_type: str | None = None
     supersedes_id: int | None = None
+    # Provenance, so an outcome entered on a demo farm is tagged simulated like
+    # every other record there. Without these the schema silently dropped the
+    # caller's tag and the ORM default made it look like a real measurement.
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
 
     @model_validator(mode="after")
     def _value_requires_a_unit(self):
@@ -502,6 +571,10 @@ class BlockOutcomeObservation(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     block_id: int
+    # Exposed because a caller listing a farm's outcomes has to be able to tell which
+    # season each one belongs to. It was persisted and unreadable at first, and the
+    # season page's client-side filter silently matched nothing as a result.
+    crop_cycle_id: int | None = None
     pilot_protocol_id: int | None = None
     observed_on: date
     recorded_at: datetime
@@ -513,6 +586,8 @@ class BlockOutcomeObservation(BaseModel):
     notes: str | None = None
     source_type: str | None = None
     supersedes_id: int | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
     created_at: datetime
 
 
@@ -1099,6 +1174,36 @@ class Recommendation(BaseModel):
     agronomist_comment: str | None = None
 
 
+# --------------------------------------------------------------- Spray baseline
+# Defined above the pilot intake because PilotFarmIntake embeds SprayBaselineCreate:
+# the baseline is captured during onboarding, not bolted on afterwards.
+BaselineMethod = Literal["stated_cadence", "prior_period", "calendar_program"]
+CalendarProgram = Literal[
+    "weekly", "every_10_days", "biweekly", "every_3_weeks", "monthly"
+]
+
+
+class SprayBaselineCreate(BaseModel):
+    """A grower/PCA-declared baseline to measure reduction against (one per farm)."""
+    method: BaselineMethod
+    cadence_days: int | None = Field(default=None, gt=0)
+    season_spray_count: int | None = Field(default=None, gt=0)
+    baseline_period_start: date | None = None
+    baseline_period_end: date | None = None
+    calendar_program: CalendarProgram | None = None
+    data_source: DataSource = "grower_interview"
+    data_confidence: DataConfidence = "user_provided"
+    declared_by: str | None = None
+    notes: str | None = None
+
+
+class SprayBaseline(SprayBaselineCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    created_at: datetime
+
+
 # ---------------------------------------------------------------- Pilot intake
 class PilotSprayEvent(BaseModel):
     """A spray line in the pilot-farm intake bundle (all fields optional but product)."""
@@ -1122,6 +1227,15 @@ class PilotFarmIntake(BaseModel):
     spray_events: list[PilotSprayEvent] = Field(default_factory=list)
     scouting_concern: str | None = None
     scouting_severity_1_to_5: int | None = Field(default=None, ge=1, le=5)
+    # Captured at intake because reduction is unmeasurable without it, and asking a
+    # grower "how often did you spray last season?" is a 20-second question during
+    # onboarding and an awkward one six weeks later. Optional: a farm with no baseline
+    # is still a valid farm, it just cannot produce a reduction figure — compute_reduction
+    # returns its "No baseline captured yet" empty result rather than guessing.
+    # Declared here rather than defaulted: `SprayBaselineCreate.data_confidence` is
+    # "user_provided", which is in reduction._TRUSTED_CONFIDENCE, so an intake-captured
+    # baseline can back a headline figure. That is only honest because a human typed it.
+    spray_baseline: SprayBaselineCreate | None = None
 
 
 # ----------------------------------------------------- Concierge pilot import
@@ -1173,34 +1287,6 @@ class PcaPolicyCreate(BaseModel):
 
 
 class PcaPolicy(PcaPolicyCreate):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    farm_id: int
-    created_at: datetime
-
-
-# --------------------------------------------------------------- Spray baseline
-BaselineMethod = Literal["stated_cadence", "prior_period", "calendar_program"]
-CalendarProgram = Literal[
-    "weekly", "every_10_days", "biweekly", "every_3_weeks", "monthly"
-]
-
-
-class SprayBaselineCreate(BaseModel):
-    """A grower/PCA-declared baseline to measure reduction against (one per farm)."""
-    method: BaselineMethod
-    cadence_days: int | None = Field(default=None, gt=0)
-    season_spray_count: int | None = Field(default=None, gt=0)
-    baseline_period_start: date | None = None
-    baseline_period_end: date | None = None
-    calendar_program: CalendarProgram | None = None
-    data_source: DataSource = "grower_interview"
-    data_confidence: DataConfidence = "user_provided"
-    declared_by: str | None = None
-    notes: str | None = None
-
-
-class SprayBaseline(SprayBaselineCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
     farm_id: int
@@ -1327,7 +1413,11 @@ class FinancingOfferCreate(BaseModel):
 class FinancingOffer(FinancingOfferCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    supplier_quote_id: int
+    # Exactly one of these is set: an offer finances either one supplier quote or a
+    # whole season request. Both are nullable so the same model, route and card serve
+    # both; `crud` enforces the exactly-one rule.
+    supplier_quote_id: int | None = None
+    financing_request_id: int | None = None
     status: str
     decided_by: str | None = None
     decided_at: datetime | None = None
@@ -1353,6 +1443,13 @@ class SupplierQuoteItemCreate(BaseModel):
     """One quoted line answering one requested input-plan item."""
     input_plan_item_id: int
     product_name: str
+    # The catalogue link (2026-08-07). Optional, because a supplier may quote something
+    # nobody has catalogued yet and blocking the quote over it would be worse. But
+    # WITHOUT this field the catalogue is decorative: `product_name` is free text, so an
+    # unlinked line can never enter a price comparison — see
+    # procurement_analytics.build_report, which counts unlinked lines rather than
+    # bucketing them by name.
+    input_product_id: int | None = None
     is_substitution: bool = False
     substitution_reason: str | None = None
     quantity: float = Field(gt=0)
@@ -1382,6 +1479,10 @@ class SupplierQuoteCreate(BaseModel):
     Quotes are never edited — withdraw and re-enter is the correction path.
     """
     supplier_name: str
+    # The structured link (2026-08-07). `supplier_name` above stays authoritative for
+    # what was actually entered; this is optional so a quote from a supplier nobody has
+    # registered still goes in, rather than being blocked or attached to a guess.
+    supplier_id: int | None = None
     supplier_contact: str | None = None
     delivery_cost: float = Field(default=0.0, ge=0)
     fees: float = Field(default=0.0, ge=0)
@@ -1754,3 +1855,682 @@ class LabelResolution(BaseModel):
     # Whether the resolved record may back a decision as label-verified, and why not.
     promotable: bool = False
     promotion_blocked_reason: str | None = None
+
+
+# --------------------------------------------------------------- Marketplace
+# Added 2026-08-07. Note what is absent from every schema here: no price on a
+# catalogue entry, no rating on a supplier, no ranking field anywhere.
+class SupplierCreate(BaseModel):
+    """Register a supplier. `canonical_name` is derived server-side, never supplied."""
+    name: str = Field(min_length=1, max_length=200)
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    service_area: str | None = None
+    status: Literal["active", "inactive"] = "active"
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class Supplier(SupplierCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    canonical_name: str | None = None
+    created_at: datetime
+
+
+class InputProductCreate(BaseModel):
+    """A catalogue product. `canonical_key` is derived server-side."""
+    category: Literal[
+        "seed", "fertilizer", "crop_protection", "biological", "adjuvant", "other"
+    ]
+    name: str = Field(min_length=1, max_length=200)
+    manufacturer: str | None = None
+    pesticide_product_id: int | None = None
+    unit_of_sale: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class InputProduct(InputProductCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    canonical_key: str | None = None
+    created_at: datetime
+
+
+class SupplierProductCreate(BaseModel):
+    """A supplier offers a catalogue product. Deliberately carries NO price — a price
+    belongs to a quote, at a moment, for a quantity; on a catalogue row it would be a
+    list price nobody quoted that goes stale invisibly."""
+    input_product_id: int
+    supplier_sku: str | None = None
+    pack_size: str | None = None
+    typical_lead_time_days: int | None = Field(default=None, gt=0)
+    notes: str | None = None
+
+
+class SupplierProduct(SupplierProductCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    supplier_id: int
+    created_at: datetime
+
+
+class RfqTransmissionRequest(BaseModel):
+    """Which suppliers to send an RFQ to. Named explicitly — never auto-selected, since
+    choosing recipients on the grower's behalf is a form of ranking."""
+    supplier_ids: list[int] = Field(min_length=1)
+    requested_by: str | None = None
+
+
+class RfqTransmission(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    input_plan_id: int
+    supplier_id: int | None = None
+    sent_to: str | None = None
+    transport: str
+    status: str
+    detail: str | None = None
+    requested_by: str | None = None
+    created_at: datetime
+
+
+# ------------------------------------------------------- Finance persistence
+# Every assessment schema carries BOTH the outcome fields and the refusal fields, all
+# optional, because a stored row is one or the other. No schema here has a field that
+# could hold an approval, a premium, a rate or a disbursement.
+class CollateralAssetCreate(BaseModel):
+    """Register or revalue a collateral asset. Append-only: revaluation supersedes."""
+    collateral_type: Literal[
+        "standing_crop", "harvested_inventory", "equipment", "land", "receivable"
+    ]
+    currency: str = Field(min_length=3, max_length=3)
+    description: str | None = None
+    assessed_value: float | None = Field(default=None, gt=0)
+    valuation_basis: str | None = None
+    valued_on: date | None = None
+    land_parcel_id: int | None = None
+    supersedes_id: int | None = None
+    registered_by: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+    @model_validator(mode="after")
+    def _value_requires_a_basis(self):
+        """60% of an insured value and 60% of a market estimate are different numbers."""
+        if self.assessed_value is not None and not (self.valuation_basis or "").strip():
+            raise ValueError(
+                "valuation_basis is required whenever assessed_value is given: an "
+                "advance rate assumes a basis, and applying one to a value from a "
+                "different basis is wrong in a way the output would not show"
+            )
+        return self
+
+
+class CollateralAsset(CollateralAssetCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    created_at: datetime
+
+
+class CreditAssessment(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    scorecard_lender: str | None = None
+    scorecard_name: str | None = None
+    scorecard_version: str | None = None
+    total: float | None = None
+    minimum_score: float | None = None
+    maximum_score: float | None = None
+    inputs_digest: str | None = None
+    factors: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    assessed_by: str | None = None
+    created_at: datetime
+
+
+class UnderwritingDecision(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    credit_assessment_id: int | None = None
+    policy_lender: str | None = None
+    policy_version: str | None = None
+    outcome: str | None = None
+    rules: list | None = None
+    failed_rule_ids: list | None = None
+    not_evaluated_rule_ids: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    decided_by: str | None = None
+    created_at: datetime
+
+
+class UnderwritingRequest(BaseModel):
+    exposure_amount: float | None = Field(default=None, gt=0)
+    evidence_keys: list[str] = Field(default_factory=list)
+    decided_by: str | None = None
+
+
+class MonitoringSnapshot(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    lender: str | None = None
+    facility_reference: str | None = None
+    standing: str | None = None
+    covenants: list | None = None
+    breached_covenant_ids: list | None = None
+    unevaluated_covenant_ids: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    created_at: datetime
+
+
+class CoverageAssessmentRequest(BaseModel):
+    crop: str
+    peril: str
+    evidence_keys: list[str] = Field(default_factory=list)
+    assessed_by: str | None = None
+
+
+class CoverageAssessment(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    as_of: datetime
+    crop: str | None = None
+    peril: str | None = None
+    products: list | None = None
+    refusal_code: str | None = None
+    refusal_detail: str | None = None
+    assessed_by: str | None = None
+    created_at: datetime
+
+
+# --------------------------------------------------- Crop cycles (the season)
+# `CropCycle` and `Operation` have existed in models.py since the entity-spine
+# phase with no route and no writer. These are the schemas that make the season
+# reachable, so decisions, applications, costs and harvest outcomes can hang off
+# the economic unit they belong to.
+CropCycleStatus = Literal[
+    "planned", "planted", "growing", "harvesting", "closed", "abandoned"
+]
+OperationType = Literal[
+    "planting", "irrigation", "fertilization", "crop_protection", "scouting",
+    "harvest", "tillage", "other",
+]
+# A lightweight grouping for the season's cost breakdown. Eight buckets, chosen to be
+# the ones a grower would name out loud — not a chart of accounts.
+CostCategory = Literal[
+    "crop_protection", "fertilizer_nutrition", "irrigation", "labor",
+    "equipment_operations", "planting_materials", "harvest_postharvest", "other",
+]
+# Defaulted from the operation type ONLY where the mapping is unambiguous. Scouting,
+# tillage and "other" are deliberately absent: scouting cost is usually labour but may
+# be a contracted service, and tillage may be owned equipment or a hired operator.
+# Guessing there would put a number in a bucket nobody chose.
+COST_CATEGORY_FOR_OPERATION: dict[str, str] = {
+    "planting": "planting_materials",
+    "irrigation": "irrigation",
+    "fertilization": "fertilizer_nutrition",
+    "crop_protection": "crop_protection",
+    "harvest": "harvest_postharvest",
+}
+
+
+class CropCycleCreate(BaseModel):
+    # Optional: a farm with no field entities yet gets a whole-farm one, so a season
+    # can be started without building the entity spine by hand first.
+    field_id: int | None = None
+    crop: str
+    season_year: int
+    variety_name: str | None = None
+    season_label: str | None = None
+    planting_date: date | None = None
+    expected_harvest_start: date | None = None
+    expected_harvest_end: date | None = None
+    display_area: float | None = Field(default=None, gt=0)
+    display_area_unit: str | None = None
+    target_market: str | None = None
+    target_grade: str | None = None
+    status: CropCycleStatus = "growing"
+    currency_code: str | None = None
+    notes: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+
+class CropCycleUpdate(BaseModel):
+    """Closing a cycle is the common case; every field is optional."""
+    status: CropCycleStatus | None = None
+    variety_name: str | None = None
+    season_label: str | None = None
+    planting_date: date | None = None
+    expected_harvest_start: date | None = None
+    expected_harvest_end: date | None = None
+    actual_harvest_start: date | None = None
+    actual_harvest_end: date | None = None
+    display_area: float | None = Field(default=None, gt=0)
+    display_area_unit: str | None = None
+    target_market: str | None = None
+    target_grade: str | None = None
+    notes: str | None = None
+
+
+class CropCycle(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    field_id: int
+    crop: str
+    variety_name: str | None = None
+    season_year: int
+    season_label: str | None = None
+    planting_date: date | None = None
+    expected_harvest_start: date | None = None
+    expected_harvest_end: date | None = None
+    actual_harvest_start: date | None = None
+    actual_harvest_end: date | None = None
+    planted_area_m2: float | None = None
+    display_area: float | None = None
+    display_area_unit: str | None = None
+    target_market: str | None = None
+    target_grade: str | None = None
+    status: str
+    currency_code: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+class OperationCreate(BaseModel):
+    """A non-spray thing done to a crop cycle, and what it cost.
+
+    Applications keep their own table and their own cost column — the ledger reads
+    both. This is for the irrigation / fertiliser / harvest passes that have never
+    had anywhere to go.
+    """
+    operation_type: OperationType
+    # Left unset, the server fills it from `operation_type` where that mapping is
+    # unambiguous and leaves it None otherwise. Never guessed past the obvious.
+    cost_category: CostCategory | None = None
+    performed_on: date | None = None
+    planned_on: date | None = None
+    field_id: int | None = None
+    block_id: int | None = None
+    display_area: float | None = Field(default=None, gt=0)
+    display_area_unit: str | None = None
+    cost_amount: float | None = Field(default=None, ge=0)
+    currency_code: str | None = None
+    performed_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+
+class Operation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    farm_id: int
+    crop_cycle_id: int | None = None
+    field_id: int | None = None
+    block_id: int | None = None
+    operation_type: str
+    cost_category: str | None = None
+    planned_on: date | None = None
+    performed_on: date | None = None
+    area_m2: float | None = None
+    display_area: float | None = None
+    display_area_unit: str | None = None
+    cost_amount: float | None = None
+    currency_code: str | None = None
+    performed_by: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+# ------------------------------------------------- Sales (the revenue half)
+# The first money the platform records coming IN. A recorded transaction only —
+# a quoted market price is a forecast, not revenue, and nothing here reads one.
+
+# Real settlements round per line, so quantity x unit_price rarely lands exactly on
+# the stated gross. This is the width of that rounding, not a licence to accept a
+# figure that disagrees: 0.5%, or one unit of currency for a small sale.
+_SALE_CONSISTENCY_TOLERANCE_FRACTION = 0.005
+_SALE_CONSISTENCY_TOLERANCE_FLOOR = 1.0
+
+
+class SaleRecordCreate(BaseModel):
+    """A recorded sale or settlement against a crop cycle.
+
+    Gross, deductions and net stay three separate numbers. What the crop sold for and
+    what the farm received are different facts, and a packer settlement nets out
+    commission and freight between them.
+    """
+    sale_date: date
+    quantity: float | None = Field(default=None, gt=0)
+    unit: str | None = None
+    unit_price: float | None = Field(default=None, ge=0)
+    gross_amount: float | None = Field(default=None, ge=0)
+    deductions_amount: float | None = Field(default=None, ge=0)
+    currency_code: str | None = None
+    buyer_name: str | None = None
+    reference: str | None = None
+    grade: str | None = None
+    market: str | None = None
+    notes: str | None = None
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    data_source: DataSource | None = "manual_entry"
+    data_confidence: DataConfidence | None = "user_provided"
+
+    @model_validator(mode="after")
+    def _quantity_requires_a_unit(self):
+        if self.quantity is not None and not (self.unit or "").strip():
+            raise ValueError(
+                "a unit is required whenever a quantity is given — an unlabelled "
+                "number is not a measurement, and a season total cannot be built "
+                "from one"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_sale_states_an_amount(self):
+        """Either the gross, or enough to derive it. A sale that states no money is not one."""
+        derivable = self.quantity is not None and self.unit_price is not None
+        if self.gross_amount is None and not derivable:
+            raise ValueError(
+                "a sale needs either a gross amount, or both a quantity and a unit "
+                "price to derive one — nothing here invents a figure from a market "
+                "price"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _stated_figures_agree(self):
+        """All three supplied? They must be consistent. A contradictory settlement is not storable."""
+        if self.quantity is None or self.unit_price is None or self.gross_amount is None:
+            return self
+        expected = self.quantity * self.unit_price
+        tolerance = max(
+            abs(expected) * _SALE_CONSISTENCY_TOLERANCE_FRACTION,
+            _SALE_CONSISTENCY_TOLERANCE_FLOOR,
+        )
+        if abs(expected - self.gross_amount) > tolerance:
+            raise ValueError(
+                f"quantity x unit price is {expected:,.2f} but the gross amount says "
+                f"{self.gross_amount:,.2f} — the record contradicts itself. Correct "
+                "one of the three, or leave the gross blank and let it be derived."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _deductions_do_not_exceed_the_gross(self):
+        if self.deductions_amount is None:
+            return self
+        gross = self.gross_amount
+        if gross is None and self.quantity is not None and self.unit_price is not None:
+            gross = self.quantity * self.unit_price
+        if gross is not None and self.deductions_amount > gross:
+            raise ValueError(
+                "deductions exceed the gross amount, which would make the net "
+                "negative — that is a data-entry error, not a season"
+            )
+        return self
+
+
+class SaleRecord(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    crop_cycle_id: int
+    farm_id: int
+    sale_date: date
+    quantity: float | None = None
+    unit: str | None = None
+    unit_price: float | None = None
+    gross_amount: float | None = None
+    deductions_amount: float | None = None
+    currency_code: str | None = None
+    buyer_name: str | None = None
+    reference: str | None = None
+    grade: str | None = None
+    market: str | None = None
+    notes: str | None = None
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    recorded_at: datetime
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Season financing, lender policies, and commercial agreements (2026-08-12).
+#
+# The money-movement boundary is visible in what these schemas CANNOT express:
+# no APR, no interest rate, no amortisation schedule, no disbursement, no
+# repayment, no invoice, and no `approved` status anywhere.
+# ---------------------------------------------------------------------------
+
+FinancingPurpose = Literal["input_purchase", "working_capital", "equipment", "land"]
+
+# No `approved`, no `declined`, no `funded`. Lumos records that a lender responded
+# with terms; the credit decision is theirs and has no field here.
+FinancingRequestStatus = Literal[
+    "draft", "evidence_assembled", "shared", "offers_received",
+    "offer_selected", "withdrawn",
+]
+
+# Mirrors app/underwriting_rules.RuleKind. Deliberately no `price` or `rate` kind —
+# a policy states conditions, and Lumos never derives a cost of borrowing.
+LenderRuleKind = Literal[
+    "minimum_score", "maximum_exposure", "required_evidence", "exclusion"
+]
+
+CovenantComparator = Literal["at_most", "at_least", "equals"]
+CovenantSeverity = Literal["reportable", "remediable", "event_of_default"]
+
+
+class FinancingRequestCreate(BaseModel):
+    purpose: FinancingPurpose
+    crop_cycle_id: int | None = None
+    requested_amount: float | None = Field(default=None, ge=0)
+    currency_code: str | None = Field(default=None, max_length=3)
+    lender_policy_id: int | None = None
+    requested_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class FinancingRequestUpdate(BaseModel):
+    status: FinancingRequestStatus | None = None
+    lender_policy_id: int | None = None
+    requested_amount: float | None = Field(default=None, ge=0)
+    notes: str | None = None
+    actor: str | None = None
+
+
+class FinancingRequestEvent(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    financing_request_id: int
+    event_type: str
+    occurred_on: date
+    actor: str | None = None
+    notes: str | None = None
+    payload: dict | None = None
+    created_at: datetime
+
+
+class FinancingRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    farm_id: int
+    crop_cycle_id: int | None = None
+    purpose: str
+    requested_amount: float | None = None
+    currency_code: str | None = None
+    status: str
+    lender_policy_id: int | None = None
+    requested_by: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+    offers: list[FinancingOffer] = []
+    events: list[FinancingRequestEvent] = []
+
+
+class LenderRuleIn(BaseModel):
+    """One rule from a lender's written policy.
+
+    `rule_id` and `kind` are required because `underwriting_rules.UnderwritingRule`
+    validates them on the way through — a minimum_score rule with no threshold raises
+    rather than becoming a check that always passes.
+    """
+    rule_id: str = Field(min_length=1, max_length=80)
+    description: str = ""
+    kind: LenderRuleKind
+    threshold: float | None = None
+    evidence_key: str | None = None
+    feature_name: str | None = None
+
+
+class LenderCovenantIn(BaseModel):
+    covenant_id: str = Field(min_length=1, max_length=80)
+    description: str = ""
+    feature_name: str = Field(min_length=1)
+    comparator: CovenantComparator
+    threshold: float
+    breach_severity: CovenantSeverity
+
+
+class LenderPolicyCreate(BaseModel):
+    """A lender's WRITTEN criteria, entered with its source.
+
+    `source_document` is required and non-blank for the same reason
+    `transcription.Citation` has no defaults: a threshold with no stated origin is
+    indistinguishable from one Lumos invented, and ENGINEERING_GUIDELINES.md §4 forbids a
+    Lumos-authored credit policy.
+    """
+    lender: str = Field(min_length=1, max_length=200)
+    policy_version: str = Field(min_length=1, max_length=60)
+    effective_from: date | None = None
+    source_document: str = Field(min_length=1)
+    source_url: str | None = None
+    rules: list[LenderRuleIn] = []
+    covenants: list[LenderCovenantIn] = []
+    entered_by: str | None = None
+    entered_on: date | None = None
+    supersedes_id: int | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class LenderPolicy(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    lender: str
+    policy_version: str
+    effective_from: date | None = None
+    source_document: str
+    source_url: str | None = None
+    rules: list | None = None
+    covenants: list | None = None
+    entered_by: str | None = None
+    entered_on: date | None = None
+    supersedes_id: int | None = None
+    notes: str | None = None
+    created_at: datetime
+
+
+# One of app/participation.AGREEMENT_MODELS.
+CommercialModel = Literal[
+    "platform_fee", "per_area_fee", "per_cycle_fee", "verified_value_share",
+    "performance_bonus", "origination_fee", "monitoring_fee", "revenue_share",
+    "crop_share",
+]
+
+
+class CommercialAgreementCreate(BaseModel):
+    """What Lumos is paid, and on what recorded basis.
+
+    `terms` is a small object read only by `app/participation.py` — {rate_pct},
+    {amount}, {rate, area_unit}, {cap_amount}. There is no invoice, balance, due
+    date, or paid flag here or anywhere downstream: this records an agreement and
+    calculates what it comes to, and moves no money.
+    """
+    name: str = Field(min_length=1, max_length=200)
+    model_type: CommercialModel
+    currency_code: str | None = Field(default=None, max_length=3)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    terms: dict = {}
+    source_document: str | None = None
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+    @model_validator(mode="after")
+    def _terms_carry_no_settlement_fields(self):
+        """`terms` describes a pricing model, never a payment.
+
+        Enforced here rather than trusted, because `terms` is a free-form object and
+        it is the one place a settlement field could slip into this schema without a
+        migration to review.
+        """
+        forbidden = {
+            "invoice", "invoice_id", "due_date", "paid", "paid_at", "amount_due",
+            "balance", "settlement_status", "payment_method", "apr",
+            "interest_rate", "amortisation", "amortization", "repayment_schedule",
+        }
+        present = forbidden & set(self.terms or {})
+        if present:
+            raise ValueError(
+                f"commercial agreement terms may not carry {sorted(present)}: this "
+                "layer records what was agreed and calculates what it comes to. "
+                "Lumos moves no money."
+            )
+        return self
+
+
+class CommercialAgreement(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    farm_id: int
+    name: str
+    model_type: str
+    currency_code: str | None = None
+    effective_from: date | None = None
+    effective_to: date | None = None
+    terms: dict | None = None
+    source_document: str | None = None
+    status: str
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime

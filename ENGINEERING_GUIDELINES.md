@@ -1,733 +1,574 @@
 # ENGINEERING_GUIDELINES.md — Lumos Spray Copilot
 
-Canonical project memory for `precision_farming`. Read this first; then open only the files
-your task needs. Optimized so future Claude/Cursor sessions avoid re-reading the whole repo.
+Canonical project memory for `precision_farming`. Read this first, then open only the files your
+task needs.
+
+This document is a **map, not a brake**. It exists so a session can build confidently and
+correctly on the first try: what the product is, what is already built, which patterns to reuse,
+and the small number of constraints that are genuinely load-bearing.
+
+> **Section numbers are an API.** ~30 source comments and one test cite `ENGINEERING_GUIDELINES.md §4/§5/§6/§9/§10`,
+> and `backend/tests/test_ingest_registry.py` reads the headings **§3 "Current Strategic
+> Conclusion"** and **§4 "Hard Guardrails"** from this file at import time. Rewrite contents
+> freely; do not renumber or rename those two headings.
 
 ---
 
 ## 1. Project Summary
 
-- **What it is:** Lumos Spray Copilot is an AI-assisted, **agronomist/PCA-in-the-loop**
-  pesticide **decision + compliance copilot** for specialty-crop growers. It logs sprays and
-  scouting, runs a transparent rule engine that flags PHI/REI/resistance/scouting/weather risk,
-  routes every recommendation through human review, and produces audit-ready records + a
-  copy-pasteable weekly report.
+- **What it is:** Lumos Spray Copilot is the **decision-and-proof layer for low-pesticide
+  agriculture**. It logs sprays and scouting, runs a transparent rule engine that flags
+  PHI/REI/resistance/scouting/weather risk, routes every recommendation through a licensed human,
+  and produces audit-ready records that make a reduction claim *checkable* rather than asserted.
+- **The thesis in one line:** most excess spraying is decided *before* any nozzle is involved —
+  calendar habit, fear, and resistance ratchets. Robots and biologicals change *how* and *what*
+  you spray; something still has to decide **whether**, and prove it afterwards. That layer is
+  capital-light, and it is the one we win first.
 - **Current wedge:** California specialty crops — **strawberries** (primary) and greenhouse
-  tomatoes — and their **PCAs/agronomists**. "The decision/compliance layer *before* the spray."
-- **Target user / buyer hypothesis:** grower + their PCA/agronomist use it; best economic buyer
-  is likely the **PCA/advisory firm or packer/exporter** carrying audit + residue risk across
-  many growers (unvalidated — that's the point of the validation sprint).
-- **What this is NOT:** not a sprayer/robot/drone/farm-OS; not row-crop hardware (explicitly not
-  competing with John Deere See & Spray); not a black-box AI; not autonomous "must spray" advice;
-  not a compliance/legal guarantee.
+  tomatoes — and their **PCAs/agronomists**. The wedge is where we start, not a ceiling.
+- **Target user / buyer hypothesis:** grower + their PCA/agronomist use it; the likeliest economic
+  buyer is the **PCA/advisory firm or packer/exporter** carrying audit and residue risk across
+  many growers. Unvalidated — see §11.
+- **What this is NOT:** not a hardware manufacturer, not a farm-OS/ERP, not a black-box AI, not an
+  autonomous "must spray" prescriber, not a compliance or legal guarantee.
 
 ---
 
-## 2. Current Strategic Positioning
+## 2. Strategic Positioning
 
-- **YC-style one-liner:** "AI pesticide-decision and compliance copilot for specialty-crop
-  growers and their PCAs — the decision layer before the spray that helps them spray less, avoid
-  PHI/REI mistakes, and keep audit-ready records." (full text in `YC_POSITIONING.md`)
-- **CA specialty-crop / strawberry wedge:** specialty crops are sprayed often, hand-harvested,
-  heavily regulated (PHI/REI, MRL, PrimusGFS/GlobalG.A.P. audits, CA DPR reporting). Seeded U.S.
-  demo farm = `Golden Coast Strawberry Ranch`, Watsonville. See `US_WEDGE.md`.
-- **PCA / agronomist-in-the-loop:** in California a licensed PCA must legally sign pesticide
-  recommendations — the human-in-the-loop already exists, and our review workflow maps onto it.
-- **Human decision-support framing:** the copilot does the tedious flagging; the licensed advisor
-  decides. Every recommendation starts `pending` and must be approved/edited to become guidance.
-- **Long-term Lumos thesis:** broader precision-farming platform (advisory + IoT + marketplace +
-  embedded finance — see `docs/`). **Finance and marketplace are explicitly DEFERRED**, not part
-  of this product.
+- **YC-style one-liner:** "AI pesticide-decision and compliance copilot for specialty-crop growers
+  and their PCAs — the decision layer before the spray that helps them spray less, avoid PHI/REI
+  mistakes, and keep audit-ready records." Full text in `YC_POSITIONING.md`.
+- **Against the low-pesticide RFS.** The RFS names four unlocks: AI that can see, cheap sensors,
+  precise robotic action, and biology (microbes/peptides/RNA). Each one produces or consumes a
+  *decision*, and none of them can prove a reduction on its own. Lumos is the layer that decides
+  and proves — complementary to the companies building the other four, and the natural place the
+  evidence lands. `RFS_PESTICIDE_REDUCTION.md` holds the long-form answer; its framing notes are
+  still right, but its "we are not CV/sensors/robotics" concession is now a **roadmap, not a
+  permanent boundary** (see §3).
+- **Why the CA specialty-crop wedge:** sprayed often, hand-harvested, heavily regulated
+  (PHI/REI, MRL, PrimusGFS/GlobalG.A.P., CA DPR reporting). Seeded U.S. demo farm =
+  `Golden Coast Strawberry Ranch`, Watsonville. See `US_WEDGE.md`.
+- **PCA / agronomist-in-the-loop is an advantage, not a tax.** In California a licensed PCA must
+  legally sign pesticide recommendations — the human-in-the-loop already exists and our review
+  workflow maps onto it. It is also what lets us ship aggressive capability safely.
+- **Why not John Deere / FieldView:** they are row-crop hardware and data plumbing. We are
+  software upstream of the nozzle, deep on one painful recurring decision in a segment they do
+  not serve.
 
 ---
 
 ## 3. Current Strategic Conclusion
 
-- The prototype is **strong enough** to demo and to run pilot conversations.
-- The startup is **NOT validated yet** — no confirmed real-world pilots (see §11).
-- **Current priority is real-world validation, not more product building.**
-- **Stop building product unless a validation need directly requires it.** Default answer to
-  "should I build X?" is no — get buyer evidence first.
-- **As of 2026-07-20** the repo is repointed at ONE falsifiable hypothesis: the Botrytis
-  deferral shadow pilot (`BOTRYTIS_PILOT.md`). V1 of the evidence loop is built and the
-  remaining blockers are not code — they are the threshold source table, the farm's actual
-  weather data, the PCA's action threshold, and whether block randomization is operationally
-  acceptable. **Do not build the reporting/calibration layer until real outcomes exist**; its
-  shape will be wrong until you have seen one real block outcome.
-- **As of 2026-07-28 the active plan is `DESIGN_PARTNER_SPRINT.md`, and it contains no
-  engineering.** It is a seven-day founder sprint to secure ONE Central Coast strawberry PCA:
-  an exact partner profile, three hypotheses (behavioral / data / economic) each with a pass
-  threshold **and a kill criterion**, a 20-minute no-pitch call script, a data-availability
-  checklist mapped field-by-field to models that already exist, a five-stage pilot ladder
-  where a lower stage may never make a higher stage's claim, and a decision gate whose
-  branches include narrowing to compliance, pivoting to measurement infrastructure, and
-  abandoning the thesis. **The label layer finishing through Phase 5 did not change this
-  conclusion** — capability rose, evidence did not. Read that doc before proposing any build.
+**Build the thesis. Validate in parallel.**
+
+The prototype is strong enough to demo and to run pilot conversations, and the startup is not yet
+validated (§11). Those are both true, and neither is a reason to stop building. This section used
+to say "stop building product unless a validation need directly requires it"; that stance
+produced a repo full of capability with the ceiling always one purchase or one transcription
+away. The correct response is to **close those gaps**, not to freeze.
+
+### The Build Ladder
+
+The organising spine for all engineering work. Every rung names what it unlocks.
+
+| Rung | What it is | Status |
+| --- | --- | --- |
+| **L0 — Decision layer** | Rule engine, PCA review, audit record, field-level provenance, evidence export | **Built** (§5) |
+| **L1 — Measurement substrate** | The feeds and instruments that make a reduction claim checkable: weather ingestion, leaf-wetness sensing, transcribed thresholds and labels | **Next.** Partially built; the binding gaps are named below |
+| **L2 — Seeing** | Vision beyond a single suggested scouting note: pressure over time, per block, as engine-admissible evidence | Open |
+| **L3 — Targeted application** | Variable-rate / spot-treatment **prescriptions** exported to equipment the grower already owns | Open |
+| **L4 — Non-chemical alternatives** | Biologicals and microbials as first-class options, so "don't spray this" can become "spray this instead" | Open |
+
+L1 is the highest-leverage rung, because **every claim the product wants to make is currently
+gated on it.** Two of its blockers are not code and are now permitted (§4): buy a leaf-wetness
+sensor, and transcribe `app/botrytis_thresholds.py`. Do those.
+
+### The build test
+
+Replaces the old "default answer is no." Ship it when all three hold:
+
+1. **It advances a named rung** (or fixes something on a built one).
+2. **It ships with its honesty mechanism** — a refusal path for missing data, provenance on
+   anything a human will act on, and a test that pins the behaviour.
+3. **It does not cross §4.**
+
+If a request fails one of these, say which one and what would fix it. Do not refuse on vibes, and
+do not refuse because the work is ambitious.
+
+### The pattern that makes ambition safe
+
+**Build the structure; ship the coefficients empty; refuse rather than default.** Generalised in
+`app/transcription.py`, proven by `label_table.py` and `botrytis_thresholds.py`. It is why this
+codebase could add eight decision domains in a day without inventing a single number, and it is
+the first tool to reach for whenever the data does not exist yet. A model that cannot compute
+returns a `Refusal` with a stable `code` (`app/refusal.py`) — never a plausible number, never a
+zero.
+
+### Honest standing
+
+Zero confirmed pilots, zero customer decisions. `DESIGN_PARTNER_SPRINT.md` (secure one Central
+Coast strawberry PCA) is still the right *commercial* motion and contains no engineering — run it
+alongside the build, not as a gate in front of it. Capability and evidence are two tracks; the
+mistake is letting either one stop the other.
 
 ---
 
 ## 4. Hard Guardrails
 
-Do **NOT** build any of the following unless the user explicitly instructs it in this session:
+Not a list of features someone once felt nervous about. These are the things that would make the
+product **dishonest, unsafe, or illegal** — the reasons a compliance-sensitive buyer can trust it.
+Everything not listed here is buildable under the §3 build test.
 
-- authentication / multi-tenant SaaS infra
-- payments / billing
-- ~~marketplace / supplier integrations~~ / ~~financing~~ — **guardrail partially lifted
-  (2026-07-16)**: an "Inputs & finance" Phase 1 module is now built (RFQ + concierge-entered
-  quotes + INDICATIVE financing offers + orders, see §5). Still NOT allowed: a public supplier
-  marketplace/portal/catalog, real payments, real lending, automated underwriting, credit
-  scoring, money movement of any kind, revenue-sharing, commission-based quote ranking.
-- revenue-sharing / credit / money movement
-- ~~drones / IoT / sensors / hardware / weather-station hookups~~ — **guardrail
-  partially lifted (2026-08-05)**: a climate **ingestion adapter** for CIMIS (a public
-  CA state weather API) is now built, see §5 and `DATA_PLATFORM.md`. Still NOT allowed:
-  drones, robotics, on-site sensors, or any physical hardware. That distinction is
-  load-bearing rather than pedantic — CIMIS publishes **no leaf-wetness item**, so the
-  one measurement the Botrytis pilot actually needs still requires an on-site sensor
-  and is therefore still out of scope. "Live weather" is no longer a Milestone-3 idea
-  for climate data specifically; every other feed remains gated
-- robotics / autonomous spray equipment
-- ~~computer vision / image-based disease diagnosis~~ — **guardrail lifted (2026-06-28)**: a
-  photo-analysis copilot is now built (multimodal Claude, see §5). Still NOT allowed: autonomous
-  image *diagnosis* or any photo-driven "spray now" output — the model only *suggests* a draft
-  scouting note a human must confirm; it never diagnoses or prescribes.
-- chatbot / conversational LLM agent
-- autonomous pesticide prescriptions ("you must spray")
-- guaranteed pesticide-reduction claims
-- more crop or geography expansion beyond the current wedge
-- unnecessary dashboards / vanity UI
-- ~~a pesticide-label / PHI / REI / MRL **database**~~ — **guardrail partially lifted
-  (2026-07-27)**: a label **capability layer** is now built (product identity + append-only
-  label records + per-farm PCA verification, see §5). Still NOT allowed: **MRL data** (an MRL
-  is destination-market law, not label law, and needs a different source — §14's "no MRL
-  database" stays true), bulk-importing a third-party label dataset, or any label value that
-  is not transcribed from a primary document with its citation
+### Genuinely hard — do not cross without an explicit instruction in-session
 
-LLM weekly summaries and photo upload are Milestone-3 ideas — also gated, not default.
+- **No autonomous spray action.** A licensed human authorises every recommendation. This is legally
+  required in California and is the product's entire trust model. It is enforced *structurally*,
+  not by prose: `disease_risk.RiskAssessment` has no product, rate, or action field, so a
+  prescription is **inexpressible**. Preserve that technique when adding surfaces — the strongest
+  guarantee is a value that cannot be represented.
+- **No fabricated regulatory or coefficient values.** A PHI, REI, rate limit, threshold, scorecard
+  weight, or advance rate arrives by a human transcribing a primary document *with its citation*,
+  or the model returns a `Refusal`. `None` means **the source is silent**, never "no limit."
+  See `app/transcription.py`, `TRANSCRIPTION_TASKS.md`.
+- **No money movement of any kind.** No payments, disbursement, repayment collection, invoicing,
+  or computed amortisation — hence no structured APR anywhere, only a lender's verbatim cost
+  sentence. Also no Lumos-authored credit policy or covenant threshold, no `approved` underwriting
+  outcome (the strongest affirmative is `conditions_met`), no estimated insurance premium, and no
+  recommendation to take/increase/close a market position. Real licensing exposure; the last two
+  are structural (there is no field to put them in).
+  - **Amended 2026-08-12 on an explicit in-session instruction: commercial-agreement ACCOUNTING
+    is now in scope.** `CommercialAgreement` records what a farm and Lumos agreed — a platform
+    fee, a per-area or per-cycle fee, a share of *verified* value, a capped bonus, an origination
+    or monitoring fee, a revenue share, a crop share — and `app/participation.py` calculates what
+    it comes to on that season's recorded evidence. The line moved from "no revenue-sharing" to
+    **"calculate what is owed, never move it"**: `Participation` has no `invoice`, `due_date`,
+    `paid`, `settlement_status`, `payment_method`, or `apr` field, `schemas` rejects those keys
+    inside `terms`, and a test asserts the field set. A share of verified value reads the
+    **verified** ledger tier only — billing against estimated value would charge for a claim
+    nobody has corroborated, which is the distinction the whole ledger exists to keep.
+- **No guaranteed-reduction claims**, and no metric that reads as one. "Potential avoidable cost,"
+  never "savings." `backtest.FORBIDDEN_KEY_SUBSTRINGS` makes adding an "avoided" key fail CI —
+  reuse that technique.
+- **No manufacturing our own hardware.** Integrate with instruments, buy them, read their feeds.
+  Do not become a hardware company; that is the capital trap the wedge exists to avoid.
+- **No presenting simulated output as real.** Demo data is never traction, mock-service output is
+  never model performance, a fabricated fixture is never a live capture. See §9.
+
+### Open — build these when a rung calls for them
+
+Previously forbidden, now in scope. The §3 build test still applies (each needs its honesty
+mechanism), but none of these requires a special dispensation:
+
+- **Computer vision and image-based diagnosis** — including diagnosis, multi-image and
+  time-series pressure, and vision output that reaches the engine as evidence. The human gate
+  above still holds: vision can establish *what is there*, never *what to spray*.
+- **Sensors, IoT, weather stations, and instrument purchases** — explicitly including the
+  on-site leaf-wetness sensor that L1 needs. Ingest via `app/ingest/` and its adapter contract.
+- **Targeted-application and spot-spray prescriptions** — variable-rate maps and per-zone
+  treatment plans exported to third-party equipment, under the human gate.
+- **Biologicals and non-chemical alternatives** — as decision options with the same label,
+  provenance, and refusal discipline as conventional chemistry.
+- **Crop and geography expansion** — the CA strawberry wedge stays **first**, not **only**. New
+  crops need their alias and label work done properly (`app/crop_aliases.py`), not assumed.
+- **Conversational interfaces** — a chat surface may explain, retrieve, and draft. It may never
+  be the decider; the outcome stays the deterministic engine plus the PCA.
+- **Auth, tenant isolation, and multi-grower access control** — reclassified from forbidden to
+  buildable. A PCA firm serving many growers needs it, the primitives already exist
+  (`PcaCredential`, `PcaFarmAuthorization`, `app/operator_key.py`), and the Strix pentest's
+  cross-farm attribution finding (commit `b195713`) is the evidence it is now a liability rather
+  than a discipline. Build it when a real multi-grower engagement requires it.
+- **Marketplace and procurement depth** — supplier catalogue, RFQ transport, quote dispersion.
+  Already partially built (§5). Still excluded by the money-movement rule: real payments, real
+  lending, automated underwriting, and commission-based quote ranking.
 
 ---
 
 ## 5. Product Features Already Built
 
-Backend + frontend both implement:
+A capability map, not a changelog. Depth lives in the linked docs — read those before touching
+the corresponding area.
 
-- **Data-intelligence layer (2026-08-05)** — outside data reaching a decision auditably.
-  **Full contract in `DATA_PLATFORM.md`; read it before proposing anything here.**
-  Branch `data-intelligence-layer`.
-  - **The honest result, and do not overstate it.** This closed a SOFTWARE gap and made
-    a PROCUREMENT gap visible. The Botrytis assessment **still abstains**; the binding
-    blocker merely moved:
-    `no_weather_in_window` (nothing ever wrote a weather row — now fixed) →
-    **`no_leaf_wetness_or_accepted_proxy`** (an on-site sensor purchase), with
-    `thresholds_not_supplied` untouched (a transcription task). **CIMIS publishes no
-    leaf-wetness item** — verified 2026-08-05 against the hourly catalog, from
-    documentation rather than a live call because no AppKey exists. Never write that
-    this reduced pesticide use or unblocked the assessment.
-  - **17 domains declared, 9 in scope, 8 deferred** (`app/ingest/domains.py`). Declaring
-    is provably not building, via three mechanisms rather than prose: a source under a
-    deferred domain must be `deferred_to_finance_phase` and `build_adapter` raises;
-    `features.base.register()` refuses a non-MVP domain, so `debt_service_capacity`
-    cannot be *registered*; and every deferred domain quotes the §4 clause deferring it,
-    with a test asserting the quote still exists (whitespace-normalized, since §4 wraps).
-  - **Eight-stage pipeline**, each stage reusing something. `validate` reuses
-    `csv_import.validate_rows`, so an ingested reading meets the identical contract as a
-    concierge-entered one — but WITHOUT `existing_keys`, which cannot tell a repeat from
-    a correction. **Issues are recorded, never raised.** Three behaviours are
-    load-bearing: a row with no station-to-field distance is **dropped, not written with
-    a NULL** (`disease_risk` reads NULL as in-range *and* as close); a `units.Refusal`
-    drops the row carrying no number; and `recorded_at` is stamped at persist time,
-    **never back-dated** — so a backtest whose `as_of` precedes a backfill correctly
-    finds no admissible weather.
-  - **Six features that abstain rather than default.** `FeatureResult` is abstained
-    **iff** it has no value, so `0` can never stand in for "no data" — and `0 kg/ha of
-    active ingredient` is a pesticide-reduction *claim*, not a gap. Two are
-    all-or-nothing for a **bias** reason, not a purity one: a partial AI total is
-    *smaller*, not approximate, and the applications missing a `moa_group` are
-    disproportionately the repeat sprays that would drag rotation diversity down.
-    `leaf_wetness_hours` abstains permanently on CIMIS-only data — that is the point.
-  - **`feature_values` is a leak detector**: fully unique, no supersede chain, because
-    at a fixed `as_of` the inputs digest must reproduce forever. A digest that moves is
-    proof an input became visible that should not have been; it is recorded, not
-    overwritten. The digest covers the ADMISSIBLE set, or every ordinary late entry
-    would trip it and the alarm would be switched off within a week.
-  - **Surfaces:** grower-facing `GET /farms/{id}/data-readiness` (NOT operator-gated —
-    "why did my check not run" belongs to the grower) with a server-owned `basis_text`
-    the card renders verbatim; operator `GET /internal/ingestion[/sources]` and
-    `POST /internal/ingestion/{source}/run` (**enqueues, never fetches inline** — the
-    worker owns retries and dead-lettering). `DataReadinessCard`, `IngestionCard`,
-    `DomainRegistryTable`. **Nothing was added to the PCA-facing decision surface** —
-    that would break the shadow study's blinding.
-  - **Open, and not code:** no CIMIS AppKey (adapter ships inert; re-verify the
-    leaf-wetness finding against `/api/data` when one exists), and the
-    `station_distance_km` grading contradiction in `DATA_PLATFORM.md` §6 — pinned by
-    test, deliberately unfixed, decide before a real pilot enters weather by CSV.
-  - **It is NOT validation.** Capability rose; buyer evidence did not. §3/§11 unchanged.
+### The decision loop (the core product)
 
-- **The operator REFERENCE FARM (2026-07-28)** — the first configuration in which the label
-  checks actually run. Plan: `~/.claude/plans/jazzy-hatching-pumpkin.md`.
-  - **Why a separate farm.** `promotable_to_authoritative` refuses a record whose only
-    verification is `simulated`, and `ensure_demo_real_separation` guarantees a demo farm's
-    verification IS simulated. **A demo farm is therefore structurally incapable of showing a
-    label-grounded decision** — by design. So the farm that shows one must carry real
-    provenance. Do not "fix" this by relaxing either guard.
-  - **`Farm.is_reference`** (migration `3fc3f253cc02`) is the other half: real provenance
-    would otherwise make operator-created decisions count as pilot evidence on a farm with no
-    grower. Reference farms are excluded from `/internal/instrumentation` (the usage funnel),
-    carry `pilot_evidence.REFERENCE_FARM_DISCLOSURE` as `limitations[0]` on decision-evidence,
-    pilot-evidence and the evidence export, publish an **empty `investor_summary`**, and show
-    an "Operator reference farm — not a customer" badge. **Read-only in the API on purpose** —
-    absent from `FarmCreate`/`FarmUpdate`, settable only by `python -m app.reference_farm`,
-    because both setting and clearing it are consequential.
-  - **`app/reference_farm.py`** — explicit entry point, never called by seed/startup. Creates
-    the farm, a `PcaCredential` + authorization, verifies both label records through the real
-    `crud.create_label_verification` path, seeds four Switch applications (the label's full
-    season allowance), then a **fifth** → `block` at authority **`verified_label_grounded`**,
-    plus an avoided Captan application with a follow-up event.
-  - **What it produced, verified live:** `not_evaluated` 4 → **1** (crop registration, honestly,
-    because only the strawberry use is transcribed); `label_max_applications` and
-    `label_max_seasonal_rate` firing at `source_authority: verified_label`;
-    `active_ingredient_quantity_avoided` = **36.0 lb captan** with its cited conversion;
-    `/compliance` `basis_text` → *"partially label-verified"*. The demo farm is unchanged.
-  - **Consequence: `LUMOS_OPERATOR_KEY` is now REQUIRED to start the API** — the reference
-    farm is real data, so `has_non_demo_data` is true and the §8 interlock fires. Correct
-    behaviour, but it will look like a broken server if you forget (see §8).
-  - **It is NOT validation.** Capability evidence, not demand evidence. §11 is unchanged:
-    still zero real pilots, still zero customer decisions.
+- **Pre-spray decision workflow** — a grower/PCA enters a *planned* spray; `app/decision_engine.py`
+  checks harvest timing, entered PHI/REI, prior re-entry windows, repeated active ingredients,
+  linked scouting evidence, and missing data, returning ONE explainable outcome:
+  **approve / block / delay / inspect_first / pca_review_required** with triggered rules, exact
+  calculations, inputs used, missing information, and a completeness confidence. Precedence:
+  block > delay > pca_review_required > inspect_first > approve.
+  **Missing inputs can never yield approve** — they escalate to PCA review.
+- **Authority gating** — every rule carries a `source_authority`
+  (`verified_label` / `pca_entered` / `grower_entered` / `heuristic`). Only verified-label or
+  PCA-entered sources back a **definitive** verdict; everything else is **provisional** and a
+  provisional approve becomes review-required. The engine never names replacement products —
+  those come only from PCA-entered `pca_next_action`.
+- **PCA review** (approve / edit / reject + comment) gates applied outcomes (409 until approved or
+  edited when review is required). **Real-world outcome** recorded as
+  `sprayed_as_planned / changed_product / delayed / avoided / inspected_first`, reason mandatory
+  except as-planned.
+- **Field-level provenance** — `DecisionInputValue`, an append-only supersede chain per
+  compliance-critical input with `source_type` and verification attribution. Latest non-superseded
+  value drives the engine; imported values never auto-approve.
+- **Immutable audit history** — `DecisionAuditEvent` (created / reviewed / input_value_superseded /
+  outcome_recorded / follow_up_added), prior state in `before`. Plus an append-only
+  `DecisionFollowUpEvent` timeline, required for every non-as-planned outcome.
+- **Evidence** — `GET /farms/{id}/decision-evidence` splits **confirmed** (follow-up-backed only)
+  from **estimated** from **not_calculated** (with reasons). Never combined into one score.
+  Anonymized `evidence-export` excludes demo records by construction.
 
-- **Label capability layer, Phases 0–5 + delivery-gap fixes (2026-07-27, commits `cba6e2a`
-  → `ba8598f`)** — product identity and verified label records, so the four label-dependent
-  checks can finally run. Plans: `~/.claude/plans/snoopy-hugging-pinwheel.md` (phases),
-  `~/.claude/plans/elegant-snuggling-ritchie.md` (delivery gaps). **The abstention gates are
-  SATISFIED, never deleted** — no structural constraint is weakened, no disclaimer removed,
-  and a pesticide recommendation stays inexpressible. **The table was filled on 2026-07-28**
-  — see the reference-farm entry below. Until then the capability existed and the data did not.
-  - **`app/label_data.py` (framework-free)** — three rules govern everything: a label value
-    is usable only when **attributable** (`promotable_to_authoritative` returns the REASON a
-    record cannot back a decision, not a boolean); product identity is **exact or ambiguous**
-    (`100-1234` and `100-1234-5905` are DIFFERENT labels — a base match goes to a human);
-    a conversion is **cited or refused** (`RATE_CONVERSIONS` is definitional only, each with
-    its citation; mass↔volume is deliberately absent because it needs a per-product density,
-    so `convert_rate` returns a `Refusal` naming the unit).
-  - **`app/label_table.py` shipped EMPTY until 2026-07-28** and now holds **two real
-    transcriptions** (Captan 80 WDG `34704-1075`, Switch 62.5WG `100-953` — strawberry use,
-    both from EPA PPLS PDFs with section, revision, effective date and verbatim snippet).
-    The discipline is unchanged: values are transcribed from a primary document or the field
-    stays `None` (= *the label is silent*, never *no limit*). `TranscribedLabelUse` is
-    frozen/kw-only with no provenance defaults, so an uncited row raises at import.
-    **Never loaded by `seed.run()`/`init_db()`** — `python -m app.label_sync` or
-    `POST /internal/labels/sync` only; `tests/test_label_library.py` asserts that.
-  - **Three tables:** `PesticideProduct` (identity; unique `epa_reg_no_normalized`, plus
-    `epa_reg_base` recorded so a near-miss is RECOGNIZED, never matched),
-    `ProductLabelRecord` (**append-only**; a revision and a withdrawal are both just
-    superseding rows — a withdrawal has every regulatory value NULL, so resolution yields
-    nothing and the checks correctly return to `not_evaluated`; NULL means THE LABEL IS
-    SILENT, never "no limit"), `ProductLabelVerification` (**farm-scoped** so
-    `require_pca_for_farm` and `ensure_demo_real_separation` both cover it by construction —
-    a demo farm can only hold a `simulated` verification, which never promotes, so demo
-    decisions can never look label-grounded with zero special cases in the engine).
-  - **Five engine rules** (`label_crop_registration`, `label_max_applications`,
-    `label_retreatment_interval`, `label_max_seasonal_rate`, `label_value_disagreement`).
-    Crop registration blocks ONLY when `registered_crops_transcription_complete` AND a
-    verified record backs it — a partial transcription's silence is not evidence a crop is
-    unregistered, and a false BLOCK there would end a PCA's trust permanently. Seasonal
-    counting reads **`SprayEvent` only** (an applied outcome already materializes one) and
-    matches products on EXACT reg no.
-  - **`not_evaluated` is computed per decision**, each check carrying a stable `check_id` and
-    its OWN reason; a rule that runs retires its entry by id, never by matching prose.
-  - **`crud.apply_label_values`** mirrors the PCA-review supersede path and REFUSES once a
-    decision is reviewed or applied — a label sync must never rewrite what a PCA signed.
-    `_entered_values_behind_label` walks BACK through the supersede chain past label rows, so
-    applying a label value cannot erase the disagreement it should have reported. A later
-    revision surfaces as `decision_status.label_reference_stale` instead of a silent recompute.
-  - **Phase 4 — AI label extraction + the act that makes a value usable.**
-    `app/label_extraction.py` reuses `extraction.py`'s `build_content_blocks` / `ALLOWED_*` /
-    `MAX_DOCUMENT_BYTES`, registers a `MockLlmService` builder, and logs
-    `AiJudgment.kind="label_extraction"`. **Three routes are three distinct trust levels and
-    must stay separate:** `POST /internal/labels/extract` (never writes),
-    `POST /internal/labels/records` (server-set `ai_extracted_unverified` — no request schema
-    exposes `source_tier`, so a client cannot claim a tier it did not earn), and
-    `POST /farms/{id}/label-verifications` (deliberately NOT under `/internal` — verification
-    is a professional act, gated by `require_pca_for_farm` and attributed from the
-    credential). `components/LabelLibraryCard.js` renders the three steps separately.
-  - **Phase 5 — the AI-quantity metric + conditional honesty copy.** `label_data.ai_quantity`
-    converts percent pairs with a MASS rate only, `lb/gal` / `g/l` with volume, and **never
-    converts areas** — cross-basis needs a per-product density, so it refuses.
-    `pilot_evidence._ai_quantity_avoided` is **all-or-nothing**: one refusal keeps the whole
-    metric not-calculated, because a partial total reads as a smaller number rather than an
-    incomplete one. Concentrations come only from labels PCA-verified for that farm
-    (`crud.ai_concentrations_for_farm`). `not_calculated_block()` narrows the disclosure by
-    evidence; `PERMANENTLY_NOT_CALCULATED` names the two that never leave. The old
-    unconditional invariant became a **XOR** (present in `not_calculated` xor computed with
-    non-empty `conversion_provenance`). `/compliance` gained a server-owned `basis_text`, and
-    `decision_engine.planned_spray_disclaimer()` sits BESIDE the constant so **zero
-    disclaimers changed wording** — asserted by test.
-  - **Delivery-gap fixes** — three defects found by auditing the running app end-to-end
-    rather than reading this file. Worth remembering as a method: *the docs described
-    capabilities the UI could not reach.*
-    - The weekly report and audit packet contained **zero** decision-workflow data (both
-      built only from the legacy `recommendation_engine` path) → fixed via
-      `pilot_evidence.summarize_decisions_for_report` + `main._decision_report_lines`.
-    - **`epa_reg_no` was not a field in `PreSpraySheet.js` at all**, so Phases 0–5 were
-      unreachable from the primary workflow. Added, plus `LabelResolutionNote` and a
-      grower-facing `GET /farms/{id}/label-resolution` (the `/internal` one is
-      operator-gated).
-    - Photo scouting used `messages.create` + JSON scraping and logged **no `AiJudgment`** —
-      the weakest-typed call on the only AI path that can reach the engine. Now
-      `messages.parse` with a `PhotoFinding` schema + `VisionError` + logging;
-      `build_ai_calibration` gained `by_kind` covering all four kinds (volume/abstention
-      only, `accuracy: None`).
-  - **657 tests.** `tests/test_label_authority.py` is the invariant file — including that an
-    **APPROVE is still never `verified_label_grounded`**: `repeated_active_ingredient`
-    (heuristic) and `prior_rei_overlap` (grower-entered) keep every approve provisional, so
-    **merging or deleting either silently creates a no-human-review approve**.
+### Label capability layer
 
-- **Botrytis Deferral Shadow Pilot V1 (2026-07-20)** — the current focus. Full contract in
-  **`BOTRYTIS_PILOT.md`**; read that before touching any of it. One falsifiable hypothesis:
-  can a licensed PCA defer a scheduled Botrytis application 24–72h, and can we measure it?
-  - **Pilot observation layer:** `Block` (the comparison unit, nullable `block_id` links;
-    `field_block` free text deliberately untouched), `WeatherObservation` + `ScoutingSample`
-    (units in the column names, dual `observed_at`/`recorded_at`, append-only with
-    `supersedes_id`, partial unique indexes `WHERE supersedes_id IS NULL`), and two more CSV
-    record types.
-  - **`app/risk_snapshot.py` + `RiskInputSnapshot` — the leakage boundary.** Framework-free,
-    and its signature admits ONLY block + observations, so post-decision data cannot be passed
-    in without a visible contract change. Admissibility is checked on BOTH timestamps: the
-    load-bearing rule is `recorded_at > as_of`, because filtering on `observed_at` alone looks
-    correct and silently leaks hindsight. Content-addressed (sha256 over canonical JSON).
-  - **`app/disease_risk.py` — versioned rules that mostly abstain.** No LLM in this path at
-    all. `RiskAssessment` has no product/rate/action field, so a pesticide recommendation is
-    *inexpressible*, not merely forbidden. Bands are `low|moderate|high|abstain` — there is no
-    "safe". Every abstention condition runs BEFORE the rule and ALL reasons are reported.
-    **`botrytis_wetness_v1` is registered and abstains with `thresholds_not_supplied`: its
-    coefficients are deliberately absent, and must be transcribed from the primary source, not
-    recalled or searched for** — see BOTRYTIS_PILOT.md §3 for why a plausible number would pass
-    every writable test.
-  - **`DiseaseRiskAssessment` + shadow mode:** `is_shadow` defaults True and shadow rows are
-    omitted from every PCA-facing serializer (absent from the payload, not hidden in the UI).
-    `GET /internal/pilot/assessments` is the only surface that returns them. Unblinding is a
-    dated, protocol-versioned event (`PilotProtocol.unblinded_at`), never a config toggle.
-  - **`PcaDisposition`** (`follow_baseline|defer|rescout|insufficient_evidence`, mandatory
-    rationale, anchored to a snapshot digest, append-only, always credential-gated via
-    `crud.require_pca_for_farm`). **Strictly orthogonal:** recording one never writes a
-    `decision_*`/`review_*` column, and `defer` neither unlocks an applied outcome nor
-    satisfies a required review. Four facts about four moments — engine verdict, review,
-    disposition, outcome — stay separate, or the pilot measures nothing.
-  - **`PilotProtocol` / `BlockAssignment` / `BlockOutcomeObservation`:** thin versioned
-    protocol reference (the protocol is a document), offline randomization with its seed
-    recorded, and per-block/per-harvest outcomes. The last is deliberately NOT on
-    `DecisionFollowUpEvent` (whose `planned_spray_id` is non-null) — packout is evidence for
-    many decisions and for none in particular.
-  - **`DELETE /planned-sprays/{id}` now 409s** once a decision carries evidence beyond its
-    creation. The cascade on `input_values`/`audit_events`/`follow_up_events` made the
-    unguarded route silently destroy the immutable audit trail.
-  - **Honest units:** `treated_area_unit` records what the acre-named `treated_acres` actually
-    is; `pilot_evidence._sum_treated_area` refuses to total a mixed-unit set rather than
-    converting. `NOT_CALCULATED` gains `seasonal_pesticide_use_reduction` — deferring passes is
-    not a season-total reduction.
-  - Frontend: `PcaDispositionCard` on `/decisions/[id]` (renders nothing about risk, and
-    cannot), `PilotOperatorCard` on `/internal`, `disposition`/`riskBand` STATUS kinds.
-    `lib/api.js` now merges headers instead of letting `...options` clobber them.
+Product identity plus verified label records, so label-dependent checks can actually run.
+Detail: `TRANSCRIPTION_TASKS.md`; invariants: `tests/test_label_authority.py`.
 
-- **Pilot-integrity & measurement-foundation cycle (2026-07-18)** — hardening for the first
-  REAL pilot, no new claims:
-  - **Clock interlock:** API refuses to start with `LUMOS_DEMO_TODAY` set unless
-    `LUMOS_DEMO_MODE=1` (see §8); `/health` reports `clock_mode`/`pinned_date`.
-  - **Demo/real mixing guard:** one farm is all-demo or all-real; mismatched record creation
-    409s (`crud.ensure_demo_real_separation`, incl. input plans + both import paths). The
-    frontend demo-tags rows created interactively on demo farms (`useDemoTag`). Fixed a
-    pre-existing bug where API rows with omitted provenance fell to the ORM default
-    `"demo"/"simulated"` — create schemas now default `manual_entry`/`user_provided`.
-  - **Historical spray import:** `spray_events` is a third CSV import record type (dry-run,
-    aliases, dedupe, template; CSV-only — no AI extraction model). This is the
-    `prior_period` reduction baseline's denominator.
-  - **Explicit import date formats:** `date_format` = `auto|iso|mdy|dmy`; `auto` ERRORS on
-    ambiguous m/d-vs-d/m dates instead of guessing.
-  - **Quantity capture (capture only, no computed claims):** SprayEvent gains
-    `rate_amount/rate_unit/treated_acres` (+ `external_record_id/source_system/
-    source_filename`); `Farm.area_unit` ("acres"/"m2") makes the area unit data instead of
-    country-implied; applied outcomes copy rate/acres/MoA from the plan (changed product ⇒
-    rate/MoA never carry over). `NOT_CALCULATED` in pilot_evidence stays verbatim.
-  - **Alembic baseline** (`32a030ba8bc4`) — see §8; the schema can now evolve after real
-    data lands.
-  - **IA consolidation:** primary nav = the decision loop only; Inputs & finance demoted to
-    the bottom nav group; `/compliance` merged into `/evidence` as a tab (route redirects;
-    `CompliancePanel`); ReductionCard + wedge tagline surfaced; WeatherCard renders on demo
-    farms ONLY; invariant tests added for missing-data-never-approves + the mixing guard.
+- Three rules govern everything: a label value is usable only when **attributable**
+  (`promotable_to_authoritative` returns the *reason* it cannot back a decision); product identity
+  is **exact or ambiguous** (`100-1234` and `100-1234-5905` are different labels — a base match
+  goes to a human); a conversion is **cited or refused**.
+- `PesticideProduct` (identity) / `ProductLabelRecord` (append-only; a revision and a withdrawal
+  are both just superseding rows) / `ProductLabelVerification` (**farm-scoped**, so a demo farm can
+  only hold a `simulated` verification, which never promotes — demo decisions can never look
+  label-grounded, with zero special cases in the engine).
+- Five engine rules: crop registration, max applications, retreatment interval, max seasonal rate,
+  value disagreement. Crop registration blocks only when the crop transcription is *complete* — a
+  partial transcription's silence is not evidence a crop is unregistered, and a false block there
+  would end a PCA's trust permanently.
+- **Three routes are three trust levels and must stay separate:** extract (never writes) → commit
+  as `ai_extracted_unverified` (tier is server-set, never client-supplied) → PCA verification for
+  a farm (a professional act, not under `/internal`).
+- `app/label_table.py` holds **two real transcriptions** (Captan 80 WDG `34704-1075`, Switch 62.5WG
+  `100-953`, strawberry use, from EPA PPLS PDFs). Loaded only by `python -m app.label_sync` —
+  never by seeding or startup.
 
-- **Inputs & finance V1 (Phase 1 procurement, 2026-07-16)** — RFQ model, concierge-operated,
-  NO real money. Chain: PCA-cleared decision → `InputPlan` (plan == RFQ; status
-  draft→submitted_for_quotes→quoted→quote_selected→ordered/cancelled; items snapshot product
-  data, mutable only in draft) → concierge-entered `SupplierQuote`+items (never edited —
-  withdraw+re-enter; entry order, NEVER ranked; derived totals server-side) → optional
-  `FinancingOffer` (indicative only, attached to a quote, one-shot **select/decline** — the
-  stored/derived vocabulary is `selected`/`offer_selected`, NEVER "accepted" (hardening pass
-  2026-07-17): selecting indicative terms is not an approval/funding/binding; derived
-  expiry, disclaimer on every payload; "financing requested" is a plan flag, never an offer)
-  → `PurchaseOrder` (one per plan; lines = selected quote's items) + append-only `OrderEvent`
-  timeline (transition-map-guarded, 409 on invalid/duplicate; delivery NEVER marks applied —
-  explicit `input-applied` link to a SprayEvent/applied decision required). Eligibility gate:
-  `decision_status.procurement_eligible` (== the applied-outcome gate, minus `avoided`);
-  enforced at item-create AND plan-submit. Demo/real records can never mix in one chain (409).
-  Evidence export gains an `input_orders` block (demo-excluded, NO savings key by design;
-  includes `selection_reason` + `plan_events`).
-  **Transaction-integrity hardening (2026-07-17):** quote selection requires a mandatory
-  `reason` (stored on the plan, audited, exported — never inferred); every user decision on a
-  plan (submit/select/offer decision/order/cancel) appends to the **append-only
-  `InputPlanEvent`** audit table (mirror of OrderEvent, payload carries from/to state —
-  DecisionAuditEvent couldn't host these: its planned_spray_id is non-null and a plan may
-  have no/many decision links); derived `overdue` (`procurement_status.procurement_overdue`:
-  needed_by passed ∧ not delivered ∧ not cancelled — never stored); chain navigable both ways
-  via derived `PlannedSpray.procurement_links` and `SprayEvent.source_order_id`. There is NO
-  quote re-selection/reopen and NO offer-withdraw endpoint (explicitly deferred); after an
-  order exists the selected quote is immutable. **Deferred debt:** the
-  `PurchaseOrder.accepted_financing_offer_id` column/API field keeps its legacy name (statuses
-  and all user-visible copy already say "selected"); rename later if ever worth the diff.
-  Modules: `app/procurement_status.py` (pure vocab/transitions/derived states),
-  crud/main sections, demo scenario on Golden Coast (Switch 62.5 WG from scenario 1 → 2
-  simulated quotes → selected indicative offer → delivered order → input_applied). The seeded
-  chain is chronologically real: checked/reviewed/planned/quoted/selected/ordered/
-  confirmed/shipped on anchor−1, delivered 07:30 and applied 09:00 on the anchor day; the
-  seed asserts the captan check still BLOCKS, and `test_procurement_demo.py` asserts the
-  full chain chronology (no date may contradict another). Frontend: "Inputs & finance" nav →
-  `/inputs` (plans|orders tabs; value-first headline, next-action + overdue chips),
-  `/inputs/plans/[id]` (items, quote comparison with "$X above the lowest quoted total"
-  entered-totals note + reason-capture on select, financing, append-only plan history),
-  `/inputs/orders/[id]` (lines, timeline, link-application dialog, "Financing — indicative
-  offer selected" card); decision records show existing plan/order links instead of a
-  duplicate "Request supplier quotes" CTA; applications show "Source order: Order #N";
-  concierge quote/offer/event entry on `/internal`. STATUS kinds planStatus/quoteState/
-  financing/offerState/orderStatus + PLAN_EVENT_LABELS/PLAN_NEXT_STEP in `lib/status.js`.
-  No auth (attribution strings, same as everything else); tenant isolation documented as a
-  known limitation.
+### Botrytis deferral shadow pilot
 
-- **Pre-spray decision workflow (THE core product since 2026-07-10)** — a grower/PCA enters a
-  *planned* spray; `app/decision_engine.py` checks it against harvest timing, entered PHI/REI,
-  prior applications' re-entry windows, repeated active ingredients, linked scouting evidence,
-  and missing data, and returns ONE explainable outcome: **approve / block / delay /
-  inspect_first / pca_review_required** — with triggered rules, exact calculations, inputs used,
-  missing information, and an input-completeness confidence. Missing inputs can NEVER yield
-  approve (they escalate to PCA review). **Authority gating (2026-07-10):** every rule carries a
-  `source_authority` (verified_label / pca_entered / grower_entered / heuristic), verification
-  status, and who entered the values; only verified-label or PCA-entered sources can back a
-  **definitive** approve/block — grower-entered values and heuristics always yield a
-  **provisional** result that a PCA must confirm (provisional approve ⇒ review_required). No
-  label database exists, so nothing can produce `verified_label` yet — the vocabulary and gate
-  are in place for when it does, and approve is currently NEVER definitive (rotation/scouting
-  checks are heuristics). The engine never names replacement products — those may only come
-  from explicit PCA-entered guidance (`pca_next_action`). A **PCA review** (approve/edit/reject
-  + comment) gates
-  applied outcomes (409 until approved/edited when review is required); the **real-world
-  outcome** is recorded as `sprayed_as_planned / changed_product / delayed / avoided /
-  inspected_first` (reason mandatory except as-planned; applied outcomes create the linked
-  SprayEvent). `GET /farms/{id}/decision-evidence` aggregates the YC metrics (decisions
-  reviewed, sprays changed/delayed/avoided, conflicts caught, PCA acceptance rate, entered-cost
-  avoided, assumption-based review minutes) with demo data excluded and caveats attached.
-- **AI-Driven Layer V1 (2026-07-12)** — real AI around the deterministic engine.
-  **Architecture rule: AI proposes, the deterministic engine + PCA decide.** The
-  approve/block/delay/inspect/review outcome stays 100% rule-engine; AI never says
-  "spray", never names products, never diagnoses. All AI calls are on-demand
-  (buttons), never in the hot decision path; mock service without `ANTHROPIC_API_KEY`.
-  - **Shared LLM service** — `app/llm.py` (mirrors vision.py): `LlmService` ABC,
-    `ClaudeLlmService` (structured outputs via `client.messages.parse`, model
-    `claude-opus-4-8`, override `LUMOS_LLM_MODEL`), `MockLlmService` with per-schema
-    registered builders (offline tests/demo), `default_llm_service` gated on the key.
-  - **Append-only AI judgment log** — `AiJudgment` (kind extraction/risk_note/
-    next_evidence_action, model_id, prompt_version, input_digest, output JSON,
-    confidence, abstained, is_mock). NO update/delete; judgments are NEVER seeded or
-    fabricated. `GET /internal/ai-calibration` joins risk-note predictions to
-    realized rescues from follow-ups — rates gated behind `CALIBRATION_MIN_N=10`
-    follow-up-backed predictions per level (counts + "insufficient data" until then).
-  - **AI document/message extraction** — `app/extraction.py` +
-    `POST /farms/{id}/import/document` (PDF ≤10MB native document block, image, or
-    pasted text): Claude extracts ONLY what is literally written (regulatory values
-    never guessed), per-row verbatim `source_snippet` + confidence, abstains on
-    non-recommendation input. Returns the SAME DryRunReport as the CSV import
-    (shared `csv_import.validate_rows`); never writes. Human-corrected rows commit
-    via `POST /farms/{id}/import/rows` (server re-validates, `data_source=
-    "ai_extracted"`, field-level `imported_unverified` ⇒ can never auto-approve).
-  - **AI review brief** — `app/ai_brief.py` + `POST /planned-sprays/{id}/ai-brief`:
-    retrieval-grounded (deterministic `crud.comparable_decisions`: same farm,
-    non-demo, alias-matched target or same AI/MoA — no embeddings, no fuzzy)
-    qualitative rescue-risk note + next actions **enum-locked to evidence gathering
-    only** (rescout/verify-label/confirm-threshold/record-follow-up/wait/consult) —
-    product recommendations are structurally inexpressible. Deterministic post-guard
-    forces ABSTAIN below 2 real comparables regardless of model output; never
-    touches decision columns; logs two judgments. UI: `AiBriefCard` on
-    `/decisions/[id]` (no-print, never auto-runs).
-- **Real Pilot Evidence Loop V1 (2026-07-11)** — the concierge pilot infrastructure:
-  - **CSV pilot import** (`POST /farms/{id}/import/csv`; templates at
-    `GET /import/templates/{planned_sprays|scout_observations}.csv`): dry-run first
-    (header-alias column mapping with per-column overrides, per-row errors/warnings,
-    in-file + against-DB duplicate detection), commit only on `dry_run=false`. Pure
-    parsing/validation lives in `app/csv_import.py`. Regulatory values are NEVER
-    guessed — absent PHI/REI/rate/harvest stay missing and are reported unverified.
-  - **Field-level provenance** — `DecisionInputValue`: append-only supersede chain per
-    compliance-critical input (product identity, EPA reg no, crop, target, rate, PHI,
-    REI, dates, AI, MoA group) with `source_type`
-    (demo/user_entered/imported_unverified/pca_verified/authoritative_provider),
-    verified_by/at, source_reference. Latest non-superseded value drives the engine.
-    Imported values are never silently verified and NEVER auto-approve (they escalate
-    to pca_review_required via the `unverified_imported_values` rule).
-  - **Immutable audit history** — `DecisionAuditEvent` (created / reviewed /
-    input_value_superseded / outcome_recorded / follow_up_added), append-only, prior
-    state in `before`. PCA reviews accept structured `proposed_*` field edits that
-    supersede input values as `pca_verified` and re-run the decision (prior snapshot
-    preserved in the audit event). `GET /planned-sprays/{id}/audit-events`,
-    `/input-values`.
-  - **Follow-up timeline** — `DecisionFollowUpEvent`, one-to-many append-only
-    (scouting_observation / actual_application / rescue_application / harvest_outcome
-    / yield_quality_outcome / note); no update/delete endpoints. Required
-    (`decision_status.follow_up_required`) for every non-as-planned outcome and for
-    "approved despite warning". `GET/POST /planned-sprays/{id}/follow-up-events`
-    (409 until an outcome is recorded). Consolidated read-only summary derived in
-    `pilot_evidence.derive_follow_up_summary`.
-  - **Confirmed vs estimated metrics** — `build_decision_evidence` now returns
-    `confirmed` (follow-up-backed only: avoided apps/acres, delay days, replacements,
-    rescues, gross avoided, scouting/rescue costs, net result — negatives shown as
-    negatives), `estimated` (entered values without follow-up), `not_calculated`
-    (AI-quantity + risk-weighted reduction, with reasons), `follow_up` completion.
-    Non-demo records only; never combined into one score.
-  - **Anonymized evidence export** — `GET /farms/{id}/evidence-export` (JSON) +
-    `GET /farms/{id}/export/evidence.csv`: farm as `pilot-farm-{id}` (no name/
-    location), per decision: inputs+provenance, triggered exceptions, review, audit
-    history, follow-up timeline, confirmed/estimated, missing evidence, methodology,
-    correlation≠causality. Demo records excluded by construction (tested).
-  - **Target-name matching** — `app/target_aliases.py`: exact normalized names or the
-    explicit curated alias dictionary ONLY; partial overlap ⇒ `pca_review_required`
-    with the ambiguity recorded (`scouting_target_ambiguity` rule). Never fuzzy.
-  - New engine checks: product-identity completeness, incomplete rate/unit pair,
-    repeated MoA group (only when structured `moa_group` data exists), stale-scouting
-    disclosure, imported-unverified escalation. Label-dependent checks (max seasonal
-    rate, max applications, retreatment interval, crop/use registration) are listed
-    under `not_evaluated` with reasons — never simulated.
-  - Frontend: `PilotImportCard` (dry-run preview + mapping correction),
-    `decisions/[id]` shows input provenance + immutable audit timeline + follow-up
-    timeline with append-only add-event form; `DecisionEvidenceCard` shows the
-    confirmed/estimated/not-calculated split + export links.
-- **Farms** (CRUD) — name, location, country (US/TR), crop_type, area, planting/harvest dates,
-  `advisor_involved`. `GET /farms-overview` returns the urgency-ranked, action-oriented list
-  (why + next action per farm) that drives the dashboard.
-- **Spray events** (CRUD) — product, active ingredient, class, target, dose, date, cost, **PHI
-  days**, **REI hours**, notes, provenance tags.
-- **Scouting observations** (CRUD) — date, crop stage, visible issue, severity 1–5, notes.
-- **Rule-based recommendation engine** — cautious, never "must spray"; risk low/moderate/elevated
-  + a single farmer-facing **next action**. Now the *secondary* farm-wide surface (feeds the
-  weekly report / audit packet); the pre-spray decision check is the primary workflow.
-- **PHI risk** check (harvest inside a spray's pre-harvest interval).
-- **REI risk** check (worker re-entry interval may still be active).
-- **Repeated active-ingredient / resistance** check (same AI > 2× in 30 days).
-- **High-severity scouting** check (severity ≥ 4).
-- **Weather risk** module (mock disease-pressure from temp/humidity/rain; swappable service).
-- **PCA / agronomist review workflow** — approve / edit / reject + comment; only reviewed
-  guidance reaches the grower/report.
-- **Photo-scouting copilot** (`POST /farms/{id}/photo-analysis`) — the "do I really need to
-  spray?" CV feature. A grower/PCA uploads a field photo; a **multimodal model (Claude
-  `claude-opus-4-8`)** describes what it *appears* to see + a confidence + caveats, and pre-fills
-  a **draft scouting observation the human must review/confirm** (it then feeds the rule engine).
-  Real AI, clearly labelled *AI-suggested, not confirmed*; never diagnoses, never says "spray".
-  Falls back to a deterministic `MockVisionService` when no `ANTHROPIC_API_KEY` is set (demo/tests
-  work offline). Confirmed notes carry `data_source="photo_ai"`. Structured output via
-  `messages.parse` with a `PhotoFinding` schema (+ `VisionError`), and **every call is logged
-  as an `AiJudgment`** — this is the only AI path that can reach the engine, so it must never
-  go back to `messages.create` + JSON scraping. See `app/vision.py`.
-- **Pre-spray risk snapshot** (formerly "Compliance snapshot") card/endpoint
-  (PHI/REI/resistance/scouting/weather/review status). Renamed in the UI because the signals
-  come from user-entered values, not verified label data; the endpoint is still `/compliance`
-  and now returns a `basis` field saying exactly that, plus a server-owned `basis_text` that
-  becomes accurate on its own once verified labels exist (the four frontend copy sites that
-  hardcode their own wording should migrate to it).
-- **Pesticide cost analytics** — total/avg spend, most-used AI, repeated-ingredient cost,
-  *potential* avoidable cost.
-- **Reduction-measurement engine** — declared spray baseline (`stated_cadence` /
-  `prior_period` / `calendar_program`) → measured *sprays-vs-baseline* reduction. Honest by
-  design: no baseline → no number; an `is_headline_safe` gate (trusted confidence + ≥21-day
-  window + ≥3 sprays + positive reduction) marks weak/early numbers *illustrative*; negative
-  reductions reported honestly. Wired into pilot-evidence / case-study / audit-packet. Built
-  for the YC low-pesticide RFS (see `RFS_PESTICIDE_REDUCTION.md`).
-- **Weekly report** — copy-pasteable (WhatsApp/text), US vs TR wording + disclaimer.
-- **Pilot feedback** capture (discovery answers).
-- **Pilot farm intake** (`POST /pilot/farms`) — one-shot create farm + sprays + scouting.
-- **CSV exports** — spray events, recommendations, pilot feedback.
-- **Pilot evidence dashboard** (`/farms/{id}/pilot-evidence`) — descriptive metrics + investor
-  talking points + explicit limitations.
-- **Audit packet export** (`/farms/{id}/audit-packet`) — consolidated farm record + flags +
-  review trail + weekly report text.
-- **Concierge pilot import** (`POST /internal/farms/{id}/pilot-import`) — manual transcription
-  of call/WhatsApp/spreadsheet/email data, with provenance tags. Deliberately INTERNAL: the
-  route is namespaced `/internal`, and the raw-JSON UI lives on the unlinked `/internal` page —
-  it is operator tooling, not the customer-facing workflow.
-- **Persisted pilot import batches / provenance** — `PilotImportBatch` + `data_source` /
-  `data_confidence` on every imported row.
-- **Pilot case study** output (`/farms/{id}/pilot-case-study`).
-- **U.S. strawberry demo** (Golden Coast Strawberry Ranch) — primary YC demo.
-- **Türkiye greenhouse-tomato demos** — secondary contrast (Green Valley high-risk, Sunrise low-risk).
+The falsifiable measurement study. **Full contract in `BOTRYTIS_PILOT.md` — read it first.**
+
+- **`app/risk_snapshot.py` is the leakage boundary.** Its signature admits only block +
+  observations, so post-decision data cannot enter without a visible contract change.
+  Admissibility checks **both** timestamps: the load-bearing rule is `recorded_at > as_of`, because
+  filtering on `observed_at` alone looks correct and silently leaks hindsight. Content-addressed.
+- **`app/disease_risk.py`** — versioned rules, no LLM in this path. Bands are
+  `low|moderate|high|abstain`; there is no "safe". Every abstention condition runs before the rule
+  and all reasons are reported. `botrytis_wetness_v1` abstains with `thresholds_not_supplied`; the
+  arithmetic is implemented and tested against synthetic tables, so transcribing the primary
+  source is the only remaining step.
+- **Shadow mode** — `is_shadow` defaults True; shadow rows are *absent* from every PCA-facing
+  payload, not merely hidden in the UI. Unblinding is a dated protocol event, never a config
+  toggle. **Adding anything to the PCA-facing decision surface breaks the blinding** — check this
+  before extending a decision payload.
+- **`PcaDisposition`** is strictly orthogonal to review: recording one never writes a
+  `decision_*`/`review_*` column, and `defer` neither unlocks an applied outcome nor satisfies a
+  required review. Four facts about four moments stay separate, or the pilot measures nothing.
+
+### Data platform and features
+
+Outside data reaching a decision auditably. **Full contract in `DATA_PLATFORM.md`.**
+
+- **17 domains declared** (`app/ingest/domains.py`), all 17 now computable (9 MVP + 8 admitted).
+  The deferral machinery is kept though currently unused — it is how the next domain gets deferred.
+- **Eight-stage pipeline**, each stage reusing something. `validate` reuses
+  `csv_import.validate_rows`, so an ingested reading meets the same contract as a concierge-entered
+  one. **Issues are recorded, never raised.** A row with no station-to-field distance is
+  **dropped, not written with a NULL** (`disease_risk` reads NULL as both *in range* and *close*).
+  `recorded_at` is stamped at persist time, **never back-dated**.
+- **Features abstain rather than default.** `FeatureResult` is abstained **iff** it has no value,
+  so `0` can never stand in for "no data" — and `0 kg/ha of active ingredient` would be a
+  pesticide-reduction *claim*, not a gap.
+- **`feature_values` is a leak detector**: fully unique, no supersede chain, because at a fixed
+  `as_of` the inputs digest must reproduce forever. A digest that moves is proof an input became
+  visible that should not have.
+- **CIMIS adapter** — the only outbound HTTP in the codebase, confined to one `_http_get` with an
+  injectable transport and a key-stripping `_redact`. The pipeline asks `describe()` before
+  `fetch`, so a deployment without a credential is **inert by construction**. CIMIS publishes no
+  leaf-wetness item; that measurement needs the on-site sensor now permitted by §4.
+
+### Procurement and the marketplace (live)
+
+Turns a PCA-reviewed decision into a supplier order. Contract in `FINANCE_LAYER.md` §7.
+
+- **The chain:** eligible decision → `InputPlan` (the plan IS the RFQ) → concierge-entered quotes →
+  grower selects one *with a reason* → optional indicative financing → `PurchaseOrder` → delivery →
+  an **explicit** application link. State machine in `app/procurement_status.py` (pure).
+- **`decision_status.procurement_eligible` is the gate that matters:** only a PCA-approved or
+  PCA-edited decision can back a purchase, never an `avoided` one — and it is re-checked at submit,
+  because a PCA may have rejected the decision after the item was added.
+- Expiry is **derived, never stored**; quotes and offers are **never edited** (withdraw + re-enter,
+  so what the grower saw survives); **delivery never implies application**; financing is
+  "selected", never "accepted" — no `funded`/`approved`/APR field exists anywhere.
+- **Marketplace:** `Supplier` / `SupplierProduct` / `RfqTransmission`.
+  `procurement_analytics.build_report` groups by **catalogue id, never by name** — grouping free
+  text reports three spellings of one product as three products with no spread, which reads as
+  "prices are consistent." Reports a **spread, never a saving or a recommended supplier**;
+  observations stay in entry order, because sorting by price is a ranking in everything but name.
+  **Today the catalogue is empty and no seeded quote line is linked, so dispersion computes
+  nothing** — a data-entry gap, not a code one. RFQ transport is inert (`can_send: false`) and has
+  **no UI caller at all**; "submitted for quotes" means a human emails suppliers off-platform.
+
+### Advisory, finance, market layers (built, dormant)
+
+Built 2026-08-07 on the empty-source pattern, on an explicit session instruction rather than a §3
+rung. **All of it refuses today** — every one of its coefficient sources is empty, so the honest
+summary is *the structure works and computes nothing*. **Full contract in `FINANCE_LAYER.md`;
+read it before touching any of this — do not re-derive the directional rules from scratch, they
+are all written down there with the reason each points the way it does.**
+
+- Agronomy `soil` / `fertilization` / `seed_selection` / `irrigation` / `land_selection`; finance
+  `credit_scoring` / `underwriting` / `collateral` / `insurance` / `monitoring`; market `pricing` /
+  `hedging`. Persistence is append-only and the invariant is **outcome XOR refusal — a refusal IS
+  stored** (`crud._outcome_columns`), or the record set would be survivorship-biased.
+- **The `/finance` page is UNLINKED from the nav** (2026-08-10), like `/internal`: not on the build
+  ladder, aimed at a lender rather than the §1 buyer, and its own write buttons are operator-gated
+  so they 403 for the grower it was built for. Backend, routes and tests are untouched. Re-link it
+  when a lender or insurer conversation is real; **delete the layer outright if none happens** —
+  that is the standing decision, not a reason to keep extending it.
+- **Cross-layer:** `farm_profile.py` + `GET /farms/{id}/profile` (grower-facing) and
+  `GET /internal/transcription-status` (operator worklist, generated from the domain registry so it
+  cannot drift). The profile abstains **per field** and computes no overall score.
+
+### Measured residue reference (USDA PDP) — the first empirical source
+
+Added 2026-08-10. The first layer whose data is neither transcribed from a regulation nor
+recorded by the farm: a national measurement programme's published findings.
+
+- **Source:** USDA AMS Pesticide Data Program annual databases, 1992–2024, free zips at
+  `https://www.ams.usda.gov/datasets/pdp/pdpdata`. Machine-readable, so it is READ as
+  published rather than transcribed — the empty-source pattern does not apply.
+- **`app/pdp_dataset.py`** (pure) parses the pipe-delimited Samples/Results files and
+  aggregates per (commodity, pesticide, year). Two invariants carry the weight: a
+  **non-detect is a row, not a missing row**, so the detection-rate denominator is assays
+  run; and a **pair that was never assayed produces no aggregate at all**, because `0 of
+  0` would read as "never found" when the truth is "never looked."
+- **`app/residue_reference.py`** (pure) returns `ResidueProfile | Refusal`. The profile
+  has **no verdict, band, score, or action field** — the `RiskAssessment` technique, so a
+  residue statistic cannot become "do not spray this." Refusal codes distinguish
+  `pesticide_not_analysed` (known compound, not on this crop's panel) from
+  `crop_not_in_program` from `no_residue_reference_loaded`; those are different people's
+  jobs to fix.
+- **Authority is `reference_dataset`** — deliberately weaker than `verified_label`. The
+  EPA tolerance carried here is USDA's transcription into their own workbook, a secondary
+  source, and must never override a label or back a definitive verdict.
+- **Staleness is a field, not a footnote.** PDP rotates commodities: **fresh strawberries
+  were last sampled in 2016** (frozen in 2019); 2024 sampled cherry tomatoes but no
+  strawberries. `program_year` and `years_since_program` are on every profile and baked
+  into the server-owned `basis_text` so a card cannot drop them.
+- **Loader:** `python -m app.pdp_sync <year>PDPDatabase.zip --crops strawberry,tomato`.
+  Explicit like `label_sync`, takes a LOCAL PATH (no network, no key), idempotent by
+  content digest, defaults to US-grown samples only. `ResidueReferenceRecord` is
+  append-only and unique on (pair + release digest), so a corrected USDA re-release lands
+  beside the original rather than overwriting it.
+- **Crop matching goes through `crop_aliases`**, so USDA's "Strawberries" matches our
+  "strawberry" while **"Cherry Tomatoes" does NOT match "tomato"** — it is ambiguous and
+  refuses, which is correct: they are different commodities for residue purposes.
+- **Surfaces:** `GET /residue-reference?crop=&active_ingredient=` (grower/PCA-facing, not
+  farm-scoped — PDP measures nationally, so a farm id would imply a claim about that
+  farm), `GET /internal/residue-reference-coverage` (operator), and
+  `ResidueReferenceCard` on the **Compliance tab of `/evidence`**. Deliberately NOT on
+  `/decisions/{id}` — that would break the shadow study's blinding.
+- **What it says today:** on the loaded 2016 release, cyprodinil was detected in 249 of
+  474 domestic strawberry samples (max 1.7 ppm against a 5.0 ppm tolerance) and
+  fludioxonil in 184 of 474 (max 0.62 ppm against 3.0 ppm) — the two active ingredients
+  in the transcribed Switch 62.5WG label. **Captan has no PDP coverage on strawberries at
+  all**, so the other transcribed product correctly refuses.
+
+### Farm intelligence: advisory, performance, financing, participation
+
+Added 2026-08-12. The layer that makes the rest cohere: one farm page that answers *what is
+happening, what matters, what next* — and the two things the operational record unlocks.
+**Nothing here is a new source of truth; it composes builders that already existed.**
+
+- **`app/advisory.py`** (pure) — the ranked action queue, entirely DERIVED. Item keys are
+  `kind:subject_type:subject_id`, so a client can address one without anything being stored, and
+  an item **clears itself** when the record behind it moves. There is no dismiss and no snooze,
+  because a queue you can silence stops describing the farm. Twelve kinds, each keyed off logic
+  that already exists — `decision_status.current_next_action` decides what a decision needs, so
+  one decision can never produce two step items.
+  **Selective on purpose:** a gap becomes an item only when it materially affects crop outcome,
+  compliance, economics, follow-up verification, procurement, or financing. The closeout's
+  `completeness` list stays the exhaustive record of what is unentered. `_QUEUED_GAP_CODES` and
+  `UNCOSTED_APPLICATIONS_FLOOR` are where that line is drawn.
+  An `economic_consequence` carries a figure only where a baseline exists (a costed application);
+  everything else refuses with a reason — pricing "inspect this block" would credit Lumos for the
+  weather. `AdvisoryItem` has no product/rate field, so a prescription is inexpressible.
+- **`app/advisory_explain.py`** (pure) — opt-in AI explanation of ONE item, the `ai_brief` sibling.
+  `AdvisoryExplanation` has **no action, urgency, product, or value field**: the model describes
+  the evidence and cannot re-rank, re-price, or prescribe. A post-guard strips prescriptive
+  phrasing regardless of output. The queue renders fully without it, so the demo never needs a key.
+- **`app/farm_performance.py`** (pure) — the farm against its **own** previous seasons, built from
+  one `season_closeout` payload per cycle (never recomputed). **No composite score, no peer
+  benchmark.** A trend appears only when the metric computed in both seasons with matching units;
+  `direction` is a fact and `higher_is_better` is a declared metric property, so a falling cost per
+  kilo reads as good without this module asserting a smaller harvest was a failure.
+  **`_comparison_pair` prefers two CLOSED seasons** — a season in progress has recorded only part
+  of its costs and flatters every cost metric; when only one is closed the comparison still runs
+  but carries `compares_a_season_in_progress`, and the card renders it in a separate block so a
+  2025-vs-2024 delta is never printed beside a 2026 figure.
+- **`app/financing_evidence.py`** (pure) — the lender package, assembled from records the farm
+  already keeps. **A checklist, never a score:** no percentage, no approval likelihood, no rate.
+  `present` is set from a metric that actually computed, never from a row existing, so an unmet
+  condition can never be satisfied by an empty record. This is the product insight made visible —
+  the same data that advises the grower is what makes the farm financeable.
+- **Season financing** — `FinancingRequest` (+ append-only events), `LenderPolicy`, and
+  `FinancingOffer` extended to hang off either a supplier quote or a request. `LenderPolicy` is
+  **operator-entered with a required `source_document`**, and rehydrates through
+  `underwriting_rules.UnderwritingRule` so the same validation guards an entered policy as a
+  transcribed one. `underwriting.assess(policy=...)` and `monitoring.evaluate(schedule=...)` now
+  take one; without a policy attached both refuse with `no_lender_policy_attached`. Absent evidence
+  is `EVIDENCE_NOT_PRESENT` → `referred_to_human`, **not** a decline: Lumos cannot see the grower's
+  filing cabinet, and there is no `approved` outcome to balance a rejection against.
+- **`app/participation.py`** (pure) — see the §4 amendment. Nine models; share models read the
+  verified tier or recorded settlements only, and refuse by name rather than computing a share of
+  zero. A performance bonus **must** state a cap.
+- **Surfaces:** `GET /farms/{id}/intelligence` (one call composing every block the farm page
+  needs — and carrying **no** disease-risk assessment, because the shadow study's blinding
+  depends on it), `/advisory`, `/performance`, `POST /advisory/explain`, the
+  `/financing-requests/*` chain, and `GET /crop-cycles/{id}/participation`.
+  Frontend: `AdvisoryQueue`, `FarmPerformanceCard`, `ParticipationCard`, `DataCoverageCard`,
+  `EvidencePackageCard`, `FinancingRequestForm`, `/financing` + `/financing/[id]`.
+  **`/finance` is now a redirect to `/financing`** — the lender console is gone and financing is
+  linked in the nav; its backend routes are untouched.
+
+### Other built surfaces
+
+- **Historical opportunity scan** (`app/backtest.py`) — replays a past season's scheduled spray
+  dates against the versioned rule. Uses `BASIS_RETROSPECTIVE`, a second explicitly-named
+  admissibility basis, **never a back-dated timestamp**; prospective digests are pinned so a
+  reconstruction can never masquerade as the prospective record of that moment. Output is a
+  histogram with **no avoided count and no reduction figure**. It is *sizing*, not proof: every
+  historical outcome followed the actual spray, so no date can be called avoidable.
+- **Operator reference farm** (`app/reference_farm.py`) — the one configuration where label checks
+  actually run end to end, because a demo farm is *structurally incapable* of showing a
+  label-grounded decision. `Farm.is_reference` excludes it from the usage funnel and stamps a
+  disclosure on every evidence surface. Read-only in the API on purpose.
+- **AI layer** — `app/llm.py` (shared service, structured outputs via `messages.parse`),
+  `app/vision.py` (photo scouting → a *draft* observation a human confirms),
+  `app/extraction.py` + `app/label_extraction.py` (document extraction, verbatim
+  `source_snippet` per row), `app/ai_brief.py` (retrieval-grounded risk note, next actions
+  enum-locked to evidence gathering, forced to abstain below 2 real comparables). Every call logs
+  an append-only `AiJudgment`. **AI proposes; the deterministic engine and the PCA decide.**
+- **Recommendation engine, analytics, reduction, weather, weekly report, audit packet, CSV
+  import/export, pilot intake and feedback, concierge import** — the original MVP surfaces, still
+  live. The farm-wide `recommendation_engine` is now *secondary* to the pre-spray decision check.
+- **Security fixes (`b195713`, Strix pentest):** CSV formula injection in all four export
+  endpoints (`_sanitise_csv_cell`, OWASP tab-prefix for cells starting `= + - @`), and cross-farm
+  audit attribution on review rejection (scope-check a presented credential before attributing;
+  anonymous rejection still works). `strix-instructions.md` holds the rules of engagement.
+- **CORS + operator key** — the middleware gate exempts `OPTIONS` (a browser never sends custom
+  headers on a preflight) and `CORSMiddleware` is registered **last so it is outermost** (a 403
+  raised outside it carries no CORS headers, so the browser discards the one message explaining
+  the key is missing). **Middleware order is load-bearing.** No backend test could catch this —
+  TestClient does not speak CORS.
 
 ---
 
 ## 6. Backend Architecture
 
-- **Framework:** FastAPI; **ORM:** SQLAlchemy 2 (typed `Mapped` columns); **DB:** SQLite
-  (`backend/lumos.db`); **validation:** Pydantic v2; **tests:** pytest. No auth (v1).
+- **Framework:** FastAPI; **ORM:** SQLAlchemy 2 (typed `Mapped`); **DB:** SQLite
+  (`backend/lumos.db`); **validation:** Pydantic v2; **tests:** pytest. ~145 routes, 62 models.
 - **Layering rule:** routes (`main.py`) → `crud.py` (all DB access) → `models.py` / `schemas.py`.
-  Pure logic modules (engine/analytics/weather/pilot_evidence) take **plain objects, no
-  FastAPI/SQLAlchemy imports** so they unit-test in isolation. Keep it this way.
-- **Important modules:**
-  - `app/main.py` — FastAPI app, all routes, CORS (localhost:3000), weekly-report + audit-packet
-    text builders, US/TR currency + advisor-label + disclaimer helpers.
-  - `app/database.py` — engine / `SessionLocal` / `Base` / `get_db` / `init_db`.
-  - `app/models.py` — ORM models.
-  - `app/schemas.py` — Pydantic request/response contracts; provenance `Literal` vocabularies.
-  - `app/crud.py` — DB access; also `generate_and_store_recommendation`, pilot import/intake.
-  - `app/recommendation_engine.py` — the farm-wide rule engine (tunable thresholds at top:
-    `RECENT_WINDOW_DAYS=30`, `SAME_INGREDIENT_MAX=2`, `HIGH_SEVERITY_THRESHOLD=4`). Returns a
-    `RecommendationResult` (risk_level, next_action, flags, recommendation_text, signals dict).
-  - `app/decision_engine.py` — the **pre-spray decision engine** (pure, framework-free).
-    `evaluate_planned_spray(...)` → `PlannedSprayDecision` (outcome, severity, confidence,
-    per-rule audit trail with calculations, inputs_used, missing_information,
-    required_next_action, review_required, narrative, `as_payload()` for the JSON column).
-    Outcome precedence: block > delay > pca_review_required > inspect_first > approve.
-    `PLANNED_SPRAY_DISCLAIMER` lives here now.
-  - `app/label_data.py` — pesticide-label vocabulary + arithmetic (pure, stdlib only):
-    `normalize_epa_reg_no` / `match_product_identity` (match / **ambiguous** / none),
-    `RATE_UNIT_ALIASES` + `RATE_CONVERSIONS` (definitional + cited) → `convert_rate` returns
-    `Converted | Refusal`, `resolve_label_record`, `promotable_to_authoritative` (returns the
-    REASON), `LABEL_TIER_TO_INPUT_SOURCE`. `app/crop_aliases.py` is its curated crop-name
-    sibling (same MATCH/AMBIGUOUS/NO_MATCH vocabulary as `target_aliases`, never fuzzy).
-    `app/label_table.py` is the EMPTY transcription source; `app/label_sync.py` loads it.
-    `ai_quantity` + `canonical_concentration_unit` back the AI-quantity metric (mass-basis
-    only; areas are never converted).
-  - `app/label_extraction.py` — AI label-document extraction. Reuses `extraction.py`'s
-    content-block/size helpers, registers a `MockLlmService` builder, logs
-    `AiJudgment.kind="label_extraction"`. Extraction NEVER writes a label record; committing
-    one is a separate route and verifying it is a third (see §5).
-  - `app/analytics.py` — `compute_cost_analytics`.
-  - `app/reduction.py` — `compute_reduction` (pure, framework-free). Baseline methods +
-    `CALENDAR_PROGRAMS`, `is_headline_safe` gate, honest caveats. Consumed by `pilot_evidence`.
-  - `app/vision.py` — photo analysis. `build_observation_suggestion` / `build_analysis_result`
-    (pure), `VisionService` ABC, `ClaudeVisionService` (multimodal Claude, lazy-imports
-    `anthropic`), `MockVisionService`, `default_vision_service` (real iff `ANTHROPIC_API_KEY` +
-    `anthropic` present, else mock). Never imports FastAPI/SQLAlchemy.
-  - `app/weather.py` — `compute_disease_pressure`, `WeatherService` ABC, `MockWeatherService`,
-    `default_weather_service`.
-  - `app/pilot_evidence.py` — `build_pilot_evidence` + `build_pilot_case_study`.
-  - `app/ingest/` — outside data reaching a decision auditably. **Full contract in
-    `DATA_PLATFORM.md`; read that before touching any of it.** `base.py`/`domains.py`/
-    `registry.py`/`geo.py` are PURE (pinned by test); `pipeline.py` is the only
-    DB-touching module and `cimis.py` the only one with a network call — the first and
-    only outbound HTTP in this codebase, confined to one `_http_get` with an injectable
-    transport and a `_redact` that strips the key. The pipeline asks `describe()` BEFORE
-    `fetch`, so a deployment without `LUMOS_CIMIS_APP_KEY` is inert by construction.
-  - `app/features/` — derived values that abstain rather than default. `base.py`'s one
-    invariant is that a `FeatureResult` is abstained **iff** it has no value, so a card
-    can never render an abstention as `0`. `pit_view.py` gives `SprayEvent` the two
-    timestamps it never had (no migration — a backfilled `recorded_at` would fabricate
-    a claim about when something was known). `compute.py` is the only DB-touching module.
-  - `app/seed.py` — `run()` drops+recreates schema and loads the 3 demo farms.
-- **Key models:** `Farm`, `SprayEvent`, `ScoutObservation`, `PlannedSpray`, `Recommendation`,
-  `PilotFeedback`, `PilotImportBatch`, `SprayBaseline`, `PilotEvent` (workflow telemetry),
-  `DecisionInputValue` (field-level provenance, append-only supersede chain),
-  `DecisionAuditEvent` (immutable audit history), `DecisionFollowUpEvent` (append-only
-  follow-up timeline), `PcaPolicy`. Botrytis pilot (§5, `BOTRYTIS_PILOT.md`): `Block`,
-  `WeatherObservation`, `ScoutingSample`, `RiskInputSnapshot` (immutable),
-  `DiseaseRiskAssessment` (append-only, shadow), `PcaDisposition` (append-only, attributed),
-  `PilotProtocol`, `BlockAssignment`, `BlockOutcomeObservation` (append-only),
-  `PcaCredential` + `PcaFarmAuthorization`. Label layer (§5): `PesticideProduct`,
-  `ProductLabelRecord` (append-only, supersede chain), `ProductLabelVerification`
-  (append-only, farm-scoped, revoked never deleted). Sprays/scouting carry `data_source` +
-  `data_confidence` + `pilot_import_batch_id`; `SprayBaseline` carries the same provenance (one
-  per farm, latest wins). `PlannedSpray` snapshots the decision (`decision_*`,
-  `decision_payload` JSON, legacy `check_*`), the PCA review (`review_*`, `pca_next_action`),
-  and the recorded outcome (`outcome*`, linked `spray_event_id`).
-- **Key endpoints (selection):**
-  - Farms: `GET/POST /farms`, `GET /farms-overview` (urgency-ranked dashboard),
-    `GET/PUT/DELETE /farms/{id}`
-  - Planned sprays: `GET/POST /farms/{id}/planned-sprays`, `GET /planned-sprays/{id}`,
-    `PATCH /planned-sprays/{id}/review`, `PATCH /planned-sprays/{id}/outcome` (409 when a
-    required review is missing), `DELETE /planned-sprays/{id}`,
-    `GET /farms/{id}/decision-evidence`
-  - Instrumentation: `POST /pilot-events` (client-reported check_started / check_abandoned /
-    import_used; check_completed / review_recorded / outcome_recorded are logged server-side),
-    `GET /internal/instrumentation` (funnel, median time-to-review, decisions changed,
-    entry sources, abandonment — internal only)
-  - Sprays: `GET/POST /farms/{id}/spray-events`, `DELETE /spray-events/{id}`
-  - Scouting: `GET/POST /farms/{id}/scout-observations`, `DELETE /scout-observations/{id}`
-  - Recs: `GET/POST /farms/{id}/recommendations`, `PATCH /recommendations/{id}` (review action)
-  - Photo: `POST /farms/{id}/photo-analysis` (multipart image upload → draft scouting suggestion)
-  - `GET /farms/{id}/analytics`, `/weather-risk`, `/compliance`, `/weekly-report`
-  - Reduction: `GET/PUT /farms/{id}/spray-baseline`, `GET /farms/{id}/reduction`
-  - Pilot: `/pilot-evidence`, `/pilot-case-study`, `/audit-packet`,
-    `POST /pilot/farms`, `GET/POST /pilot-feedback`
-  - Internal: `POST /internal/farms/{id}/pilot-import` (concierge import — operator tooling)
-  - Labels: `GET /internal/labels/products[/{id}]`, `POST /internal/labels/sync`,
-    `GET /internal/labels/resolution?epa_reg_no=&crop=&farm_id=` (the "why does this decision
-    still say the check did not run" diagnostic — calls the same
-    `crud.resolve_label_for_decision` the decision path uses, so the two cannot drift),
-    `POST /internal/labels/extract` (AI draft, never writes), `POST /internal/labels/records`
-    (commits as `ai_extracted_unverified` — the tier is server-set, never client-supplied),
-    `POST /farms/{id}/label-verifications` (the PCA act; NOT under `/internal`, gated by
-    `require_pca_for_farm`), and grower-facing `GET /farms/{id}/label-resolution` (same
-    resolver, no operator key — tells a grower whether a verified label supplies PHI/REI or
-    whether they still have to type them)
-  - Data platform: grower-facing `GET /farms/{id}/data-readiness` (per field/block, each
-    measure either `{value,unit}` or `{abstained,reasons}` — never a number-shaped
-    placeholder — plus a server-owned `basis_text`); operator
-    `GET /internal/ingestion/sources` (the 17-domain table with each deferral's §4
-    citation), `GET /internal/ingestion` (runs with counts + issues),
-    `POST /internal/ingestion/{source_key}/run` (**enqueues**, never fetches inline)
-  - Exports: `/farms/{id}/export/spray-events.csv`, `/recommendations.csv`,
-    `/export/pilot-feedback.csv`
-  - `GET /health`; interactive docs at `/docs`.
-- **Alembic exists (baseline `32a030ba8bc4`); the DB is NO LONGER disposable.** This
-  paragraph used to say "no Alembic, re-seed to change the schema". That is now true
-  only for a demo-only database. `seed.run()` still calls `Base.metadata.drop_all`, so
-  **`rm -f backend/lumos.db && python -m app.seed` DESTROYS REAL PILOT DATA** — see §8
-  for the migration workflow. After seeding a fresh demo DB, `alembic stamp head`.
+  Pure logic modules take **plain objects, no FastAPI/SQLAlchemy imports**, so they unit-test in
+  isolation. Pinned by `tests/test_platform_invariants.py`. Keep it this way.
+- **Core modules**
+  - `app/main.py` — routes, CORS, middleware order, report/audit text builders.
+  - `app/decision_engine.py` — the pre-spray engine (pure). `PLANNED_SPRAY_DISCLAIMER` lives here.
+  - `app/crud.py` — all DB access; also recommendation storage, pilot import/intake, and the
+    authority helpers `require_pca_for_farm` / `ensure_demo_real_separation`.
+  - `app/decision_status.py`, `app/procurement_status.py` — pure derived-state vocabularies.
+  - `app/recommendation_engine.py` — the farm-wide rule engine (tunable thresholds at top).
+- **Honesty infrastructure** (reach for these first)
+  - `app/transcription.py` — the empty-source contract; `Citation` is frozen/kw-only with **no
+    defaults**, so an uncited row raises at import.
+  - `app/refusal.py` — `Refusal` with a stable `code`. Prose cannot be matched on by a test, a
+    payload consumer, or a readiness surface; the code can.
+  - `app/units.py`, `app/label_data.py` (`convert_rate` → `Converted | Refusal`),
+    `app/target_aliases.py` / `app/crop_aliases.py` (**never fuzzy** — exact or curated alias or
+    ambiguous-to-a-human).
+  - Empty sources awaiting transcription: `label_table.py` (2 rows), `botrytis_thresholds.py`,
+    `soil_thresholds.py`, `nutrient_tables.py`, `variety_table.py`, `irrigation_coefficients.py`,
+    `scorecard_table.py`, `underwriting_rules.py`, `collateral_valuation.py`,
+    `insurance_products.py`, `monitoring_covenants.py`, `price_series.py`, `futures_curve.py`,
+    `financing_terms.py`.
+- **Domain modules:** `disease_risk.py`, `risk_snapshot.py`, `backtest.py`, `pit.py`,
+  `analytics.py`, `reduction.py`, `weather.py` / `advisory_weather.py`, `pilot_evidence.py`,
+  `farm_profile.py`, `procurement_analytics.py`, `rfq_transport.py`, plus the agronomy/finance/
+  market set named in §5.
+- **Farm intelligence (§5):** `advisory.py`, `advisory_explain.py`, `farm_performance.py`,
+  `financing_evidence.py`, `participation.py` — all pure. `crud.build_farm_intelligence`
+  composes them and is the only DB-touching part. **`farm_profile.py` vs `farm_performance.py`:**
+  the first answers a CAPABILITY question (which layers can compute for this farm, and whose job
+  it is to unblock the rest); the second answers an OUTCOME question (what the farm produced,
+  spent and earned, season over season). Neither subsumes the other — keep both.
+- **Residue reference (§5):** `app/pdp_dataset.py` (pure parser/aggregator) and
+  `app/residue_reference.py` (pure lookup → `ResidueProfile | Refusal`) with the explicit
+  loader `app/pdp_sync.py`. `pdp_sync` lazily imports `openpyxl`/`xlrd` — the same
+  technique `ingest/cimis.py` uses for `httpx`, so an optional reader never makes a
+  module unimportable where it is unused.
+- **`app/ingest/`** — `base`/`domains`/`registry`/`geo` are PURE (pinned by test); `pipeline.py` is
+  the only DB-touching module and `cimis.py` the only one with a network call.
+- **`app/features/`** — derived values that abstain. `base.py`'s invariant: a `FeatureResult` is
+  abstained **iff** it has no value. `pit_view.py` gives `SprayEvent` its two timestamps without a
+  migration (a backfilled `recorded_at` would fabricate a claim about when something was known).
+- **`app/jobs/`** — queue, schedule, worker. Ingestion enqueues; the worker owns retries and
+  dead-lettering. Inert without a provider credential.
+- **Key endpoint groups:** farms + `GET /farms-overview` (urgency-ranked dashboard) · planned
+  sprays + review/outcome/audit/input-values/follow-ups · spray events · scouting · recommendations
+  · photo analysis · analytics / weather-risk / compliance / weekly-report · reduction ·
+  pilot evidence / case study / audit packet / evidence export · labels (extract → commit →
+  verify) · data readiness (grower-facing) · ingestion (operator) · opportunity scans (operator) ·
+  finance and market reads · inputs & finance procurement chain · `/internal/*` operator tooling ·
+  `GET /health`. Interactive docs at `/docs`.
+- **Alembic exists (baseline `32a030ba8bc4`); the DB is NOT disposable.** `seed.run()` still calls
+  `drop_all`, so `rm -f backend/lumos.db && python -m app.seed` **destroys real pilot data** —
+  see §8.
 
 ---
 
 ## 7. Frontend Architecture
 
-- **Framework:** Next.js 14 (App Router, JavaScript) + Tailwind CSS. `@/` path alias.
-- **Routes (`frontend/app/`):**
-  - `page.js` — dashboard / farm list (risk badge + spend per card; sorts U.S. strawberry first).
-  - `farms/[id]/page.js` — farm detail (analytics, weather, compliance, recommendation, review,
-    weekly report, pilot evidence, concierge pilot).
-  - `evidence/page.js` — "Evidence & compliance": outer Evidence|Compliance tabs
-    (`?tab=compliance` deep-link; `/compliance` redirects here; the compliance view lives
-    in `components/CompliancePanel.js`), demo/real scope tabs, ReductionCard, exports.
-  - `feedback/page.js` — pilot feedback capture.
-  - `pilot/new/page.js` — pilot farm intake form.
-  - `layout.js`, `globals.css`.
-- **Components (`frontend/components/`):** `DecisionResult` (the explainable
-  approve/block/delay/inspect-first/PCA-review verdict, with per-rule source-authority chips
-  and PROVISIONAL/definitive banner), `PreSpraySheet` (mobile-first check form — product + date
-  required, everything else collapsible — plus PCA review + outcome recorder; the primary CTA;
-  fires check_started/check_abandoned telemetry), `SprayImportCard` (customer-facing CSV/paste
-  spray-history import, rows tagged `data_source="spreadsheet"` — no JSON exposed),
-  `DecisionEvidenceCard` (incl. demo-outcome reconciliation line), `AnalyticsCard`,
-  `WeatherCard`, `ComplianceCard`, `RecommendationPanel`, `AgronomistReview`, `NextActionCard`,
-  `WeeklyReport`, `PilotEvidenceCard`, `ReductionCard`, `ConciergePilotCard` (on `/internal`
-  only), `DataReadinessCard` (farm detail — renders the server-owned `basis_text`
-  verbatim and contains NO explanatory wording of its own; an abstention shows "Not
-  calculated" plus reasons, never a number), `IngestionCard` + `DomainRegistryTable`
-  (`/internal` only), `PhotoScoutCard`, `SprayEventForm`, `ScoutObservationForm`, `RiskBadge`,
-  `SeverityBadge`.
-- **Page hierarchy:** dashboard (`/`) uses `GET /farms-overview` (urgency-ranked cards with
-  why + next action; **Türkiye demo farms are hidden by default** behind a "show secondary-market
-  demo farms" toggle — the default demo is the CA strawberry/PCA workflow); farm detail
-  Overview = decision queue + pre-spray risk snapshot; `RecommendationPanel` (farm-wide weekly
-  review) lives in the Evidence tab; `/decisions/[id]` is the one-page printable decision record
-  (inputs, rules + calculations + source authority, missing data, PCA review, outcome,
-  disclaimers; print button hides app chrome); `/internal` is the unlinked operator page for
-  concierge import + pilot instrumentation.
-- **API client:** `frontend/lib/api.js` — single `api` object wrapping all backend calls; base
-  URL from `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). `lib/format.js` for
-  cost/date/area formatting. Keep all fetches here.
-- **Demo flow:** dashboard → open Golden Coast Strawberry Ranch → compliance snapshot → generate
-  recommendation → PCA approve → weekly report copy. (Türkiye farms are the secondary contrast.)
-- **Where key UI copy lives:** demo/disclaimer wording is in the backend report/audit builders
-  (`main.py`) and the engine flag strings (`recommendation_engine.py`); per-card UI copy lives in
-  the matching component file. Demo scripts/narration: `DEMO_SCRIPT.md`, `DEMO_DATA.md`.
+- **Framework:** Next.js 14 (App Router, JavaScript) + Tailwind. `@/` path alias. No TypeScript,
+  so `npm run build` is the de-facto typecheck.
+- **18 routes (`frontend/app/`):** `page.js` (dashboard) · `farms/` + `farms/[id]` ·
+  `decisions/` + `decisions/[id]` (the printable one-page decision record) · `applications/` ·
+  `scouting/` · `evidence/` (Evidence|Compliance tabs) · `compliance/` (redirects into it) ·
+  `inputs/` + `inputs/plans/[id]` + `inputs/orders/[id]` · `feedback/` · `pilot/new/` ·
+  `financing/` + `financing/[id]` · `finance/` (redirects into `/financing`) ·
+  **one unlinked route reachable only by URL:** `internal/` (operator page).
+- **Design system — use it; do not add ad-hoc styling.**
+  - `components/ui/` — 10 primitives: `badge`, `button`, `card`, `dialog`, `field`, `input`,
+    `select`, `sheet`, `tabs`, `textarea`.
+  - `lib/tones.js` — the single source of visual tone recipes. Components look up a tone by
+    **domain value** (decision outcome, review state, risk band) instead of declaring their own
+    palette maps. Colors resolve through semantic token pairs in `tailwind.config.js`
+    (`ok`/`risk`/`warn`/`inspect`/`review`/`info`/`draft`). **Badge variant keys keep their
+    historical color names** (`"green"`, `"amber"`, …) so ~45 call sites re-skin without edits —
+    re-point a key, don't add a palette.
+  - `lib/labels.js` — shared user-facing label vocabularies, mirroring `app/decision_engine.py`
+    and `app/decision_status.py`. Import from here so two surfaces cannot disagree.
+  - `lib/status.js`, `lib/format.js`, `lib/utils.js`, `lib/farm-context.js` (`useDemoTag`).
+- **Responsive tiers are offset one step from the viewport.** A ~250px sidebar always renders, so a
+  table's container is ~250px narrower than the window and viewport-keyed rules fire early.
+  `DataTable` collapses secondary columns below `xl` (not `lg`), `PageHeader` stacks below `lg`,
+  and narrow rails take explicitly compact columns from the caller rather than guessing.
+- **58 components.** Layout: `AppShell`, `PageHeader`, `Breadcrumbs`, `SectionCard`, `DetailPanel`,
+  `DataTable`, `FilterBar`, `EmptyState`, `MetricCard`, `StatTile`, `Callout`, `ProgressBar`,
+  `StatusBadge`, `RiskBadge`, `SeverityBadge`, `SystemState`, `ActivityTimeline`.
+  Decision loop: `PreSpraySheet` (the primary CTA — mobile-first, product + date required,
+  everything else collapsible), `DecisionResult`, `DecisionQueue`, `DecisionEvidenceCard`,
+  `AgronomistReview`, `NextActionCard`/`NextActionBanner`, `PcaDispositionCard`, `AiBriefCard`.
+  Data: `DataReadinessCard` (renders the server-owned `basis_text` **verbatim**, contains no
+  wording of its own), `IngestionCard`, `DomainRegistryTable`, `TranscriptionStatusCard`,
+  `FarmProfileCard`, `OpportunityScanCard`, `LabelLibraryCard`. Procurement/finance:
+  `InputPlanForm`, `QuoteComparisonTable`, `FinancingOfferCard`, `OrderTimeline`,
+  `PriceDispersionCard`, `LinkApplicationDialog`, `ConciergeQuoteCard`. Plus `PhotoScoutCard`,
+  `SprayEventForm`, `ScoutObservationForm`, `SprayImportCard`, `PilotImportCard`,
+  `WeeklyReport`, `ReductionCard`, `AnalyticsCard`, `WeatherCard`, `CompliancePanel`.
+- **API client:** `frontend/lib/api.js` — one `api` object wrapping every backend call; base URL
+  from `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). Keep all fetches here. It merges
+  headers rather than letting `...options` clobber them, and holds the operator key / PCA token in
+  `sessionStorage`.
+- **UI rule that matters:** an abstention renders **"Not calculated" plus its reason** — never a
+  `0`, never a blank card. This is the `DataReadinessCard` rule and it applies everywhere.
 
 ---
 
@@ -738,143 +579,120 @@ Backend + frontend both implement:
 cd backend && source .venv/bin/activate && pytest
 
 # Seed / reset demo data (drops + recreates schema, loads 3 demo farms)
-# DEMO-ONLY DATABASES. Both of these DESTROY real pilot data — check first with
+# DEMO-ONLY DATABASES. Both DESTROY real pilot data — check first with
 #   python -c "from app.database import SessionLocal; from app import crud;
 #              print(crud.has_non_demo_data(SessionLocal()))"
 cd backend && source .venv/bin/activate && python -m app.seed
 #   nuclear reset: rm -f backend/lumos.db && python -m app.seed
-#   after seeding a fresh DB, mark it migration-current: alembic stamp head
-#   (running create_all — e.g. an ad-hoc script calling init_db() — desyncs the DB
-#    from Alembic; symptom is "table X already exists" on upgrade. Reseed + stamp.)
+#   after seeding a fresh DB: alembic stamp head
+#   (running create_all — e.g. an ad-hoc script calling init_db() — desyncs the DB from
+#    Alembic; symptom is "table X already exists" on upgrade. Reseed + stamp.)
 
-# Schema changes (Alembic exists as of 2026-07-18 — baseline 32a030ba8bc4):
-#   demo-only DBs may still drop+reseed; a DB with REAL pilot data must migrate:
-#   edit app/models.py -> alembic revision --autogenerate -m "..." -> review the
-#   script (env.py enables SQLite batch mode) -> alembic upgrade head
+# Schema changes: edit app/models.py -> alembic revision --autogenerate -m "..."
+#   -> review the script (env.py enables SQLite batch mode) -> alembic upgrade head
+#   SQLite batch mode cannot create an unnamed FK constraint — name them explicitly.
 
-# Load transcribed pesticide labels (app/label_table.py) into the DB. EXPLICIT on
-# purpose — never run by seeding or startup, because seeded label data would make demo
-# decisions look label-grounded. Safe to re-run; a changed transcription appends a
-# superseding row. Reports 0 entries until someone transcribes one with its citation.
-cd backend && source .venv/bin/activate && python -m app.label_sync
+# Load transcribed labels. EXPLICIT on purpose — never run by seeding or startup,
+# because seeded label data would make demo decisions look label-grounded.
+python -m app.label_sync
 
-# FULL REBUILD ORDER (2026-07-28). seed.run() drops EVERY table, so re-seeding destroys
-# the label library and the reference farm. Both are scripts precisely so this is safe:
+# FULL REBUILD ORDER. seed.run() drops EVERY table.
 python -m app.seed           # demo farms only
 alembic stamp head           # seeding uses create_all and desyncs Alembic
 python -m app.label_sync     # 2 transcribed labels
-python -m app.reference_farm # refuses if a reference farm already exists; prints the
-                             # PCA token ONCE — copy it or you cannot act as that PCA
+python -m app.reference_farm # prints the PCA token ONCE — copy it
 
-# Background worker: ingestion + feature recomputation. Runs the schedule then drains.
-# INERT without a provider credential — records skipped_no_credential, no network call.
+# Measured residue reference (USDA PDP). EXPLICIT like label_sync, and OPTIONAL —
+# every residue lookup refuses with `no_residue_reference_loaded` until it runs.
+# Download a release first (a browser; the loader never fetches):
+#   https://www.ams.usda.gov/sites/default/files/media/2016PDPDatabase.zip
+python -m app.pdp_sync 2016PDPDatabase.zip --crops strawberry,tomato
+#   2016 is the LAST release covering fresh strawberries — PDP rotates commodities.
+#   Re-running the same release is a no-op (idempotent by content digest).
+
+# Background worker (ingestion + feature recomputation). Inert without a credential.
 python -m app.jobs.worker --once --queues default,ingest,features
-#   Enable the CIMIS adapter (free AppKey from et.water.ca.gov):
-#     export LUMOS_CIMIS_APP_KEY=...
-#     export LUMOS_CIMIS_SUBSCRIPTIONS="4:1:111"   # farm:field:station
-#   A subscription whose FIELD HAS NO CENTROID ingests nothing: every row drops with
-#   `no_field_geolocation`. Deliberate (a NULL distance reads downstream as "in range
-#   and close"), but it looks like a broken feed. Set Field.centroid_lat/lon first.
+#   export LUMOS_CIMIS_APP_KEY=...            (free from et.water.ca.gov)
+#   export LUMOS_CIMIS_SUBSCRIPTIONS="4:1:111"  # farm:field:station
+#   A subscription whose FIELD HAS NO CENTROID ingests nothing (every row drops with
+#   `no_field_geolocation`). Set Field.centroid_lat/lon first.
 
-# Run backend:  uvicorn app.main:app --reload   (http://localhost:8000, docs at /docs)
-#   With a reference farm present the DB holds real (non-demo) records, so the §8
-#   operator-key interlock fires and the API REFUSES TO START without:
-#     LUMOS_OPERATOR_KEY=<secret> uvicorn app.main:app --reload
-#   Symptom if you forget: "Application startup failed. Exiting." — not a broken build.
-#   Nothing loads .env: export ANTHROPIC_API_KEY too, or every AI path runs on the mock.
+# Run backend
+LUMOS_OPERATOR_KEY=<secret> uvicorn app.main:app --reload   # :8000, docs at /docs
+#   Nothing loads .env — export ANTHROPIC_API_KEY too, or every AI path runs on the mock.
 
-# Frontend build / lint (from frontend/)
-cd frontend && npm install
-npm run build      # production build = de-facto typecheck/compile check
-npm run lint       # next lint
+# Frontend (from frontend/)
+npm install
 npm run dev        # http://localhost:3000
+npm run build      # production build = the real compile/lint check
 ```
 
-- **No JS typecheck beyond `next build`** (plain JavaScript project, no `tsc`). `npm run lint`
-  is the only lint step.
-- **Passing test count:** repo currently shows **864 passing**. **Always re-run `pytest` to
-  confirm; do not trust this number.** Known harmless deprecation warnings. AI tests run on
-  the deterministic `MockLlmService` — no API key needed; never let tests hit the real API.
-- **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded
-  date to a fixed anchor (screenshots / demo-consistency tests); unset, the anchor is today and
-  re-seeding before a demo keeps the story fresh. `tests/test_demo_consistency.py` asserts the
-  seeded story's invariants.
-- **Clock interlock (2026-07-18):** the API **refuses to start** with `LUMOS_DEMO_TODAY` set
-  unless `LUMOS_DEMO_MODE=1` is also set (a leftover pin would silently corrupt real pilot
-  timestamps and PHI/REI math). Seeding is exempt; tests set the mode var in conftest.
-  `/health` reports `clock_mode` (`real`/`pinned`) + `pinned_date`.
-- **Operator-key interlock (2026-07-20):** the `/internal` surface mints PCA credentials and
-  grants farm authorizations, so leaving it open makes every authorization guarantee
-  decorative. Set `LUMOS_OPERATOR_KEY` and present it as `X-Lumos-Operator-Key`; enforced by
-  **middleware on the path prefix** (`app/operator_key.py`), so a route added later is covered
-  by construction. Unset, `/internal` stays open for demo/local use — but the API **refuses to
-  start** once `crud.has_non_demo_data` is true. Not auth infrastructure: no login, no session,
-  no password, no user table.
-- **Demo/real mixing guard (2026-07-18):** one farm's records are either ALL demo/simulated or
-  ALL real — creating a mismatched record 409s (`crud.ensure_demo_real_separation`, mirrored on
-  input plans). The frontend demo-tags rows created interactively on demo farms
-  (`useDemoTag` in `lib/farm-context.js`), so the live demo walkthrough still works and its
-  records are honestly simulated. Real pilots always get a fresh farm.
-- **NEVER run `npm run build` while `npm run dev` is running** — they share `.next` and the
-  build corrupts the dev server's cache (dev pages start returning 500 MODULE_NOT_FOUND). Stop
-  the dev server first, or restart it afterwards with `rm -rf .next && npm run dev`.
-- **`npm run lint` is NOT set up** (it prompts interactively for an ESLint config); the lint
-  pass inside `npm run build` is the real frontend check.
+- **Test count: 1293 passing** as of 2026-08-12.
+  **Always re-run `pytest` and report the real
+  number** — this line goes stale, and a remembered count is not evidence. AI tests run on
+  `MockLlmService`; never let tests hit the real API.
+- **Interlocks that will look like a broken build if you forget them:**
+  - **Operator key** — `/internal` mints PCA credentials, so the API **refuses to start** once
+    `crud.has_non_demo_data` is true unless `LUMOS_OPERATOR_KEY` is set. With a reference farm
+    present that is always true. Symptom: *"Application startup failed. Exiting."*
+  - **Clock** — the API refuses to start with `LUMOS_DEMO_TODAY` set unless `LUMOS_DEMO_MODE=1`
+    (a leftover pin would corrupt real PHI/REI math). Seeding is exempt; `/health` reports
+    `clock_mode` and `pinned_date`.
+  - **Demo/real mixing** — one farm's records are all demo or all real; a mismatch 409s. Real
+    pilots always get a fresh farm.
+- **Never run `npm run build` while `npm run dev` is running** — they share `.next` and the build
+  corrupts the dev server's cache (500 MODULE_NOT_FOUND). Stop dev first, or afterwards
+  `rm -rf .next && npm run dev`.
+- **`npm run lint` is not configured** (it prompts interactively); the lint pass inside
+  `npm run build` is the real frontend check.
+- **Deterministic demo:** `LUMOS_DEMO_TODAY=YYYY-MM-DD python -m app.seed` pins every seeded date
+  to a fixed anchor. `tests/test_demo_consistency.py` asserts the seeded story's invariants.
 
 ---
 
 ## 9. Demo Data and Honesty Rules
 
-- All seeded farms are **demo / simulated** (`data_source="demo"`, `data_confidence="simulated"`).
-  Three farms (`backend/app/seed.py`):
-  - **Golden Coast Strawberry Ranch** (Watsonville, CA, USD) — **primary U.S./YC demo**; triggers
-    PHI + REI + repeated-AI (captan ×3) + high-severity scouting, and seeds the end-to-end
-    decision story: a 4th captan planned 2 days before harvest → **DEFINITIVE BLOCK** (real
-    engine output; values are `pca_entered` by "Demo PCA (simulated)", which is what makes it
-    definitive) → demo PCA **edited** guidance (the Switch 62.5 WG recommendation lives ONLY in
-    `pca_next_action`, never in engine output) → outcome **changed_product**, applied on the
-    intended date. All timestamps anchor to the same demo day. Demo planned sprays are
-    demo/simulated: excluded from real decision-evidence counts but reconciled via the
-    `demo_outcomes` block so the queue and the evidence card never contradict each other.
-    Scenario 2 (PyGanic avoided via the lygus threshold) and scenario 1 both carry
-    seeded input-value/audit/follow-up trails. **Scenario 3 (2026-07-11): the honest
-    FAILURE story** — an Agri-Mek miticide planned at scouting severity 2 (below the
-    PCA threshold of 3) → INSPECT FIRST → PCA held it → severity rose to 4 → **rescue
-    application required** (extra scouting + rescue cost, nothing avoided). Spans the
-    six days before the anchor; deliberately negative — the product must show failures
-    or its evidence is not credible.
-  - **Green Valley Greenhouse** (Antalya, TR, ₺) — secondary high-risk tomato demo.
-  - **Sunrise Tomato House** (Mersin, TR, ₺) — secondary low-risk/healthy contrast.
-- **Never present seed data as traction.** It is illustrative, not real usage.
-- **Never imply real pilots** unless a validation doc proves it (none currently do — see §11).
-- **Avoid fake AI claims.** The recommendation/compliance **engine is a deterministic rule
-  engine, not ML** — say so. The **photo-scouting copilot, document extraction, and AI review
-  brief ARE real AI** (Claude), but describe them honestly: they *suggest* (a draft scouting
-  note, draft import rows with verbatim snippets, a retrieval-grounded risk note that abstains
-  without comparables) for a human to confirm; they do not diagnose, are not the decider, never
-  say "spray," and never name products. Every AI output is logged append-only (`AiJudgment`)
-  for calibration against real outcomes; AI judgments are NEVER seeded or fabricated, and
-  mock-service outputs must never be presented as model performance. Don't blur the layers —
-  the spray decision is still the rule engine + PCA.
-- **An ingested reading is REAL, not demo, and not reviewed.** A provider-fetched row
-  carries `data_source="provider_api"` / `data_confidence="provider_reported"` /
-  `source_type="station_export"`. Describe it as machine-fetched and unreviewed — never
-  as PCA-verified, which would be a claim with legal weight about a number nobody looked
-  at. All three columns are set because different guards read different ones.
-- **An abstention is never rendered as `0`.** A feature that cannot be calculated says so
-  and gives its reasons; the API omits the `value` key entirely rather than nulling it.
-  "0 leaf-wetness hours" reads as *no wetness occurred*, which is the opposite of *we
-  cannot see wetness* — and errs in the direction that would skip a needed spray.
-- **`recorded_at` on a backfill is ingest time, not observation time.** Backfilled
-  history is therefore admissible only for `as_of` values after the backfill ran. A
-  backtest over that window honestly finds nothing.
+These rules are why the product can build fast and still be trusted by a compliance buyer. They
+are not negotiable, and they are cheap to keep if you attach them as you go.
+
+- All seeded farms are **demo / simulated** (`data_source="demo"`,
+  `data_confidence="simulated"`). Three farms in `backend/app/seed.py`:
+  - **Golden Coast Strawberry Ranch** (Watsonville, CA, USD) — primary demo. Triggers PHI + REI +
+    repeated-AI + high-severity scouting, and seeds the end-to-end decision story: a 4th captan
+    planned 2 days before harvest → **definitive block** → PCA **edited** guidance (the Switch
+    recommendation lives ONLY in `pca_next_action`, never in engine output) → outcome
+    **changed_product**. Scenario 2: PyGanic avoided via the lygus threshold. **Scenario 3 is the
+    honest FAILURE story** — inspect-first, PCA held it, severity rose, rescue application
+    required, nothing avoided. Deliberately negative: a product that shows no failures is not
+    credible.
+  - **Green Valley Greenhouse** (Antalya, TR, ₺) — secondary high-risk contrast.
+  - **Sunrise Tomato House** (Mersin, TR, ₺) — secondary low-risk contrast.
+- **Never present seed data as traction.** It is illustrative, not usage.
+- **Never imply real pilots** unless a validation doc proves it (none currently do — §11).
+- **Be precise about which layer is AI.** The recommendation/compliance **engine is a
+  deterministic rule engine, not ML** — say so. The **photo-scouting copilot, document extraction,
+  and AI review brief ARE real AI** (Claude), and they *suggest* for a human to confirm: they do
+  not diagnose, are not the decider, never say "spray," and never name products. Every AI output
+  is logged append-only (`AiJudgment`); judgments are **never seeded or fabricated**, and
+  mock-service output must never be presented as model performance.
+- **An ingested reading is REAL, not demo, and not reviewed.** A provider-fetched row carries
+  `data_source="provider_api"` / `data_confidence="provider_reported"` /
+  `source_type="station_export"`. Describe it as machine-fetched and unreviewed — never as
+  PCA-verified, which would be a claim with legal weight about a number nobody looked at.
+- **An abstention is never rendered as `0`.** The API omits the `value` key entirely rather than
+  nulling it. "0 leaf-wetness hours" reads as *no wetness occurred*, the opposite of *we cannot
+  see wetness* — and errs toward skipping a needed spray.
+- **`recorded_at` on a backfill is ingest time, not observation time.** A backtest over that
+  window honestly finds nothing. Never back-date to make a replay work.
+- **A fabricated fixture is never presented as a live capture** (see
+  `tests/fixtures/cimis/hourly_metric.json`, which says so in the file).
 - Always use **"decision support only"** language; never "diagnoses," never "tells you to spray."
 
 ---
 
 ## 10. Compliance / Liability Copy Rules
 
-Preferred disclaimer (use this exact phrasing for US-facing copy):
+Preferred disclaimer — use this exact phrasing for US-facing copy:
 
 > "Decision support only. Always confirm PHI, REI, rates, crop use, and restrictions with the
 > product label and a licensed PCA / agronomist."
@@ -886,27 +704,34 @@ Also:
 - Do **not** say "prevents all mistakes."
 - Use cautious phrasing: "potential avoidable cost," "if one spray is avoided," "risk appears
   elevated," "consider," "inspect first," "review with your PCA/agronomist."
-- Existing disclaimers live in `main.py` (`_report_disclaimer`, `AUDIT_DISCLAIMER`) and
-  `pilot_evidence.py` (`CASE_STUDY_DISCLAIMER`) — reuse/extend those, don't invent new tone.
+- Prefer "conflict caught" over "spray saved"; "documented, not prevented."
+- Existing disclaimers live in `main.py` (`_report_disclaimer`, `AUDIT_DISCLAIMER`),
+  `decision_engine.py` (`PLANNED_SPRAY_DISCLAIMER`), and `pilot_evidence.py`
+  (`CASE_STUDY_DISCLAIMER`). **Reuse or extend those — do not invent new tone.** When new copy is
+  needed, put it server-side (`basis_text`) so a card renders it verbatim and the wording has one
+  home.
 
 ---
 
 ## 11. Validation Status (Honest)
 
-- **No confirmed real-world pilots** — no evidence in the repo proves any. If you find a doc that
+- **No confirmed real-world pilots.** No evidence in the repo proves any. If you find a doc that
   does, cite it; otherwise assume not validated.
-- The **validation sprint is the current priority** (see §3).
+- Zero customer decisions, zero willingness-to-pay quotes.
 - Evidence still needed: **real spray logs, real scouting notes, real PCA recommendations, audit
-  artifacts from actual operations, and willingness-to-pay quotes.**
+  artifacts from actual operations, and a price someone will name.**
+- **State this plainly whenever the product's maturity comes up — and do not let it become a
+  reason to stop building (§3).** Both tracks run at once.
 
 ---
 
 ## 12. Validation Plan
 
-Who to contact (see `PILOT_VALIDATION_PLAN.md`, `CUSTOMER_DISCOVERY.md`):
+Who to contact (see `DESIGN_PARTNER_SPRINT.md`, `PILOT_VALIDATION_PLAN.md`,
+`CUSTOMER_DISCOVERY.md`):
 
 - California **PCAs / crop consultants** (licensed advisers who already document recommendations).
-- **Packer / exporter** food-safety or compliance managers (carry audit/residue risk at scale).
+- **Packer / exporter** food-safety or compliance managers (audit and residue risk at scale).
 - **Specialty-crop growers / farm managers** (strawberry, greenhouse tomato).
 - **UC Cooperative Extension / ag advisors.**
 
@@ -916,6 +741,11 @@ The ask:
   import — we transcribe, no integrations).
 - Have it identify **PHI/REI, resistance, scouting-gap, and audit/documentation pain**.
 - Determine **who the buyer is** and **willingness to pay** (per-acre / per-grower / per-PCA-seat).
+
+`DESIGN_PARTNER_SPRINT.md` is the executable version: an exact partner profile, three hypotheses
+each with a pass threshold **and a kill criterion**, a 20-minute no-pitch call script, a
+data-availability checklist mapped field-by-field to models that already exist, and a five-stage
+pilot ladder where a lower stage may never make a higher stage's claim.
 
 ---
 
@@ -934,84 +764,106 @@ The ask:
 - Generic praise / "interesting idea."
 - "Send me info" with no next step.
 - Enthusiasm with **no data and no price**.
-- Interest only in **out-of-scope** features (financing, marketplace, hardware).
+- Interest only in features they will not pay for.
 
 ---
 
 ## 14. Known Weaknesses (Brutal)
 
-- **No real validation yet.**
-- Engine is **rule-based, not real AI** — easy to dismiss as "just a spreadsheet."
-- **Label coverage is TWO PRODUCTS, on one operator-run farm.** As of 2026-07-28 the label
-  table holds Captan 80 WDG and Switch 62.5WG (strawberry use only), verified for the
-  reference farm — so the checks demonstrably run, but on a two-row library. On the demo
-  farms and on any real pilot farm, **PHI/REI still come from user-entered per-spray values**
-  and every label-dependent check still reports it did not run. The honest claim is "Lumos
-  can check against verified label data, and does for the products transcribed so far" —
-  never "Lumos checks your sprays against the label". Coverage on a first pilot is governed
-  by whether the PCA's recommendation sheets carry EPA registration numbers (a data-entry
-  question) and by how many labels someone transcribes (a labour question) — neither is code.
+- **No real validation yet** (§11). This is the big one.
+- **The core engine is rule-based, not ML** — easy to dismiss as "just a spreadsheet." The answer
+  is the audit trail, the authority gating, and the refusal discipline, not a claim of AI.
+- **Label coverage is two products on one operator-run farm.** On demo farms and any real pilot
+  farm, PHI/REI still come from user-entered values and every label-dependent check reports it did
+  not run. Honest claim: "Lumos can check against verified label data, and does for the products
+  transcribed so far" — never "Lumos checks your sprays against the label." Coverage is a
+  data-entry and labour question, not a code one.
 - **Only the strawberry use of each label is transcribed**, so
-  `registered_crops_transcription_complete` is False on both products and the crop-registration
-  check correctly still abstains. Do not set that flag without transcribing the full crop list;
-  a false BLOCK there would end a PCA's trust permanently.
-- **No MRL reference data** — an MRL is destination-market law, not label law; the label layer
-  does not and will not supply it.
-- **No leaf-wetness measurement, and the ingestion layer cannot fix it.** CIMIS publishes
-  no wetness item, and deriving one from humidity is refused because the derivation
-  itself needs a cited source. The Botrytis assessment therefore still abstains on
-  `no_leaf_wetness_or_accepted_proxy`, and grade-A evidence stays unreachable without an
-  on-site sensor — which §4 still excludes. This is a **purchase**, not a build.
-- **No CIMIS credential.** The adapter ships inert, and the leaf-wetness finding was
-  verified from published documentation rather than a live API call.
-- **`disease_risk.evidence_grade` treats an unstated station distance as *close*** and
-  can reach GRADE_A, contradicting the CSV importer's warning. Pinned by test, not fixed
-  (`DATA_PLATFORM.md` §6) — it would change the pilot's scoring contract. Only bites
-  hand-entered CSV weather; decide before the first real pilot enters any.
-- **Incumbents** may already cover parts (FieldView-style platforms, PCA software, ag ERPs).
-- **Data-entry burden** — someone has to log sprays/scouting; unclear who, in practice.
-- **Unclear buyer** and **low willingness-to-pay** from individual growers.
+  `registered_crops_transcription_complete` is False and crop registration correctly abstains.
+  Do not set that flag without transcribing the full crop list — a false block would end a PCA's
+  trust permanently.
+- **No leaf-wetness measurement yet**, so the Botrytis assessment abstains on
+  `no_leaf_wetness_or_accepted_proxy` and grade-A evidence is unreachable. CIMIS publishes no
+  wetness item, and deriving one from humidity is refused because the derivation itself needs a
+  cited source. **This is now a purchase we are allowed to make (§4) — make it.**
+- **Thresholds and coefficients are untranscribed** across fourteen empty sources. Every model
+  over them refuses. Honest, but it means most of the platform computes nothing today.
+- **No MRL reference data for export markets.** US **EPA tolerances** now arrive with the
+  PDP residue layer (§5), but those are the US limit only. Destination-market MRLs are a
+  different source; USDA FAS funds free "Starter" access to the Global MRL Database for
+  US-based users, and nobody has registered for it yet.
+- **PDP residue coverage for the wedge is a decade old.** Fresh strawberries were last
+  sampled in 2016. The layer is honest about it (`years_since_program` on every profile),
+  but "measured recently" is not a claim this data can support, and no amount of code
+  fixes that — it is USDA's sampling rotation.
+- **Tenant isolation is not implemented.** There is no auth, only attribution strings plus the
+  operator key and PCA credentials. The Strix pentest found a cross-farm attribution path (fixed
+  in `b195713`), which is the concrete evidence this is now a real gap rather than a deferred
+  nicety. §4 permits building it.
+- **No CIMIS credential** — the adapter ships inert and the leaf-wetness finding was verified from
+  documentation rather than a live call.
+- **`disease_risk.evidence_grade` treats an unstated station distance as *close*** and can reach
+  GRADE_A, contradicting the CSV importer's warning. Pinned by test, deliberately unfixed
+  (`DATA_PLATFORM.md` §6). Only bites hand-entered CSV weather; decide before a real pilot enters
+  any.
+- **Incumbents** may cover parts (FieldView-style platforms, PCA software, ag ERPs).
+- **Data-entry burden** — someone has to log sprays and scouting; unclear who, in practice.
+- **Unclear buyer** and low willingness-to-pay from individual growers.
 
 ---
 
 ## 15. Recommended Next Work
 
-- **Do not build more product by default.**
-- Next work = **execute `DESIGN_PARTNER_SPRINT.md`** (§3): five qualified PCA conversations,
-  one real anonymized dataset assessed against its §4 checklist, one completed scorecard, and
-  quoted answers on whether controlled deferral is conceivable and who might pay. None of that
-  is code.
-- The **label capability layer was built anyway** (Phases 0–5, 2026-07-27) on an explicit
-  instruction, ahead of buyer validation, and **filled on 2026-07-28** (two real labels + the
-  reference farm) for the YC demo. Note what that did and did not do: the four label-dependent
-  checks now demonstrably run and the product can state a pesticide quantity in the unit the
-  question is asked in — and **still no buyer evidence was created**. Ceiling raised twice,
-  evidence unmoved. That is the pattern to be skeptical of, not encouraged by, the next time
-  the answer to "what should we build?" sounds obvious.
-- The **data-intelligence layer was built anyway** (2026-08-05) on an explicit
-  instruction, ahead of buyer validation. Note what it did and did not do: weather can
-  now reach a decision auditably, seventeen domains are declared with the eight
-  forbidden ones enforced in code, and six features abstain honestly — and **still no
-  buyer evidence was created**. That is now THREE times the ceiling has been raised
-  while evidence stayed flat (label layer, reference farm, data platform). The pattern
-  is the warning, not the achievement. The next "what should we build?" whose answer
-  sounds obvious is the one to refuse.
-- Remaining deep functionality (**MRL data** especially — destination-market law, a different
-  source, still out of scope per §4) waits on buyer validation.
+Ordered by leverage. Run the commercial track (§12) in parallel — it is not a prerequisite.
+
+1. **Unblock L1, the measurement substrate.** Everything else is gated on it.
+   - **Transcribe `app/botrytis_thresholds.py`** from the primary source. The arithmetic is
+     implemented and tested against synthetic tables; this is a reading task, and it turns the
+     opportunity scan's reason histogram into real band counts.
+   - **Buy and integrate a leaf-wetness sensor.** Now permitted (§4). It is the single measurement
+     standing between the product and grade-A Botrytis evidence.
+   - **Get a CIMIS AppKey** and re-verify the leaf-wetness catalogue finding against `/api/data`.
+   - **Transcribe more labels** — coverage is the difference between "the checks can run" and
+     "the checks ran on your farm."
+2. **L2 — make vision cumulative.** Today it suggests one scouting note per photo. Pressure over
+   time, per block, admissible to the engine as evidence, is the version that changes a decision.
+   The `AiJudgment` log and the `ScoutingSample` model already exist to hold it.
+3. **L3 — targeted-application prescriptions.** A per-zone treatment plan exported to equipment
+   the grower already owns is the most direct line from this codebase to the RFS thesis, and it is
+   pure software.
+4. **L4 — biologicals as decision options**, with the same label, provenance, and refusal
+   discipline as conventional chemistry.
+5. **Tenant isolation**, when a multi-grower PCA engagement is real. The primitives exist; the
+   pentest finding is the motivation.
+6. **Land one design partner** (`DESIGN_PARTNER_SPRINT.md`). Five qualified PCA conversations, one
+   real anonymized dataset, one completed scorecard, quoted answers on controlled deferral and on
+   who pays. No code.
 
 ---
 
 ## 16. How Future Claude Should Behave
 
-- **Read this `ENGINEERING_GUIDELINES.md` first**, then open only the files relevant to the task.
-- **Keep changes small** and focused; match the surrounding code style.
-- **Ask before expanding scope** — especially anything near the §4 guardrails.
-- **Preserve the guardrails and the cautious tone.** Never introduce "must spray," guaranteed
-  savings, fake-AI, or out-of-scope features.
-- **Prefer tests for logic changes** — engine/analytics/weather/pilot_evidence are pure and
-  unit-tested; add/update tests in `backend/tests/`.
-- **Run the appropriate commands** (`pytest`; `npm run build`/`lint` for frontend) and report
-  real results — if something fails, say so.
-- At the end of a task, **summarize files changed, commands run, and limitations.**
-- After **major work**, provide a compact **restart prompt** for the next Claude terminal
-  (what changed, current state, what's next).
+- **Read this file first**, then open only what the task needs.
+- **Default to building** when the §3 build test passes. Say which rung the work advances. If it
+  fails the test, say which of the three conditions failed and what would fix it — do not refuse
+  on general caution, and do not treat ambition as a red flag.
+- **Attach the honesty mechanism as you build, not afterwards.** New value that could be missing?
+  Give it a `Refusal` with a code. New number a human will act on? Give it provenance and a
+  citation. New surface? Make the wrong thing *inexpressible* rather than merely discouraged —
+  that technique (`RiskAssessment` with no action field, `FORBIDDEN_KEY_SUBSTRINGS`) is this
+  codebase's best idea.
+- **Reach for the empty-source pattern when data does not exist.** Build the structure, ship the
+  table empty, refuse until a human transcribes it. That is how to move fast without lying.
+- **Verify, do not remember.** Re-run `pytest` and report the real count; check the running app,
+  not just the tests. A recurring failure mode here has been *docs describing capabilities the UI
+  could not reach* — three real delivery gaps were found by auditing the running app end to end
+  (`epa_reg_no` missing from the primary form; the weekly report containing no decision data; a
+  CORS bug no backend test could see). Audit the surface, not the description.
+- **Match the surrounding code style**, keep changes focused, and prefer a test for logic changes —
+  the pure modules (engine / analytics / weather / pilot_evidence / label_data / disease_risk) are
+  unit-testable in isolation by design.
+- **Preserve the §4 hard guardrails and the §9–§10 tone.** They are the moat, not the friction.
+- **Check the blinding before touching a decision payload** — adding anything to the PCA-facing
+  surface breaks the shadow study (§5).
+- At the end of a task, **summarize files changed, commands run, and real results** — including
+  failures. After major work, leave a compact restart prompt for the next session.

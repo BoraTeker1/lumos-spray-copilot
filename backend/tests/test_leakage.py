@@ -86,6 +86,12 @@ def test_snapshot_signature_admits_no_post_decision_inputs():
     assert params == {
         "as_of", "horizon_hours", "target", "block",
         "weather_observations", "scouting_samples", "lookback_hours",
+        # `basis` is NOT an input channel — it carries no observation and cannot bring
+        # data in. It selects which admissibility rule filters the inputs already
+        # listed above, and its only non-default value ADMITS FEWER guarantees, never
+        # more rows from a later moment. Kept in this allowlist deliberately so the
+        # next parameter someone adds still has to be argued for here.
+        "basis",
     }
     forbidden = (
         "disposition", "outcome", "application", "sprayed", "harvest", "packout",
@@ -349,3 +355,68 @@ def test_snapshots_have_no_update_or_delete_route(client):
     assert client.put(path, json={}).status_code in (404, 405)
     assert client.patch(path, json={}).status_code in (404, 405)
     assert client.delete(path).status_code in (404, 405)
+
+
+# ---------------------------------------------------------------- the snapshot basis
+# A second, weaker admissibility basis exists for the historical opportunity scan
+# (`app/backtest.py`). These tests pin the boundary between the two. The danger is not
+# that the retrospective basis exists — it is that it could quietly become the default,
+# or that adding it could have disturbed the prospective records already on file.
+
+
+# Computed from the fixture below BEFORE the basis parameter existed. If this changes,
+# every stored `input_digest` in every deployed database has been orphaned and every
+# assessment anchored to one can no longer be tied to its inputs. Commit f06005f moved
+# these digests once, deliberately and with a migration; this change must not.
+PINNED_PROSPECTIVE_DIGEST = (
+    "6c0db6c14a5d76ddf39a3f409772212c3768dd7a22b4157d2db16b9d5e1cfcf4"
+)
+
+
+def _pinned_draft(**kw):
+    return risk_snapshot.build_snapshot(
+        as_of=AS_OF, horizon_hours=72, target="botrytis_fruit_rot", block=block(),
+        weather_observations=[weather()], scouting_samples=[], **kw
+    )
+
+
+def test_adding_the_retrospective_basis_did_not_move_prospective_digests():
+    assert _pinned_draft().input_digest == PINNED_PROSPECTIVE_DIGEST
+
+
+def test_a_prospective_payload_carries_no_basis_key():
+    """The absence is load-bearing, not cosmetic.
+
+    Writing "basis": "point_in_time" into the payload would change the canonical JSON
+    every digest is computed over — see the pinned value above.
+    """
+    assert "basis" not in _pinned_draft().payload
+
+
+def test_a_retrospective_payload_states_its_own_basis():
+    """A payload read back years later must not depend on the column beside it."""
+    draft = _pinned_draft(basis=risk_snapshot.BASIS_RETROSPECTIVE)
+    assert draft.payload["basis"] == risk_snapshot.BASIS_RETROSPECTIVE
+
+
+def test_the_two_bases_never_share_a_digest_namespace():
+    """Same block, same as_of, same admitted rows — still different identities.
+
+    A digest is what a stored assessment is looked up by. Sharing a namespace would let
+    a retrospective reconstruction masquerade as the prospective record of that moment.
+    """
+    prospective = _pinned_draft()
+    retrospective = _pinned_draft(basis=risk_snapshot.BASIS_RETROSPECTIVE)
+    assert prospective.input_digest != retrospective.input_digest
+
+
+def test_the_default_basis_is_point_in_time():
+    """Weakening it must require passing an argument at the call site."""
+    assert _pinned_draft().basis == risk_snapshot.BASIS_POINT_IN_TIME
+    signature = inspect.signature(risk_snapshot.build_snapshot)
+    assert signature.parameters["basis"].default == risk_snapshot.BASIS_POINT_IN_TIME
+
+
+def test_an_unknown_basis_is_refused_rather_than_silently_treated_as_strict():
+    with pytest.raises(ValueError, match="unknown snapshot basis"):
+        _pinned_draft(basis="whatever_seems_convenient")

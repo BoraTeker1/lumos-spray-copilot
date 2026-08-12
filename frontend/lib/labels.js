@@ -39,6 +39,37 @@ export const DECISION_OUTCOME_LABELS = {
   pca_review_required: "PCA REVIEW REQUIRED",
 };
 
+// Spray-disposition summary: the one-line answer to "so can this be sprayed?",
+// derived from the engine verdict ALONE. It adds no logic — it restates the
+// verdict the engine already issued in the words the grower actually asks in.
+//
+// The mapping is deliberately asymmetric, and must stay that way:
+//   * `block` is the only value that speaks in absolutes.
+//   * delay / inspect_first / pca_review_required all say HOLD — the engine has
+//     not cleared anything, and each carries its own server-supplied next action.
+//   * `approve` says NO ENGINE BLOCK FOUND and NEVER "spraying allowed: yes".
+//     An approve is currently never definitive (rotation and scouting checks are
+//     heuristics; prior-REI is grower-entered), so an affirmative clearance here
+//     would be a pesticide prescription the product refuses to make.
+// Call sites pair the headline with the server's `required_next_action` and,
+// for approve, with CLEARANCE_CAVEAT.
+export const DISPOSITION_SUMMARY = {
+  block: { headline: "SPRAYING ALLOWED: NO", tone: "risk" },
+  delay: { headline: "NOT CURRENTLY CLEARED — HOLD", tone: "warn" },
+  inspect_first: { headline: "NOT CURRENTLY CLEARED — HOLD", tone: "inspect" },
+  pca_review_required: { headline: "NOT CURRENTLY CLEARED — HOLD", tone: "review" },
+  approve: { headline: "NO ENGINE BLOCK FOUND", tone: "good" },
+};
+
+// Shown beside an approve headline. Says what the absence of a block does and
+// does not mean.
+export const CLEARANCE_CAVEAT =
+  "No engine block is not a clearance to spray. Confirm PHI, REI, rates and crop use against the product label with a licensed PCA / agronomist before application.";
+
+export function dispositionSummary(outcome) {
+  return DISPOSITION_SUMMARY[outcome] || DISPOSITION_SUMMARY.pca_review_required;
+}
+
 // Recorded real-world outcomes (what the humans actually did).
 export const RECORDED_OUTCOME_LABELS = {
   planned: "No outcome recorded yet",
@@ -62,12 +93,12 @@ export const REVIEW_STATE_LABELS = {
 // Shared by the dashboard cards and the farm-page header chip. Badge variants
 // come from the shared tone table; borders keep per-urgency intensity.
 const URGENCY_BORDERS = {
-  conflict: "border-red-300",
-  harvest_overdue: "border-red-300",
-  needs_review: "border-amber-300",
-  awaiting_outcome: "border-amber-200",
-  flags: "border-gray-200",
-  ok: "border-gray-200",
+  conflict: "border-risk-line",
+  harvest_overdue: "border-risk-line",
+  needs_review: "border-warn-line",
+  awaiting_outcome: "border-warn-line",
+  flags: "border-line",
+  ok: "border-line",
 };
 
 const URGENCY_LABELS = {
@@ -90,3 +121,169 @@ export const URGENCY_META = Object.fromEntries(
     },
   ])
 );
+
+// ------------------------------------------------------- the value ledger
+// Evidence tier for one attributed figure (mirrors app/value_ledger.py). The
+// distinction is the whole point of the ledger: a verified dollar is backed by
+// recorded follow-up evidence, an estimated one is somebody's recorded outcome
+// and nothing more, and the two are never added together.
+export const VALUE_TIER_LABELS = {
+  verified: "Verified",
+  estimated: "Estimated",
+  not_calculated: "Not calculated",
+};
+
+// Where an attributed figure came from.
+export const VALUE_SOURCE_LABELS = {
+  avoided_application: "Application avoided",
+  procurement_saving: "Input purchasing",
+};
+
+// Crop-cycle status (mirrors schemas.CropCycleStatus).
+export const CROP_CYCLE_STATUS_LABELS = {
+  planned: "Planned",
+  planted: "Planted",
+  growing: "Growing",
+  harvesting: "Harvesting",
+  closed: "Closed",
+  abandoned: "Abandoned",
+};
+
+// Non-spray operations that carry a season cost (mirrors schemas.OperationType).
+export const OPERATION_TYPE_LABELS = {
+  planting: "Planting",
+  irrigation: "Irrigation",
+  fertilization: "Fertilization",
+  crop_protection: "Crop protection",
+  scouting: "Scouting",
+  harvest: "Harvest",
+  tillage: "Tillage",
+  other: "Other",
+};
+
+// Measured block outcomes (mirrors schemas.BlockOutcomeType).
+export const BLOCK_OUTCOME_TYPE_LABELS = {
+  disease_incidence: "Disease incidence",
+  rescue_treatment: "Rescue treatment",
+  yield: "Yield",
+  marketable_packout: "Marketable packout",
+  cull: "Cull",
+  cost: "Cost",
+  adverse_event: "Adverse event",
+};
+
+// Season cost groupings (mirrors schemas.CostCategory). A breakdown, not a chart of
+// accounts. `uncategorised` is not in the backend Literal — it is the bucket
+// value_ledger uses for a costed row nobody classified, and it stays visibly distinct
+// from "other" because those are different facts.
+export const COST_CATEGORY_LABELS = {
+  crop_protection: "Crop protection",
+  fertilizer_nutrition: "Fertilizer / nutrition",
+  irrigation: "Irrigation",
+  labor: "Labor",
+  equipment_operations: "Equipment / operations",
+  planting_materials: "Planting / materials",
+  harvest_postharvest: "Harvest / post-harvest",
+  other: "Other",
+  uncategorised: "Uncategorised",
+};
+
+// Season economics (mirrors app/season_closeout.py). Every one of these is a
+// farm-record figure, never an accounting claim — the wording matters and lives here
+// so the page and any future surface cannot disagree about what a number is called.
+export const CLOSEOUT_METRIC_LABELS = {
+  revenue: "Revenue",
+  costs: "Recorded costs",
+  revenue_minus_recorded_costs: "Revenue minus recorded costs",
+  harvested_yield: "Harvested yield",
+  planted_area: "Planted area",
+  yield_per_area: "Yield per area",
+  cost_per_area: "Recorded cost per area",
+  revenue_per_area: "Revenue per area",
+  cost_per_yield_unit: "Recorded cost per unit",
+  realised_price_per_yield_unit: "Realised price per unit",
+};
+
+// What a season's economics page is called, per cycle state. Same payload either way
+// — an open season is not a lesser version of a closed one.
+export const CLOSEOUT_VIEW_LABELS = {
+  season_to_date: "Season to date",
+  season_closeout: "Season closeout",
+};
+
+// --- The advisory queue -----------------------------------------------------
+// Mirrors app/advisory.py's KIND_* constants. Import from here so the queue, the
+// farm page and any future surface cannot disagree about what an item is called.
+export const ADVISORY_KIND_LABELS = {
+  resolve_conflict: "Unresolved conflict",
+  await_pca_review: "Awaiting PCA review",
+  inspect_field: "Inspect before deciding",
+  record_outcome: "Outcome not recorded",
+  record_follow_up: "Follow-up needed",
+  harvest_window_changed: "Harvest date moved",
+  scouting_stale: "Scouting overdue",
+  weather_risk: "Weather risk",
+  season_economics: "Season economics",
+  procurement_opportunity: "Input not sourced",
+  procurement_action: "Procurement action",
+  financing_action: "Financing action",
+};
+
+export const ADVISORY_URGENCY_LABELS = {
+  critical: "Critical",
+  soon: "Soon",
+  routine: "Routine",
+};
+
+// --- Season financing -------------------------------------------------------
+// No "approved" and no "declined": Lumos records that a lender responded with terms.
+// The credit decision is theirs and has no representation here.
+export const FINANCING_REQUEST_STATUS_LABELS = {
+  draft: "Draft",
+  evidence_assembled: "Evidence assembled",
+  shared: "Shared with lender",
+  offers_received: "Terms received",
+  offer_selected: "Terms selected",
+  withdrawn: "Withdrawn",
+};
+
+export const FINANCING_PURPOSE_LABELS = {
+  input_purchase: "Input purchase",
+  working_capital: "Working capital",
+  equipment: "Equipment",
+  land: "Land",
+};
+
+export const EVIDENCE_CATEGORY_LABELS = {
+  identity: "Farm and land",
+  production: "Production record",
+  cost: "Cost record",
+  revenue: "Revenue record",
+  compliance: "Compliance and decision record",
+  collateral: "Collateral",
+};
+
+// --- Lumos economic participation -------------------------------------------
+// Mirrors app/participation.AGREEMENT_MODELS.
+export const COMMERCIAL_MODEL_LABELS = {
+  platform_fee: "Fixed platform fee",
+  per_area_fee: "Fee per unit of area",
+  per_cycle_fee: "Fee per crop cycle",
+  verified_value_share: "Share of verified value created",
+  performance_bonus: "Capped performance bonus",
+  origination_fee: "Financing origination fee",
+  monitoring_fee: "Monitoring fee",
+  revenue_share: "Revenue share",
+  crop_share: "Crop share",
+};
+
+// Which farm-performance metrics a surface leads with. The server sends labels for
+// every metric; this is the display ORDER for the compact card.
+export const HEADLINE_PERFORMANCE_METRICS = [
+  "yield_per_area",
+  "revenue_per_area",
+  "cost_per_area",
+  "cost_per_yield_unit",
+  "decision_follow_through",
+  "lumos_value_verified",
+];

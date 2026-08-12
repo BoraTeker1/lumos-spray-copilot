@@ -1,10 +1,13 @@
 "use client";
 
+import { LoadingState } from "@/components/SystemState";
+import Callout from "@/components/Callout";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { FlaskConical, OctagonX, RefreshCw, ShieldCheck, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { useFarmContext } from "@/lib/farm-context";
 import { statusMeta } from "@/lib/status";
+import { tone } from "@/lib/tones";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import DataTable from "@/components/DataTable";
@@ -68,10 +71,10 @@ export default function DecisionsPage() {
   const fields = [...new Set(planned.map((p) => p.field_block).filter(Boolean))].sort();
   const verdicts = [...new Set(planned.map((p) => p.decision_outcome).filter(Boolean))];
 
-  if (farmsLoading) return <p className="text-sm text-gray-500">Loading…</p>;
+  if (farmsLoading) return <LoadingState message="Loading decisions…" />;
   if (!activeFarm) {
     return (
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-muted">
         No farms yet — seed the demo data or add a pilot farm first.
       </p>
     );
@@ -81,22 +84,26 @@ export default function DecisionsPage() {
     <div className="space-y-6">
       <PageHeader
         breadcrumbs={[{ label: "Decisions" }, { label: activeFarm.name }]}
-        title="Decisions"
+        title="Planned-spray decisions"
         meta={
-          <span>
-            Every planned spray checked by the rule engine for {activeFarm.name}. The
-            verdict is the historical decision; the state says what is still owed.
-          </span>
+          <>
+            <span>Historical verdicts and any work still owed.</span>
+            <span className="inline-flex items-center gap-1.5">
+              <FlaskConical className="h-3.5 w-3.5" aria-hidden />
+              Source: deterministic rules · AI did not issue these verdicts.
+            </span>
+          </>
         }
         actions={<PreSpraySheet farmId={farmId} onChanged={load} />}
       />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <Callout tone="risk">
           {error}
-        </div>
+        </Callout>
       )}
 
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_300px]">
       <Card>
         <CardContent className="p-5">
           <FilterBar
@@ -138,12 +145,13 @@ export default function DecisionsPage() {
           </FilterBar>
 
           <DataTable
-            columns={decisionColumns({ includeNextActionText: true })}
+            columns={decisionColumns()}
             rows={rows}
             rowKey={(p) => p.id}
             minWidth={720}
             empty={
               <EmptyState
+                size="sm"
                 icon={ShieldCheck}
                 title={
                   planned.length === 0
@@ -158,8 +166,52 @@ export default function DecisionsPage() {
               />
             }
           />
+          <p className="mt-3 border-t border-line pt-3 text-meta text-muted">
+            Verdict = engine decision at evaluation time. Current state = what happened
+            next.
+          </p>
         </CardContent>
       </Card>
+
+      {/* Explainer rail: the three columns of this table describe three different
+          moments, and readers conflate them constantly. */}
+      <Card className="h-fit p-4 2xl:sticky 2xl:top-20">
+        <h2 className="text-sm font-semibold text-ink">How to read this queue</h2>
+        <dl className="mt-3 space-y-3">
+          {[
+            {
+              icon: OctagonX,
+              tone: "risk",
+              term: "Deterministic verdict",
+              def: "The rule engine's decision at the time of the planned spray. It never changes.",
+            },
+            {
+              icon: Users,
+              tone: "review",
+              term: "Human review",
+              def: "Whether a licensed PCA has recorded a review of that verdict.",
+            },
+            {
+              icon: RefreshCw,
+              tone: "info",
+              term: "Follow-up evidence",
+              def: "What actually happened next, recorded after the decision.",
+            },
+          ].map((item) => {
+            const ItemIcon = item.icon;
+            return (
+              <div key={item.term} className="border-t border-line pt-3 first:border-t-0 first:pt-0">
+                <dt className="flex items-center gap-1.5 text-sm font-medium text-ink">
+                  <ItemIcon className={`h-4 w-4 ${tone(item.tone).icon}`} aria-hidden />
+                  {item.term}
+                </dt>
+                <dd className="mt-0.5 text-meta text-muted">{item.def}</dd>
+              </div>
+            );
+          })}
+        </dl>
+      </Card>
+      </div>
     </div>
   );
 }

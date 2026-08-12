@@ -6,7 +6,7 @@ export default function ProgressBar({ ratio, tone: toneName = "good", className 
   const pct = Math.max(0, Math.min(1, Number(ratio) || 0)) * 100;
   const t = tone(toneName);
   return (
-    <div className={`h-1.5 w-full overflow-hidden rounded-full bg-gray-100 ${className}`}>
+    <div className={`h-1.5 w-full overflow-hidden rounded-full bg-draft-bg ${className}`}>
       <div className={`h-full rounded-full ${t.bar}`} style={{ width: `${pct}%` }} />
     </div>
   );

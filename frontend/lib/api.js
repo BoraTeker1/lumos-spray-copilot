@@ -44,6 +44,27 @@ function qs(params) {
   return pairs.length ? `?${new URLSearchParams(pairs)}` : "";
 }
 
+// Presentation only: FastAPI returns its message as {"detail": "..."}, and
+// printing the raw body put a literal `API 403: {"detail":"…"}` on screen —
+// JSON punctuation the reader has to parse past to reach the sentence. The
+// status code is kept for anything without a detail string.
+async function errorMessage(res) {
+  const body = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(body);
+    const detail = parsed?.detail;
+    if (typeof detail === "string" && detail) return detail;
+    // Pydantic validation errors arrive as a list of {loc, msg}.
+    if (Array.isArray(detail) && detail.length) {
+      const msgs = detail.map((d) => d?.msg).filter(Boolean);
+      if (msgs.length) return msgs.join("; ");
+    }
+  } catch {
+    // Not JSON — fall through to the raw text.
+  }
+  return body || `${res.status} ${res.statusText}`;
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
     cache: "no-store",
@@ -55,8 +76,7 @@ async function request(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+    throw new Error(await errorMessage(res));
   }
   if (res.status === 204) return null;
   return res.json();
@@ -147,8 +167,7 @@ export const api = {
       body, // browser sets the multipart boundary; do NOT set Content-Type
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+      throw new Error(await errorMessage(res));
     }
     return res.json();
   },
@@ -162,7 +181,8 @@ export const api = {
   // AI review brief for one decision (on-demand; never changes the decision).
   generateAiBrief: (plannedId) =>
     request(`/planned-sprays/${plannedId}/ai-brief`, { method: "POST" }),
-  getAiCalibration: () => request("/internal/ai-calibration"),
+  getAiCalibration: () =>
+    request("/internal/ai-calibration", { headers: operatorHeaders() }),
 
   // ------------------------------------------------------------ label library
   listPesticideProducts: () =>
@@ -203,8 +223,7 @@ export const api = {
       body, // browser sets the multipart boundary; do NOT set Content-Type
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+      throw new Error(await errorMessage(res));
     }
     return res.json();
   },
@@ -257,6 +276,21 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // Historical opportunity scan (operator only — pilot ladder Stage 2).
+  // Operator-gated for a reason beyond tooling convenience: a risk histogram reaching a
+  // PCA enrolled in the blinded shadow study would contaminate the baseline their
+  // dispositions exist to provide.
+  runOpportunityScan: (farmId, data) =>
+    request(`/internal/farms/${farmId}/opportunity-scans`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  getOpportunityScans: (params = {}) =>
+    request(`/internal/opportunity-scans${qs(params)}`, { headers: operatorHeaders() }),
+  getOpportunityScan: (scanId) =>
+    request(`/internal/opportunity-scans/${scanId}`, { headers: operatorHeaders() }),
+
   // Weekly report
   weeklyReport: (farmId) => request(`/farms/${farmId}/weekly-report`),
 
@@ -271,8 +305,7 @@ export const api = {
       body, // browser sets the multipart boundary; do NOT set Content-Type
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${detail || res.statusText}`);
+      throw new Error(await errorMessage(res));
     }
     return res.json();
   },
@@ -286,7 +319,11 @@ export const api = {
     }),
 
   // Demo reset (refused with 409 unless the whole DB is demo/simulated data)
-  resetDemo: () => request("/internal/demo/reset", { method: "POST" }),
+  resetDemo: () =>
+    request("/internal/demo/reset", {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
 
   // Reduction measurement
   getReduction: (farmId) => request(`/farms/${farmId}/reduction`),
@@ -305,6 +342,7 @@ export const api = {
   importPilotData: (farmId, data) =>
     request(`/internal/farms/${farmId}/pilot-import`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
   getPilotCaseStudy: (farmId) => request(`/farms/${farmId}/pilot-case-study`),
@@ -313,7 +351,8 @@ export const api = {
   trackEvent: (data) => {
     request("/pilot-events", { method: "POST", body: JSON.stringify(data) }).catch(() => {});
   },
-  getInstrumentation: () => request("/internal/instrumentation"),
+  getInstrumentation: () =>
+    request("/internal/instrumentation", { headers: operatorHeaders() }),
 
   // Pilot feedback & intake
   listPilotFeedback: () => request("/pilot-feedback"),
@@ -372,22 +411,109 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  // ----------------------------------------------------------------- finance
+  // Reading a farm's own assessment history is grower-facing (no operator key):
+  // "why was I declined" is their question, and the refusal rows are the part they
+  // most need to see. RECORDING an assessment is a consequential act, so it is
+  // operator-gated.
+  getFarmProfile: (farmId) => request(`/farms/${farmId}/profile`),
+  listCreditAssessments: (farmId) =>
+    request(`/farms/${farmId}/credit-assessments`),
+  recordCreditAssessment: (farmId, assessedBy) =>
+    request(
+      `/internal/farms/${farmId}/credit-assessments${qs({ assessed_by: assessedBy })}`,
+      { method: "POST", headers: operatorHeaders() }
+    ),
+  listUnderwritingDecisions: (farmId) =>
+    request(`/farms/${farmId}/underwriting-decisions`),
+  recordUnderwritingDecision: (farmId, data) =>
+    request(`/internal/farms/${farmId}/underwriting-decisions`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  listCollateral: (farmId) => request(`/farms/${farmId}/collateral`),
+  registerCollateral: (farmId, data) =>
+    request(`/internal/farms/${farmId}/collateral`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  listMonitoringSnapshots: (farmId) =>
+    request(`/farms/${farmId}/monitoring-snapshots`),
+  recordMonitoringSnapshot: (farmId) =>
+    request(`/internal/farms/${farmId}/monitoring-snapshots`, {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
+  listCoverageAssessments: (farmId) =>
+    request(`/farms/${farmId}/coverage-assessments`),
+  recordCoverageAssessment: (farmId, data) =>
+    request(`/internal/farms/${farmId}/coverage-assessments`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  // The operator worklist: which empty sources are blocking which layer.
+  getTranscriptionStatus: () =>
+    request("/internal/transcription-status", { headers: operatorHeaders() }),
+
+  // ------------------------------------------------------------- marketplace
+  // Suppliers and the product catalogue. Without these the concierge form can only
+  // send free text, every quote line lands unlinked, and price dispersion reports
+  // 100% unlinked forever — the catalogue would be decorative.
+  listSuppliers: (includeInactive = false) =>
+    request(`/internal/suppliers${includeInactive ? "?include_inactive=true" : ""}`, {
+      headers: operatorHeaders(),
+    }),
+  createSupplier: (data) =>
+    request("/internal/suppliers", {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  listInputProducts: () =>
+    request("/internal/input-products", { headers: operatorHeaders() }),
+  createInputProduct: (data) =>
+    request("/internal/input-products", {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  // Grower-facing: what suppliers quoted, and whether anyone was actually contacted.
+  getPriceDispersion: (planId) =>
+    request(`/input-plans/${planId}/price-dispersion`),
+  getRfqTransport: () => request("/rfq-transport"),
+  listRfqTransmissions: (planId) =>
+    request(`/input-plans/${planId}/transmissions`),
+  transmitRfq: (planId, data) =>
+    request(`/input-plans/${planId}/transmit-rfq`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   // Concierge entry points (internal operator tooling, /internal page only)
   createSupplierQuote: (planId, data) =>
     request(`/internal/input-plans/${planId}/quotes`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
   withdrawSupplierQuote: (quoteId) =>
-    request(`/internal/supplier-quotes/${quoteId}/withdraw`, { method: "POST" }),
+    request(`/internal/supplier-quotes/${quoteId}/withdraw`, {
+      method: "POST",
+      headers: operatorHeaders(),
+    }),
   createFinancingOffer: (quoteId, data) =>
     request(`/internal/supplier-quotes/${quoteId}/financing-offers`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
   addOrderEvent: (orderId, data) =>
     request(`/internal/orders/${orderId}/events`, {
       method: "POST",
+      headers: operatorHeaders(),
       body: JSON.stringify(data),
     }),
 
@@ -454,6 +580,106 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // ------------------------------------------------- season + the value ledger
+  listCropCycles: (farmId) => request(`/farms/${farmId}/crop-cycles`),
+  createCropCycle: (farmId, data) =>
+    request(`/farms/${farmId}/crop-cycles`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateCropCycle: (cycleId, data) =>
+    request(`/crop-cycles/${cycleId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  linkCropCycleRecords: (cycleId) =>
+    request(`/crop-cycles/${cycleId}/link-records`, { method: "POST" }),
+  listOperations: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/operations${qs({ crop_cycle_id: cropCycleId })}`),
+  createOperation: (cycleId, data) =>
+    request(`/crop-cycles/${cycleId}/operations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getValueLedger: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/value-ledger${qs({ crop_cycle_id: cropCycleId })}`),
+  getCropCycle: (cycleId) => request(`/crop-cycles/${cycleId}`),
+  // Sales are append-only: there is no update and no delete. A correction is a new
+  // record carrying `supersedes_id`.
+  listCropCycleSales: (cycleId) => request(`/crop-cycles/${cycleId}/sales`),
+  createSaleRecord: (cycleId, data) =>
+    request(`/crop-cycles/${cycleId}/sales`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getCropCycleCloseout: (cycleId) => request(`/crop-cycles/${cycleId}/closeout`),
+  getDecisionEconomics: (plannedId) =>
+    request(`/planned-sprays/${plannedId}/economics`),
+
+  // ---------------------------------------- farm intelligence + advisory queue
+  // `getFarmIntelligence` is ONE call composing every block the farm page needs, so
+  // the overview and the detail pages cannot tell different stories. The advisory
+  // queue is fully derived server-side — there is nothing to dismiss or persist.
+  getFarmIntelligence: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/intelligence${qs({ crop_cycle_id: cropCycleId })}`),
+  getFarmAdvisory: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/advisory${qs({ crop_cycle_id: cropCycleId })}`),
+  getFarmPerformance: (farmId) => request(`/farms/${farmId}/performance`),
+  // Opt-in per item: the queue renders fully without ever calling this, so a
+  // deployment with no API key loses an explanation and nothing else.
+  explainAdvisoryItem: (farmId, itemKey, cropCycleId) =>
+    request(`/farms/${farmId}/advisory/explain`, {
+      method: "POST",
+      body: JSON.stringify({ item_key: itemKey, crop_cycle_id: cropCycleId }),
+    }),
+
+  // ------------------------------------------------------- season financing
+  listFinancingRequests: (farmId) => request(`/farms/${farmId}/financing-requests`),
+  createFinancingRequest: (farmId, data) =>
+    request(`/farms/${farmId}/financing-requests`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getFinancingRequest: (requestId) => request(`/financing-requests/${requestId}`),
+  updateFinancingRequest: (requestId, data) =>
+    request(`/financing-requests/${requestId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  getFinancingEvidencePackage: (requestId) =>
+    request(`/financing-requests/${requestId}/evidence-package`),
+  getFinancingAssessment: (requestId) =>
+    request(`/financing-requests/${requestId}/assessment`),
+  getFinancingMonitoring: (requestId) =>
+    request(`/financing-requests/${requestId}/monitoring`),
+  listLenderPolicies: () => request(`/lender-policies`),
+  createLenderPolicy: (data) =>
+    request(`/internal/lender-policies`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  createFinancingRequestOffer: (requestId, data) =>
+    request(`/internal/financing-requests/${requestId}/offers`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+
+  // -------------------------------- commercial agreements and participation
+  // Reads are grower-facing: a farm can always see its own commercial terms.
+  // Writing one is a negotiated act, so it is operator-gated.
+  listCommercialAgreements: (farmId) =>
+    request(`/farms/${farmId}/commercial-agreements`),
+  createCommercialAgreement: (farmId, data) =>
+    request(`/internal/farms/${farmId}/commercial-agreements`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  getCropCycleParticipation: (cycleId) =>
+    request(`/crop-cycles/${cycleId}/participation`),
+
   // ------------------------------------------------- operator-only (/internal)
   // Risk assessments are SHADOW: this is the only surface that returns them, and it
   // is deliberately absent from every PCA-facing payload.
@@ -490,6 +716,16 @@ export const api = {
     request(`/internal/farms/${farmId}/pca-authorizations`, {
       headers: operatorHeaders(),
     }),
+
+  // USDA PDP measured-residue reference. Grower/PCA-facing and deliberately not
+  // farm-scoped — PDP measures commodities nationally, so no farm id belongs here.
+  residueReference: (crop, activeIngredient) =>
+    request(
+      `/residue-reference?crop=${encodeURIComponent(crop)}` +
+        `&active_ingredient=${encodeURIComponent(activeIngredient)}`
+    ),
+  residueReferenceCoverage: () =>
+    request("/internal/residue-reference-coverage", { headers: operatorHeaders() }),
 
   // CSV export URLs (used as direct download links)
   exportUrl: (path) => `${BASE_URL}${path}`,

@@ -5,6 +5,7 @@ import { CalendarClock } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { FormError } from "@/components/ui/field";
 import {
   Dialog,
   DialogContent,
@@ -63,7 +64,7 @@ export default function UpdateHarvestDialog({ farmId, currentDate, onUpdated, tr
             required
             aria-label="Expected harvest date"
           />
-          {error && <p className="text-xs text-red-600">{error}</p>}
+          <FormError size="sm">{error}</FormError>
           <Button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save harvest date"}
           </Button>

@@ -79,12 +79,20 @@ SOURCE_IMPLEMENTED = "implemented"
 SOURCE_REQUIRES_CREDENTIAL = "requires_credential"
 SOURCE_NOT_IMPLEMENTED = "not_implemented"
 SOURCE_DEFERRED_TO_FINANCE_PHASE = "deferred_to_finance_phase"
+# A fourth kind of gap, and the one the finance and market domains are in as of
+# 2026-08-07: the numbers do not arrive over a wire at all. They arrive when a human
+# reads a primary document — a lender's scorecard, an exchange's settlements — and
+# transcribes it with a citation into the domain's EMPTY source module. An operator
+# looking at this status should not go looking for an API key or a missing library;
+# they should go find the document. See `app/transcription.py`.
+SOURCE_AWAITING_TRANSCRIPTION = "awaiting_transcription"
 
 SOURCE_STATUSES: tuple[str, ...] = (
     SOURCE_IMPLEMENTED,
     SOURCE_REQUIRES_CREDENTIAL,
     SOURCE_NOT_IMPLEMENTED,
     SOURCE_DEFERRED_TO_FINANCE_PHASE,
+    SOURCE_AWAITING_TRANSCRIPTION,
 )
 
 # Severities for an issue. `error` drops the row; `warning` keeps it and says why.

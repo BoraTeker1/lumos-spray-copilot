@@ -2,47 +2,72 @@
 // semantic state the same way. Components look up a tone by domain value
 // (decision outcome, review state, risk level, …) instead of declaring their
 // own palette maps. Labels stay in lib/labels.js — this file is styling only.
+//
+// Colors resolve through the semantic token pairs in tailwind.config.js
+// (ok / risk / warn / inspect / review / info / draft). Badge variant KEYS keep
+// their historical color names ("green", "amber", …) so the ~45 existing
+// call sites re-skin without edits; the values behind them are the tokens.
 
 export const TONES = {
   good: {
     badge: "green",
-    box: "border-green-200 bg-green-50",
-    text: "text-green-900",
-    icon: "text-leaf",
-    dot: "bg-leaf-100 text-leaf-700",
+    box: "border-ok-line bg-ok-bg",
+    text: "text-ok-fg",
+    icon: "text-ok-fg",
+    dot: "bg-ok-bg text-ok-fg",
     bar: "bg-leaf",
   },
   warn: {
     badge: "amber",
-    box: "border-amber-300 bg-amber-50",
-    text: "text-amber-900",
-    icon: "text-amber-600",
-    dot: "bg-amber-100 text-amber-700",
-    bar: "bg-amber-500",
+    box: "border-warn-line bg-warn-bg",
+    text: "text-warn-fg",
+    icon: "text-warn-fg",
+    dot: "bg-warn-bg text-warn-fg",
+    bar: "bg-warn-fg",
+  },
+  // Distinct from `warn`: "go look at it first" is a different instruction
+  // from "this is late". The spec gives them separate swatches.
+  inspect: {
+    badge: "inspect",
+    box: "border-inspect-line bg-inspect-bg",
+    text: "text-inspect-fg",
+    icon: "text-inspect-fg",
+    dot: "bg-inspect-bg text-inspect-fg",
+    bar: "bg-inspect-fg",
   },
   risk: {
     badge: "red",
-    box: "border-red-300 bg-red-50",
-    text: "text-red-900",
-    icon: "text-red-600",
-    dot: "bg-red-100 text-red-700",
-    bar: "bg-red-500",
+    box: "border-risk-line bg-risk-bg",
+    text: "text-risk-fg",
+    icon: "text-risk-fg",
+    dot: "bg-risk-bg text-risk-fg",
+    bar: "bg-risk-fg",
   },
   info: {
     badge: "blue",
-    box: "border-blue-200 bg-blue-50",
-    text: "text-blue-900",
-    icon: "text-blue-600",
-    dot: "bg-blue-100 text-blue-700",
-    bar: "bg-blue-500",
+    box: "border-info-line bg-info-bg",
+    text: "text-info-fg",
+    icon: "text-info-fg",
+    dot: "bg-info-bg text-info-fg",
+    bar: "bg-info-fg",
+  },
+  // "A licensed human must sign this" — deliberately NOT info blue, so a
+  // pending professional act never reads as an FYI.
+  review: {
+    badge: "purple",
+    box: "border-review-line bg-review-bg",
+    text: "text-review-fg",
+    icon: "text-review-fg",
+    dot: "bg-review-bg text-review-fg",
+    bar: "bg-review-fg",
   },
   neutral: {
     badge: "neutral",
-    box: "border-gray-200 bg-gray-50",
-    text: "text-gray-700",
-    icon: "text-gray-400",
-    dot: "bg-gray-100 text-gray-600",
-    bar: "bg-gray-400",
+    box: "border-line bg-draft-bg",
+    text: "text-draft-fg",
+    icon: "text-muted",
+    dot: "bg-draft-bg text-draft-fg",
+    bar: "bg-muted",
   },
 };
 
@@ -55,8 +80,8 @@ export const DECISION_OUTCOME_TONES = {
   approve: "good",
   block: "risk",
   delay: "warn",
-  inspect_first: "warn",
-  pca_review_required: "info",
+  inspect_first: "inspect",
+  pca_review_required: "review",
 };
 
 // Recorded real-world outcomes (what the humans actually did).
@@ -102,4 +127,31 @@ export const URGENCY_TONES = {
   awaiting_outcome: "warn",
   flags: "warn",
   ok: "neutral",
+};
+
+// Value-ledger evidence tiers. `not_calculated` is deliberately neutral, not a
+// warning: a decision with nothing attributable is a normal, honest state.
+export const VALUE_TIER_TONES = {
+  verified: "good",
+  estimated: "info",
+  not_calculated: "neutral",
+};
+
+// Advisory urgency. Three bands, re-pointing existing tones rather than adding a
+// palette: `critical` reads like an open conflict because that is usually what it
+// is, `soon` like a warning, `routine` like an FYI.
+export const ADVISORY_URGENCY_TONES = {
+  critical: "risk",
+  soon: "warn",
+  routine: "info",
+};
+
+// Which way a season-over-season movement is coloured. The direction is a fact and
+// the metric declares whether up is good (`higher_is_better` on the payload), so this
+// maps the COMBINATION rather than the direction alone — a falling cost per kilo is
+// good news and must not render red.
+export const TREND_TONES = {
+  favourable: "good",
+  unfavourable: "risk",
+  neutral: "neutral",
 };
