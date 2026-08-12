@@ -1,0 +1,168 @@
+name: CI
+
+# The three checks that have actually caught things in this repo, in the order they
+# fail fastest. Nothing here is aspirational: each job runs a command ENGINEERING_GUIDELINES.md §8
+# already documents as the real check for its area.
+#
+# Note what is NOT here: no lint job. `npm run lint` is not configured (it prompts
+# interactively), and the lint pass inside `npm run build` is the real frontend check —
+# see ENGINEERING_GUIDELINES.md §8. A job that ran a non-existent script would be a green tick that
+# checked nothing.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same PR cancels the first — these jobs take minutes and the
+# older run's answer is already stale.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # AI tests must run on MockLlmService and must NEVER reach the real API
+      # (ENGINEERING_GUIDELINES.md §8). The service picks the mock when no key is present, so this
+      # asserts the condition rather than trusting that nobody adds the secret later.
+      # If this ever fails, the fix is to remove ANTHROPIC_API_KEY from the CI
+      # environment — not to relax the check.
+      - name: Assert the AI layer is on the mock
+        env:
+          LUMOS_DEMO_MODE: "1"
+        run: |
+          python - <<'PY'
+          from app import llm
+          assert llm.default_llm_service.is_mock, (
+              "CI resolved a REAL LLM service. Tests must never hit the Anthropic API; "
+              "unset ANTHROPIC_API_KEY in the workflow environment."
+          )
+          print("AI layer: mock (correct for CI)")
+          PY
+
+      # conftest.py binds its own throwaway SQLite database and sets LUMOS_DEMO_MODE
+      # before importing the app, so no database or env setup is needed here.
+      - name: Run tests
+        run: pytest -q
+
+  migrations:
+    name: Migrations from a clean database
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    # The dev database is NOT disposable and `seed.run()` calls drop_all, so this job
+    # only ever touches a scratch file under /tmp. It exists because the test suite
+    # runs against `create_all`, which cannot catch a migration that does not apply —
+    # and SQLite batch mode has real sharp edges (an unnamed FK constraint fails).
+    env:
+      LUMOS_DATABASE_URL: sqlite:////tmp/ci-migrations.db
+      LUMOS_DEMO_MODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Upgrade from the baseline
+        run: alembic upgrade head
+
+      # A migration that cannot be reversed is a migration nobody can roll back in
+      # front of a customer. The round trip also catches batch-mode table rebuilds
+      # that silently drop a constraint on the way down.
+      - name: Downgrade and re-upgrade the head revision
+        run: |
+          alembic downgrade -1
+          alembic upgrade head
+
+      # MUST run against the database the MIGRATIONS built, before anything calls
+      # `create_all`. Seeding builds the schema straight from `Base.metadata`, so
+      # comparing that against the models would compare them to themselves and pass
+      # no matter how far the migration chain had drifted.
+      #
+      # This is the only check in the repo that can see this class of bug: the test
+      # suite runs on `create_all` too. It found one the day it was added —
+      # `residue_reference_records.created_at` was nullable in the migration and
+      # non-null in the model (fixed in 1e96526d950e).
+      - name: Assert the migration chain matches the models
+        run: |
+          python - <<'PY'
+          from alembic.autogenerate import compare_metadata
+          from alembic.migration import MigrationContext
+          from app.database import Base, engine
+          import app.models  # noqa: F401 - registers every table
+
+          with engine.connect() as connection:
+              diff = compare_metadata(
+                  MigrationContext.configure(connection), Base.metadata
+              )
+          if diff:
+              print("Models and migrations have drifted:")
+              for entry in diff:
+                  print("  ", entry)
+              raise SystemExit(1)
+          print("Migration chain matches the models.")
+          PY
+
+      # Last, because it drops every table: the documented full-rebuild order from
+      # ENGINEERING_GUIDELINES.md §8. Proves the demo path a new contributor follows still works.
+      - name: Seed a demo database and stamp it
+        run: |
+          rm -f /tmp/ci-migrations.db
+          python -m app.seed
+          alembic stamp head
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 20 LTS. Next 14.2 requires >=18.17; pinning the LTS keeps CI from
+          # drifting ahead of what the app is actually built against.
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # There is no TypeScript here, so the production build IS the compile and lint
+      # check (ENGINEERING_GUIDELINES.md §7, §8).
+      - name: Build
+        run: npm run build
