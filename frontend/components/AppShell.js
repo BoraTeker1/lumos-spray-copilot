@@ -11,6 +11,7 @@ import {
   Ellipsis,
   Eye,
   FileCheck,
+  Landmark,
   LayoutDashboard,
   Leaf,
   MessageSquare,
@@ -47,19 +48,18 @@ const NAV_GROUPS = [
   },
   {
     label: "Records",
-    items: [{ href: "/evidence", label: "Evidence & compliance", icon: FileCheck }],
+    items: [
+      { href: "/evidence", label: "Evidence & compliance", icon: FileCheck },
+      // Financing is linked (2026-08-12), where the old lender console never was.
+      // The difference is what it now shows: an evidence package assembled from the
+      // farm's own records, which is useful on the day it is opened. The old page
+      // was four tables that all refused until a lender document was transcribed.
+      { href: "/financing", label: "Financing", icon: Landmark },
+    ],
   },
 ];
 const BOTTOM_NAV = [
-  { href: "/inputs", label: "Inputs & finance", icon: ShoppingCart },
-  // `/finance` (the LENDING layer — scorecard, underwriting, collateral, covenants)
-  // is deliberately UNLINKED, like /internal: reachable by URL, absent from the nav.
-  // It is not on the ENGINEERING_GUIDELINES.md §3 build ladder, it serves a lender rather than the
-  // PCA/packer buyer in §1, and every assessment on it refuses until a lender
-  // document is transcribed — so in a demo it reads as an unfinished product rather
-  // than as discipline. Its write actions are also operator-gated, so its own
-  // buttons 403 without a key set on /internal. Re-link it when a lender or insurer
-  // conversation is real; the backend layer is untouched and still tested.
+  { href: "/inputs", label: "Inputs & procurement", icon: ShoppingCart },
   { href: "/pilot/new", label: "Pilot setup", icon: ClipboardList },
   { href: "/feedback", label: "Feedback", icon: MessageSquare },
 ];

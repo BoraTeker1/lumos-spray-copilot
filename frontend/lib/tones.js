@@ -136,3 +136,22 @@ export const VALUE_TIER_TONES = {
   estimated: "info",
   not_calculated: "neutral",
 };
+
+// Advisory urgency. Three bands, re-pointing existing tones rather than adding a
+// palette: `critical` reads like an open conflict because that is usually what it
+// is, `soon` like a warning, `routine` like an FYI.
+export const ADVISORY_URGENCY_TONES = {
+  critical: "risk",
+  soon: "warn",
+  routine: "info",
+};
+
+// Which way a season-over-season movement is coloured. The direction is a fact and
+// the metric declares whether up is good (`higher_is_better` on the payload), so this
+// maps the COMBINATION rather than the direction alone — a falling cost per kilo is
+// good news and must not render red.
+export const TREND_TONES = {
+  favourable: "good",
+  unfavourable: "risk",
+  neutral: "neutral",
+};

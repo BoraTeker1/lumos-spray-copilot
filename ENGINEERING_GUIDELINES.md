@@ -131,12 +131,22 @@ Everything not listed here is buildable under the §3 build test.
   weight, or advance rate arrives by a human transcribing a primary document *with its citation*,
   or the model returns a `Refusal`. `None` means **the source is silent**, never "no limit."
   See `app/transcription.py`, `TRANSCRIPTION_TASKS.md`.
-- **No money movement of any kind.** No payments, disbursement, repayment collection, or computed
-  amortisation — hence no structured APR anywhere, only a lender's verbatim cost sentence. Also
-  no revenue-sharing, no Lumos-authored credit policy or covenant threshold, no `approved`
-  underwriting outcome (the strongest affirmative is `conditions_met`), no estimated insurance
-  premium, and no recommendation to take/increase/close a market position. Real licensing
-  exposure; the last two are structural (there is no field to put them in).
+- **No money movement of any kind.** No payments, disbursement, repayment collection, invoicing,
+  or computed amortisation — hence no structured APR anywhere, only a lender's verbatim cost
+  sentence. Also no Lumos-authored credit policy or covenant threshold, no `approved` underwriting
+  outcome (the strongest affirmative is `conditions_met`), no estimated insurance premium, and no
+  recommendation to take/increase/close a market position. Real licensing exposure; the last two
+  are structural (there is no field to put them in).
+  - **Amended 2026-08-12 on an explicit in-session instruction: commercial-agreement ACCOUNTING
+    is now in scope.** `CommercialAgreement` records what a farm and Lumos agreed — a platform
+    fee, a per-area or per-cycle fee, a share of *verified* value, a capped bonus, an origination
+    or monitoring fee, a revenue share, a crop share — and `app/participation.py` calculates what
+    it comes to on that season's recorded evidence. The line moved from "no revenue-sharing" to
+    **"calculate what is owed, never move it"**: `Participation` has no `invoice`, `due_date`,
+    `paid`, `settlement_status`, `payment_method`, or `apr` field, `schemas` rejects those keys
+    inside `terms`, and a test asserts the field set. A share of verified value reads the
+    **verified** ledger tier only — billing against estimated value would charge for a claim
+    nobody has corroborated, which is the distinction the whole ledger exists to keep.
 - **No guaranteed-reduction claims**, and no metric that reads as one. "Potential avoidable cost,"
   never "savings." `backtest.FORBIDDEN_KEY_SUBSTRINGS` makes adding an "avoided" key fail CI —
   reuse that technique.
@@ -362,6 +372,63 @@ recorded by the farm: a national measurement programme's published findings.
   in the transcribed Switch 62.5WG label. **Captan has no PDP coverage on strawberries at
   all**, so the other transcribed product correctly refuses.
 
+### Farm intelligence: advisory, performance, financing, participation
+
+Added 2026-08-12. The layer that makes the rest cohere: one farm page that answers *what is
+happening, what matters, what next* — and the two things the operational record unlocks.
+**Nothing here is a new source of truth; it composes builders that already existed.**
+
+- **`app/advisory.py`** (pure) — the ranked action queue, entirely DERIVED. Item keys are
+  `kind:subject_type:subject_id`, so a client can address one without anything being stored, and
+  an item **clears itself** when the record behind it moves. There is no dismiss and no snooze,
+  because a queue you can silence stops describing the farm. Twelve kinds, each keyed off logic
+  that already exists — `decision_status.current_next_action` decides what a decision needs, so
+  one decision can never produce two step items.
+  **Selective on purpose:** a gap becomes an item only when it materially affects crop outcome,
+  compliance, economics, follow-up verification, procurement, or financing. The closeout's
+  `completeness` list stays the exhaustive record of what is unentered. `_QUEUED_GAP_CODES` and
+  `UNCOSTED_APPLICATIONS_FLOOR` are where that line is drawn.
+  An `economic_consequence` carries a figure only where a baseline exists (a costed application);
+  everything else refuses with a reason — pricing "inspect this block" would credit Lumos for the
+  weather. `AdvisoryItem` has no product/rate field, so a prescription is inexpressible.
+- **`app/advisory_explain.py`** (pure) — opt-in AI explanation of ONE item, the `ai_brief` sibling.
+  `AdvisoryExplanation` has **no action, urgency, product, or value field**: the model describes
+  the evidence and cannot re-rank, re-price, or prescribe. A post-guard strips prescriptive
+  phrasing regardless of output. The queue renders fully without it, so the demo never needs a key.
+- **`app/farm_performance.py`** (pure) — the farm against its **own** previous seasons, built from
+  one `season_closeout` payload per cycle (never recomputed). **No composite score, no peer
+  benchmark.** A trend appears only when the metric computed in both seasons with matching units;
+  `direction` is a fact and `higher_is_better` is a declared metric property, so a falling cost per
+  kilo reads as good without this module asserting a smaller harvest was a failure.
+  **`_comparison_pair` prefers two CLOSED seasons** — a season in progress has recorded only part
+  of its costs and flatters every cost metric; when only one is closed the comparison still runs
+  but carries `compares_a_season_in_progress`, and the card renders it in a separate block so a
+  2025-vs-2024 delta is never printed beside a 2026 figure.
+- **`app/financing_evidence.py`** (pure) — the lender package, assembled from records the farm
+  already keeps. **A checklist, never a score:** no percentage, no approval likelihood, no rate.
+  `present` is set from a metric that actually computed, never from a row existing, so an unmet
+  condition can never be satisfied by an empty record. This is the product insight made visible —
+  the same data that advises the grower is what makes the farm financeable.
+- **Season financing** — `FinancingRequest` (+ append-only events), `LenderPolicy`, and
+  `FinancingOffer` extended to hang off either a supplier quote or a request. `LenderPolicy` is
+  **operator-entered with a required `source_document`**, and rehydrates through
+  `underwriting_rules.UnderwritingRule` so the same validation guards an entered policy as a
+  transcribed one. `underwriting.assess(policy=...)` and `monitoring.evaluate(schedule=...)` now
+  take one; without a policy attached both refuse with `no_lender_policy_attached`. Absent evidence
+  is `EVIDENCE_NOT_PRESENT` → `referred_to_human`, **not** a decline: Lumos cannot see the grower's
+  filing cabinet, and there is no `approved` outcome to balance a rejection against.
+- **`app/participation.py`** (pure) — see the §4 amendment. Nine models; share models read the
+  verified tier or recorded settlements only, and refuse by name rather than computing a share of
+  zero. A performance bonus **must** state a cap.
+- **Surfaces:** `GET /farms/{id}/intelligence` (one call composing every block the farm page
+  needs — and carrying **no** disease-risk assessment, because the shadow study's blinding
+  depends on it), `/advisory`, `/performance`, `POST /advisory/explain`, the
+  `/financing-requests/*` chain, and `GET /crop-cycles/{id}/participation`.
+  Frontend: `AdvisoryQueue`, `FarmPerformanceCard`, `ParticipationCard`, `DataCoverageCard`,
+  `EvidencePackageCard`, `FinancingRequestForm`, `/financing` + `/financing/[id]`.
+  **`/finance` is now a redirect to `/financing`** — the lender console is gone and financing is
+  linked in the nav; its backend routes are untouched.
+
 ### Other built surfaces
 
 - **Historical opportunity scan** (`app/backtest.py`) — replays a past season's scheduled spray
@@ -426,6 +493,12 @@ recorded by the farm: a national measurement programme's published findings.
   `analytics.py`, `reduction.py`, `weather.py` / `advisory_weather.py`, `pilot_evidence.py`,
   `farm_profile.py`, `procurement_analytics.py`, `rfq_transport.py`, plus the agronomy/finance/
   market set named in §5.
+- **Farm intelligence (§5):** `advisory.py`, `advisory_explain.py`, `farm_performance.py`,
+  `financing_evidence.py`, `participation.py` — all pure. `crud.build_farm_intelligence`
+  composes them and is the only DB-touching part. **`farm_profile.py` vs `farm_performance.py`:**
+  the first answers a CAPABILITY question (which layers can compute for this farm, and whose job
+  it is to unblock the rest); the second answers an OUTCOME question (what the farm produced,
+  spent and earned, season over season). Neither subsumes the other — keep both.
 - **Residue reference (§5):** `app/pdp_dataset.py` (pure parser/aggregator) and
   `app/residue_reference.py` (pure lookup → `ResidueProfile | Refusal`) with the explicit
   loader `app/pdp_sync.py`. `pdp_sync` lazily imports `openpyxl`/`xlrd` — the same
@@ -455,12 +528,12 @@ recorded by the farm: a national measurement programme's published findings.
 
 - **Framework:** Next.js 14 (App Router, JavaScript) + Tailwind. `@/` path alias. No TypeScript,
   so `npm run build` is the de-facto typecheck.
-- **16 routes (`frontend/app/`):** `page.js` (dashboard) · `farms/` + `farms/[id]` ·
+- **18 routes (`frontend/app/`):** `page.js` (dashboard) · `farms/` + `farms/[id]` ·
   `decisions/` + `decisions/[id]` (the printable one-page decision record) · `applications/` ·
   `scouting/` · `evidence/` (Evidence|Compliance tabs) · `compliance/` (redirects into it) ·
   `inputs/` + `inputs/plans/[id]` + `inputs/orders/[id]` · `feedback/` · `pilot/new/` ·
-  **two unlinked routes reachable only by URL:** `internal/` (operator page) and `finance/`
-  (the lending layer — see §5).
+  `financing/` + `financing/[id]` · `finance/` (redirects into `/financing`) ·
+  **one unlinked route reachable only by URL:** `internal/` (operator page).
 - **Design system — use it; do not add ad-hoc styling.**
   - `components/ui/` — 10 primitives: `badge`, `button`, `card`, `dialog`, `field`, `input`,
     `select`, `sheet`, `tabs`, `textarea`.
@@ -554,7 +627,7 @@ npm run dev        # http://localhost:3000
 npm run build      # production build = the real compile/lint check
 ```
 
-- **Test count: 1083 passing** as of 2026-08-10 (1059 + 24 in `test_residue_reference.py`).
+- **Test count: 1293 passing** as of 2026-08-12.
   **Always re-run `pytest` and report the real
   number** — this line goes stale, and a remembered count is not evidence. AI tests run on
   `MockLlmService`; never let tests hit the real API.

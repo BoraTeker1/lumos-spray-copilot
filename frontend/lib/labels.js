@@ -210,3 +210,80 @@ export const CLOSEOUT_VIEW_LABELS = {
   season_to_date: "Season to date",
   season_closeout: "Season closeout",
 };
+
+// --- The advisory queue -----------------------------------------------------
+// Mirrors app/advisory.py's KIND_* constants. Import from here so the queue, the
+// farm page and any future surface cannot disagree about what an item is called.
+export const ADVISORY_KIND_LABELS = {
+  resolve_conflict: "Unresolved conflict",
+  await_pca_review: "Awaiting PCA review",
+  inspect_field: "Inspect before deciding",
+  record_outcome: "Outcome not recorded",
+  record_follow_up: "Follow-up needed",
+  harvest_window_changed: "Harvest date moved",
+  scouting_stale: "Scouting overdue",
+  weather_risk: "Weather risk",
+  season_economics: "Season economics",
+  procurement_opportunity: "Input not sourced",
+  procurement_action: "Procurement action",
+  financing_action: "Financing action",
+};
+
+export const ADVISORY_URGENCY_LABELS = {
+  critical: "Critical",
+  soon: "Soon",
+  routine: "Routine",
+};
+
+// --- Season financing -------------------------------------------------------
+// No "approved" and no "declined": Lumos records that a lender responded with terms.
+// The credit decision is theirs and has no representation here.
+export const FINANCING_REQUEST_STATUS_LABELS = {
+  draft: "Draft",
+  evidence_assembled: "Evidence assembled",
+  shared: "Shared with lender",
+  offers_received: "Terms received",
+  offer_selected: "Terms selected",
+  withdrawn: "Withdrawn",
+};
+
+export const FINANCING_PURPOSE_LABELS = {
+  input_purchase: "Input purchase",
+  working_capital: "Working capital",
+  equipment: "Equipment",
+  land: "Land",
+};
+
+export const EVIDENCE_CATEGORY_LABELS = {
+  identity: "Farm and land",
+  production: "Production record",
+  cost: "Cost record",
+  revenue: "Revenue record",
+  compliance: "Compliance and decision record",
+  collateral: "Collateral",
+};
+
+// --- Lumos economic participation -------------------------------------------
+// Mirrors app/participation.AGREEMENT_MODELS.
+export const COMMERCIAL_MODEL_LABELS = {
+  platform_fee: "Fixed platform fee",
+  per_area_fee: "Fee per unit of area",
+  per_cycle_fee: "Fee per crop cycle",
+  verified_value_share: "Share of verified value created",
+  performance_bonus: "Capped performance bonus",
+  origination_fee: "Financing origination fee",
+  monitoring_fee: "Monitoring fee",
+  revenue_share: "Revenue share",
+  crop_share: "Crop share",
+};
+
+// Which farm-performance metrics a surface leads with. The server sends labels for
+// every metric; this is the display ORDER for the compact card.
+export const HEADLINE_PERFORMANCE_METRICS = [
+  "yield_per_area",
+  "revenue_per_area",
+  "cost_per_area",
+  "cost_per_yield_unit",
+  "decision_follow_through",
+  "lumos_value_verified",
+];

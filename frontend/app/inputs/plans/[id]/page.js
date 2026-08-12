@@ -223,9 +223,9 @@ export default function InputPlanDetailPage({ params }) {
             </Button>
           )}
           {plan.order_id && (
-            <Button asChild variant="secondary">
-              <Link href={`/inputs/orders/${plan.order_id}`}>View order</Link>
-            </Button>
+            <Link href={`/inputs/orders/${plan.order_id}`}>
+              <Button variant="secondary">View order</Button>
+            </Link>
           )}
           {!["ordered", "cancelled"].includes(plan.status) && (
             <Button

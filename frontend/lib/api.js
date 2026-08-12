@@ -616,6 +616,70 @@ export const api = {
   getDecisionEconomics: (plannedId) =>
     request(`/planned-sprays/${plannedId}/economics`),
 
+  // ---------------------------------------- farm intelligence + advisory queue
+  // `getFarmIntelligence` is ONE call composing every block the farm page needs, so
+  // the overview and the detail pages cannot tell different stories. The advisory
+  // queue is fully derived server-side — there is nothing to dismiss or persist.
+  getFarmIntelligence: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/intelligence${qs({ crop_cycle_id: cropCycleId })}`),
+  getFarmAdvisory: (farmId, cropCycleId) =>
+    request(`/farms/${farmId}/advisory${qs({ crop_cycle_id: cropCycleId })}`),
+  getFarmPerformance: (farmId) => request(`/farms/${farmId}/performance`),
+  // Opt-in per item: the queue renders fully without ever calling this, so a
+  // deployment with no API key loses an explanation and nothing else.
+  explainAdvisoryItem: (farmId, itemKey, cropCycleId) =>
+    request(`/farms/${farmId}/advisory/explain`, {
+      method: "POST",
+      body: JSON.stringify({ item_key: itemKey, crop_cycle_id: cropCycleId }),
+    }),
+
+  // ------------------------------------------------------- season financing
+  listFinancingRequests: (farmId) => request(`/farms/${farmId}/financing-requests`),
+  createFinancingRequest: (farmId, data) =>
+    request(`/farms/${farmId}/financing-requests`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getFinancingRequest: (requestId) => request(`/financing-requests/${requestId}`),
+  updateFinancingRequest: (requestId, data) =>
+    request(`/financing-requests/${requestId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  getFinancingEvidencePackage: (requestId) =>
+    request(`/financing-requests/${requestId}/evidence-package`),
+  getFinancingAssessment: (requestId) =>
+    request(`/financing-requests/${requestId}/assessment`),
+  getFinancingMonitoring: (requestId) =>
+    request(`/financing-requests/${requestId}/monitoring`),
+  listLenderPolicies: () => request(`/lender-policies`),
+  createLenderPolicy: (data) =>
+    request(`/internal/lender-policies`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  createFinancingRequestOffer: (requestId, data) =>
+    request(`/internal/financing-requests/${requestId}/offers`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+
+  // -------------------------------- commercial agreements and participation
+  // Reads are grower-facing: a farm can always see its own commercial terms.
+  // Writing one is a negotiated act, so it is operator-gated.
+  listCommercialAgreements: (farmId) =>
+    request(`/farms/${farmId}/commercial-agreements`),
+  createCommercialAgreement: (farmId, data) =>
+    request(`/internal/farms/${farmId}/commercial-agreements`, {
+      method: "POST",
+      headers: operatorHeaders(),
+      body: JSON.stringify(data),
+    }),
+  getCropCycleParticipation: (cycleId) =>
+    request(`/crop-cycles/${cycleId}/participation`),
+
   // ------------------------------------------------- operator-only (/internal)
   // Risk assessments are SHADOW: this is the only surface that returns them, and it
   // is deliberately absent from every PCA-facing payload.

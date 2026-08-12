@@ -35,16 +35,27 @@ def test_seed_anchor_is_deterministic(seeded):
 
 
 def _planned_by_product(client, farm_id, product_name):
+    """The RESOLVED seeded story for a product.
+
+    Scenario 4 is a second, still-open Captan decision (the live PHI conflict the
+    advisory queue leads with), so a bare product-name match is ambiguous. Every
+    test below is about a finished story, so open decisions are skipped.
+    """
     planned = client.get(f"/farms/{farm_id}/planned-sprays").json()
-    return next(p for p in planned if p["product_name"] == product_name)
+    return next(
+        p for p in planned
+        if p["product_name"] == product_name and p["outcome"] != "planned"
+    )
 
 
 def test_demo_planned_spray_story_is_coherent(seeded):
     farm = _us_farm(seeded)
     planned = seeded.get(f"/farms/{farm['id']}/planned-sprays").json()
-    # Three seeded scenarios: the blocked-then-changed captan, the avoided PyGanic,
-    # and the failed-delay Agri-Mek rescue story.
-    assert len(planned) == 3
+    # Four seeded scenarios: the blocked-then-changed captan, the avoided PyGanic,
+    # the failed-delay Agri-Mek rescue story, and the still-OPEN captan PHI conflict
+    # that gives the advisory queue live work to lead with.
+    assert len(planned) == 4
+    assert sum(1 for p in planned if p["outcome"] == "planned") == 1
     p = _planned_by_product(seeded, farm["id"], "Captan 80 WDG")
     anchor = date.fromisoformat(PINNED)
 
@@ -98,7 +109,7 @@ def test_scenario2_routine_spray_avoided_story(seeded):
     assert p["decision_authority"] == "provisional"  # a human decision by design
     assert p["outcome"] == "avoided"
     assert p["spray_event_id"] is None               # nothing was applied
-    assert p["estimated_cost"] == 95.0               # the entered cost not spent
+    assert p["estimated_cost"] == 1080.0             # the entered cost not spent
 
     # The scouting rule cites the PCA-entered threshold, attributed — never invented.
     rule = next(
@@ -179,7 +190,7 @@ def test_decision_evidence_reconciles_with_visible_demo_outcomes(seeded):
     farm = _us_farm(seeded)
     ev = seeded.get(f"/farms/{farm['id']}/decision-evidence").json()
     assert ev["decisions_checked"] == 0            # no real decisions yet
-    assert ev["demo_decisions_checked"] == 3       # all seeded stories, reconciled
+    assert ev["demo_decisions_checked"] == 4       # all seeded stories, reconciled
     assert ev["demo_outcomes"]["changed_product"] == 1
     assert ev["demo_outcomes"]["avoided"] == 1
     assert ev["demo_outcomes"]["delayed"] == 1     # the failed-delay rescue story
@@ -196,6 +207,10 @@ def test_demo_dates_never_precede_their_own_story(seeded):
     its check."""
     farm = _us_farm(seeded)
     for p in seeded.get(f"/farms/{farm['id']}/planned-sprays").json():
+        # An open decision has no recorded outcome yet — there is no date to order.
+        if p["outcome"] == "planned":
+            assert p["outcome_date"] is None, p["product_name"]
+            continue
         assert p["outcome_date"] >= p["intended_date"], p["product_name"]
         assert p["reviewed_at"][:10] >= p["created_at"][:10], p["product_name"]
 

@@ -1413,7 +1413,11 @@ class FinancingOfferCreate(BaseModel):
 class FinancingOffer(FinancingOfferCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    supplier_quote_id: int
+    # Exactly one of these is set: an offer finances either one supplier quote or a
+    # whole season request. Both are nullable so the same model, route and card serve
+    # both; `crud` enforces the exactly-one rule.
+    supplier_quote_id: int | None = None
+    financing_request_id: int | None = None
     status: str
     decided_by: str | None = None
     decided_at: datetime | None = None
@@ -2309,6 +2313,224 @@ class SaleRecord(BaseModel):
     supersedes_id: int | None = None
     entered_by: str | None = None
     recorded_at: datetime
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Season financing, lender policies, and commercial agreements (2026-08-12).
+#
+# The money-movement boundary is visible in what these schemas CANNOT express:
+# no APR, no interest rate, no amortisation schedule, no disbursement, no
+# repayment, no invoice, and no `approved` status anywhere.
+# ---------------------------------------------------------------------------
+
+FinancingPurpose = Literal["input_purchase", "working_capital", "equipment", "land"]
+
+# No `approved`, no `declined`, no `funded`. Lumos records that a lender responded
+# with terms; the credit decision is theirs and has no field here.
+FinancingRequestStatus = Literal[
+    "draft", "evidence_assembled", "shared", "offers_received",
+    "offer_selected", "withdrawn",
+]
+
+# Mirrors app/underwriting_rules.RuleKind. Deliberately no `price` or `rate` kind —
+# a policy states conditions, and Lumos never derives a cost of borrowing.
+LenderRuleKind = Literal[
+    "minimum_score", "maximum_exposure", "required_evidence", "exclusion"
+]
+
+CovenantComparator = Literal["at_most", "at_least", "equals"]
+CovenantSeverity = Literal["reportable", "remediable", "event_of_default"]
+
+
+class FinancingRequestCreate(BaseModel):
+    purpose: FinancingPurpose
+    crop_cycle_id: int | None = None
+    requested_amount: float | None = Field(default=None, ge=0)
+    currency_code: str | None = Field(default=None, max_length=3)
+    lender_policy_id: int | None = None
+    requested_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class FinancingRequestUpdate(BaseModel):
+    status: FinancingRequestStatus | None = None
+    lender_policy_id: int | None = None
+    requested_amount: float | None = Field(default=None, ge=0)
+    notes: str | None = None
+    actor: str | None = None
+
+
+class FinancingRequestEvent(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    financing_request_id: int
+    event_type: str
+    occurred_on: date
+    actor: str | None = None
+    notes: str | None = None
+    payload: dict | None = None
+    created_at: datetime
+
+
+class FinancingRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    farm_id: int
+    crop_cycle_id: int | None = None
+    purpose: str
+    requested_amount: float | None = None
+    currency_code: str | None = None
+    status: str
+    lender_policy_id: int | None = None
+    requested_by: str | None = None
+    notes: str | None = None
+    data_source: str | None = None
+    data_confidence: str | None = None
+    created_at: datetime
+    offers: list[FinancingOffer] = []
+    events: list[FinancingRequestEvent] = []
+
+
+class LenderRuleIn(BaseModel):
+    """One rule from a lender's written policy.
+
+    `rule_id` and `kind` are required because `underwriting_rules.UnderwritingRule`
+    validates them on the way through — a minimum_score rule with no threshold raises
+    rather than becoming a check that always passes.
+    """
+    rule_id: str = Field(min_length=1, max_length=80)
+    description: str = ""
+    kind: LenderRuleKind
+    threshold: float | None = None
+    evidence_key: str | None = None
+    feature_name: str | None = None
+
+
+class LenderCovenantIn(BaseModel):
+    covenant_id: str = Field(min_length=1, max_length=80)
+    description: str = ""
+    feature_name: str = Field(min_length=1)
+    comparator: CovenantComparator
+    threshold: float
+    breach_severity: CovenantSeverity
+
+
+class LenderPolicyCreate(BaseModel):
+    """A lender's WRITTEN criteria, entered with its source.
+
+    `source_document` is required and non-blank for the same reason
+    `transcription.Citation` has no defaults: a threshold with no stated origin is
+    indistinguishable from one Lumos invented, and ENGINEERING_GUIDELINES.md §4 forbids a
+    Lumos-authored credit policy.
+    """
+    lender: str = Field(min_length=1, max_length=200)
+    policy_version: str = Field(min_length=1, max_length=60)
+    effective_from: date | None = None
+    source_document: str = Field(min_length=1)
+    source_url: str | None = None
+    rules: list[LenderRuleIn] = []
+    covenants: list[LenderCovenantIn] = []
+    entered_by: str | None = None
+    entered_on: date | None = None
+    supersedes_id: int | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+
+class LenderPolicy(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    lender: str
+    policy_version: str
+    effective_from: date | None = None
+    source_document: str
+    source_url: str | None = None
+    rules: list | None = None
+    covenants: list | None = None
+    entered_by: str | None = None
+    entered_on: date | None = None
+    supersedes_id: int | None = None
+    notes: str | None = None
+    created_at: datetime
+
+
+# One of app/participation.AGREEMENT_MODELS.
+CommercialModel = Literal[
+    "platform_fee", "per_area_fee", "per_cycle_fee", "verified_value_share",
+    "performance_bonus", "origination_fee", "monitoring_fee", "revenue_share",
+    "crop_share",
+]
+
+
+class CommercialAgreementCreate(BaseModel):
+    """What Lumos is paid, and on what recorded basis.
+
+    `terms` is a small object read only by `app/participation.py` — {rate_pct},
+    {amount}, {rate, area_unit}, {cap_amount}. There is no invoice, balance, due
+    date, or paid flag here or anywhere downstream: this records an agreement and
+    calculates what it comes to, and moves no money.
+    """
+    name: str = Field(min_length=1, max_length=200)
+    model_type: CommercialModel
+    currency_code: str | None = Field(default=None, max_length=3)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    terms: dict = {}
+    source_document: str | None = None
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    notes: str | None = None
+    data_source: DataSource = "manual_entry"
+    data_confidence: DataConfidence = "user_provided"
+
+    @model_validator(mode="after")
+    def _terms_carry_no_settlement_fields(self):
+        """`terms` describes a pricing model, never a payment.
+
+        Enforced here rather than trusted, because `terms` is a free-form object and
+        it is the one place a settlement field could slip into this schema without a
+        migration to review.
+        """
+        forbidden = {
+            "invoice", "invoice_id", "due_date", "paid", "paid_at", "amount_due",
+            "balance", "settlement_status", "payment_method", "apr",
+            "interest_rate", "amortisation", "amortization", "repayment_schedule",
+        }
+        present = forbidden & set(self.terms or {})
+        if present:
+            raise ValueError(
+                f"commercial agreement terms may not carry {sorted(present)}: this "
+                "layer records what was agreed and calculates what it comes to. "
+                "Lumos moves no money."
+            )
+        return self
+
+
+class CommercialAgreement(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    farm_id: int
+    name: str
+    model_type: str
+    currency_code: str | None = None
+    effective_from: date | None = None
+    effective_to: date | None = None
+    terms: dict | None = None
+    source_document: str | None = None
+    status: str
+    supersedes_id: int | None = None
+    entered_by: str | None = None
+    notes: str | None = None
     data_source: str | None = None
     data_confidence: str | None = None
     created_at: datetime

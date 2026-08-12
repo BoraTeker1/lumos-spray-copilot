@@ -77,7 +77,7 @@ def test_demo_records_can_never_enter_the_export(client, monkeypatch):
     seed.run()
     us = next(f for f in client.get("/farms").json() if f["country"] == "US")
     # The seeded demo farm has three decision stories — ALL demo/simulated.
-    assert len(client.get(f"/farms/{us['id']}/planned-sprays").json()) == 3
+    assert len(client.get(f"/farms/{us['id']}/planned-sprays").json()) == 4
 
     export = client.get(f"/farms/{us['id']}/evidence-export").json()
     assert export["decisions_exported"] == 0

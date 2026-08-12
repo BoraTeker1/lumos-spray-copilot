@@ -36,16 +36,18 @@ def test_demo_metrics_block_tells_the_seeded_story(seeded):
     dm = ev["demo_metrics"]
     assert dm["is_simulated"] is True
     assert "simulated" in dm["note"].lower()
-    assert dm["decisions_checked"] == 3
-    assert dm["decisions_reviewed"] == 3  # all three scenarios are PCA-edited
+    assert dm["decisions_checked"] == 4
+    assert dm["decisions_reviewed"] == 3  # the three FINISHED scenarios are PCA-edited
     assert dm["outcomes"]["changed_product"] == 1
     assert dm["outcomes"]["avoided"] == 1
     assert dm["outcomes"]["delayed"] == 1
     assert dm["sprays_changed_delayed_or_avoided"] == 3
-    # The blocked captan is the caught conflict.
-    assert dm["compliance_conflicts_caught"] == 1
-    # The avoided PyGanic's entered cost (95.0) — entered estimate, not savings.
-    assert dm["estimated_chemical_cost_avoided"] == 95.0
+    # Two blocked captan decisions are caught conflicts: the resolved scenario 1
+    # and the still-open scenario 4. A conflict counts as caught when the check
+    # surfaces it — resolving it is a separate fact (decision_status.conflict_caught).
+    assert dm["compliance_conflicts_caught"] == 2
+    # The avoided PyGanic's entered cost — an entered estimate, never a saving.
+    assert dm["estimated_chemical_cost_avoided"] == 1080.0
     # Follow-up completion: all three scenarios carry follow-up events.
     assert dm["follow_up"]["follow_up_required"] == 3
     assert dm["follow_up"]["follow_up_with_events"] == 3

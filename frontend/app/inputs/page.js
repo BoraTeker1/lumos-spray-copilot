@@ -138,11 +138,11 @@ function planColumns() {
       header: "",
       align: "right",
       render: (p) => (
-        <Button asChild variant="secondary" size="sm">
-          <Link href={p.order_id ? `/inputs/orders/${p.order_id}` : `/inputs/plans/${p.id}`}>
+        <Link href={p.order_id ? `/inputs/orders/${p.order_id}` : `/inputs/plans/${p.id}`}>
+          <Button variant="secondary" size="sm">
             {p.order_id ? "View order" : "Open plan"}
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       ),
     },
   ];
@@ -225,9 +225,9 @@ function orderColumns(country) {
       header: "",
       align: "right",
       render: (o) => (
-        <Button asChild variant="secondary" size="sm">
-          <Link href={`/inputs/orders/${o.id}`}>Open order</Link>
-        </Button>
+        <Link href={`/inputs/orders/${o.id}`}>
+          <Button variant="secondary" size="sm">Open order</Button>
+        </Link>
       ),
     },
   ];

@@ -1480,18 +1480,31 @@ class SupplierQuoteItem(Base):
 
 
 class FinancingOffer(Base):
-    """A manually entered INDICATIVE financing offer against one supplier quote.
+    """A manually entered INDICATIVE financing offer.
 
-    Phase 1 never moves money: no underwriting, no origination, no repayment
-    collection. An offer is created `indicative`; the grower's accept/decline is
-    one-shot; `expired` is derived from expires_on and never stored, so a stale
-    offer can never be accepted. Every serialized offer carries the disclaimer.
+    Attached to EXACTLY ONE of a supplier quote (input financing, the original case)
+    or a financing request (season financing, added 2026-08-12). Both columns are
+    nullable and `crud` enforces the exactly-one rule; a SQLite CHECK constraint under
+    Alembic batch mode costs more than it buys, and the invariant is pinned by test.
+
+    Lumos never moves money: no underwriting here, no origination, no repayment
+    collection, and no APR or amortisation column — a lender's cost is carried as the
+    verbatim sentences they stated. An offer is created `indicative`; the grower's
+    select/decline is one-shot; `expired` is derived from expires_on and never stored,
+    so a stale offer can never be selected. Every serialized offer carries the
+    disclaimer.
     """
     __tablename__ = "financing_offers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    supplier_quote_id: Mapped[int] = mapped_column(
-        ForeignKey("supplier_quotes.id"), nullable=False, index=True
+    supplier_quote_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_quotes.id", name="fk_financing_offers_supplier_quote_id"),
+        nullable=True, index=True,
+    )
+    # Season-level financing, as opposed to financing one input purchase.
+    financing_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("financing_requests.id", name="fk_financing_offers_request_id"),
+        nullable=True, index=True,
     )
     provider_name: Mapped[str] = mapped_column(String(200), nullable=False)
     requested_amount: Mapped[float] = mapped_column(Float, nullable=False)
@@ -1514,7 +1527,12 @@ class FinancingOffer(Base):
     data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
 
-    supplier_quote: Mapped["SupplierQuote"] = relationship(back_populates="financing_offers")
+    supplier_quote: Mapped["SupplierQuote | None"] = relationship(
+        back_populates="financing_offers"
+    )
+    financing_request: Mapped["FinancingRequest | None"] = relationship(
+        back_populates="offers"
+    )
 
     @property
     def offer_state(self) -> str:
@@ -2892,3 +2910,171 @@ class ResidueReferenceRecord(Base):
     source_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     loaded_by: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+# ---------------------------------------------------------------------------
+# Season financing, lender policies, and the commercial agreement.
+#
+# Added 2026-08-12, when the farm-intelligence build connected the operational
+# record to the two things it makes possible: a farm that is legible to a lender,
+# and a commercial model Lumos can actually be paid under.
+#
+# The money-movement boundary still holds, and holds STRUCTURALLY. There is no
+# disbursement, repayment, invoice, or settlement table here and no column that
+# could hold one. `FinancingOffer` carries a lender's stated figures verbatim and
+# still has no APR. `CommercialAgreement` records what was agreed;
+# `app/participation.py` calculates what it comes to on recorded evidence. Neither
+# charges anybody.
+# ---------------------------------------------------------------------------
+
+
+class FinancingRequest(Base):
+    """A grower's request to finance a season or a defined farming need.
+
+    Deliberately NOT an application with an outcome. Lumos assembles the evidence a
+    lender asks for and records the indicative terms that come back; the credit
+    decision is the lender's and has no column here. There is no `approved` status
+    for the same reason `underwriting.Outcome` has no `approved` member.
+    """
+    __tablename__ = "financing_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(
+        ForeignKey("farms.id"), nullable=False, index=True
+    )
+    # Nullable: a grower may finance a season, or a need that spans seasons.
+    crop_cycle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crop_cycles.id"), index=True
+    )
+    # input_purchase / working_capital / equipment / land — the vocabulary in
+    # app/financing_terms.FINANCING_PURPOSES, which comes from lender product sheets.
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False)
+    requested_amount: Mapped[float | None] = mapped_column(Float)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    # draft / evidence_assembled / shared / offers_received / offer_selected /
+    # withdrawn. No `approved`, no `funded`, no `declined` — see the docstring.
+    status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    # The lender's policy this request is being read against, when one is on record.
+    lender_policy_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lender_policies.id", name="fk_financing_requests_lender_policy_id"),
+        index=True,
+    )
+    requested_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship()
+    crop_cycle: Mapped["CropCycle | None"] = relationship()
+    lender_policy: Mapped["LenderPolicy | None"] = relationship()
+    offers: Mapped[list["FinancingOffer"]] = relationship(
+        back_populates="financing_request", cascade="all, delete-orphan"
+    )
+    events: Mapped[list["FinancingRequestEvent"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan",
+        order_by="FinancingRequestEvent.id",
+    )
+
+
+class FinancingRequestEvent(Base):
+    """Append-only history of one financing request. Never updated, never deleted."""
+    __tablename__ = "financing_request_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    financing_request_id: Mapped[int] = mapped_column(
+        ForeignKey("financing_requests.id"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    request: Mapped["FinancingRequest"] = relationship(back_populates="events")
+
+
+class LenderPolicy(Base):
+    """A lending partner's WRITTEN criteria, entered with its source.
+
+    The point of this table is that Lumos can evaluate a policy without authoring
+    one. `rules` and `covenants` hold rows shaped exactly like
+    `underwriting_rules.UnderwritingRule` and `monitoring_covenants.Covenant`, so
+    `underwriting.assess(policy=...)` and `monitoring.evaluate(...)` run against a
+    lender's own thresholds. `source_document` is required at the API boundary for
+    the same reason `transcription.Citation` has no defaults: a threshold with no
+    stated origin is indistinguishable from one Lumos invented, and inventing a
+    credit policy is exactly what ENGINEERING_GUIDELINES.md §4 forbids.
+
+    Append-only with a supersede chain, like `ProductLabelRecord`: a lender revising
+    their policy adds a row, and the assessments made under the old one stay readable.
+    """
+    __tablename__ = "lender_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lender: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    policy_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    # Where the rules came from. Never blank — see the docstring.
+    source_document: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500))
+    rules: Mapped[list | None] = mapped_column(JSON)
+    covenants: Mapped[list | None] = mapped_column(JSON)
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    entered_on: Mapped[date | None] = mapped_column(Date)
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lender_policies.id", name="fk_lender_policies_supersedes_id"),
+        index=True,
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+
+class CommercialAgreement(Base):
+    """What Lumos and this farm agreed Lumos is paid, and on what basis.
+
+    `terms` is a small JSON object read only by `app/participation.py` — a rate, a
+    fixed amount, an area unit, a cap. Deliberately not a contract-management schema:
+    there are no parties, no clauses, no signature blocks, and no renewal machinery,
+    because none of that is needed to answer the one question this exists for — what
+    does the agreed model come to on this season's recorded evidence.
+
+    APPEND-ONLY with a supersede chain. Renegotiating adds a row; the figure a past
+    season was calculated under stays reproducible, which is the same reason
+    `SaleRecord` and `ProductLabelRecord` supersede rather than update.
+
+    NO MONEY MOVES. There is no invoice, balance, due date, or paid flag on this
+    table or anywhere downstream of it, and `participation.Participation` has no
+    field that could carry one.
+    """
+    __tablename__ = "commercial_agreements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(
+        ForeignKey("farms.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # One of app/participation.AGREEMENT_MODELS.
+    model_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    currency_code: Mapped[str | None] = mapped_column(String(3))
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    # {rate_pct} / {amount} / {rate, area_unit} / {cap_amount} — see participation.py.
+    terms: Mapped[dict | None] = mapped_column(JSON)
+    source_document: Mapped[str | None] = mapped_column(Text)
+    # active / superseded / ended
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("commercial_agreements.id", name="fk_commercial_agreements_supersedes_id"),
+        index=True,
+    )
+    entered_by: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+    data_source: Mapped[str | None] = mapped_column(String(40), default="manual_entry")
+    data_confidence: Mapped[str | None] = mapped_column(String(40), default="user_provided")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.current_datetime)
+
+    farm: Mapped["Farm"] = relationship()

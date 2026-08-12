@@ -156,10 +156,20 @@ def _evaluate_rule(rule, *, score_total, exposure_amount, evidence_keys, feature
 
     if rule.kind == "required_evidence":
         present = rule.evidence_key in set(evidence_keys or ())
+        if present:
+            return RuleOutcome(
+                rule_id=rule.rule_id, description=rule.description, kind=rule.kind,
+                passed=True,
+            )
+        # Absent evidence is NOT EVALUATED, not failed. Lumos can see what the farm
+        # has recorded; it cannot see the grower's filing cabinet, and a document
+        # nobody uploaded is a question for a human rather than grounds for Lumos to
+        # decline. Routing it to `referred_to_human` keeps the asymmetry this layer
+        # is built on: there is no `approved` outcome, and there should be no
+        # automatic rejection on paperwork either.
         return RuleOutcome(
             rule_id=rule.rule_id, description=rule.description, kind=rule.kind,
-            passed=present,
-            not_evaluated_reason=None if present else None,
+            not_evaluated_reason=EVIDENCE_NOT_PRESENT,
         )
 
     if rule.kind == "exclusion":
@@ -198,9 +208,16 @@ def _evaluate_rule(rule, *, score_total, exposure_amount, evidence_keys, feature
 
 
 def assess(*, as_of: datetime, score_total: float | None = None,
-           exposure_amount: float | None = None, evidence_keys=(), features=None):
-    """Evaluate the transcribed policy. Returns UnderwritingAssessment | Refusal."""
-    policy = underwriting_rules.TRANSCRIBED
+           exposure_amount: float | None = None, evidence_keys=(), features=None,
+           policy=None):
+    """Evaluate a lender's policy. Returns UnderwritingAssessment | Refusal.
+
+    `policy` lets a caller supply a policy recorded against a specific lender (see
+    `models.LenderPolicy`) instead of the module-level transcription. Both routes
+    carry the same guarantee and the same reason: the rules come from the lender in
+    writing. Lumos evaluates a policy, it never authors one.
+    """
+    policy = policy if policy is not None else underwriting_rules.TRANSCRIBED
     if policy is None:
         return Refusal(
             NO_POLICY_SUPPLIED,

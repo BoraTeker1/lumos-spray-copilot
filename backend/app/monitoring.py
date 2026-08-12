@@ -129,9 +129,15 @@ def _compare(value: float, comparator: str, threshold: float) -> bool:
     raise ValueError(f"unknown comparator {comparator!r}")
 
 
-def evaluate(*, features, as_of: datetime):
-    """Evaluate the transcribed covenant schedule. MonitoringSnapshot | Refusal."""
-    schedule = monitoring_covenants.TRANSCRIBED
+def evaluate(*, features, as_of: datetime, schedule=None):
+    """Evaluate a covenant schedule. MonitoringSnapshot | Refusal.
+
+    `schedule` lets a caller supply the covenants recorded against a specific
+    facility (see `models.LenderPolicy`) instead of the module-level transcription.
+    Either way the covenants and their breach severities come from the executed
+    agreement — Lumos evaluates a schedule, it never writes one.
+    """
+    schedule = schedule if schedule is not None else monitoring_covenants.TRANSCRIBED
     if schedule is None:
         return Refusal(
             NO_COVENANTS_SUPPLIED,

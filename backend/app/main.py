@@ -3626,3 +3626,305 @@ def internal_residue_reference_coverage(db: Session = Depends(get_db)):
         "loader": "python -m app.pdp_sync <year>PDPDatabase.zip --crops strawberry,tomato",
         "releases": "https://www.ams.usda.gov/datasets/pdp/pdpdata",
     }
+
+
+# ==================================================================== #
+# Farm intelligence, the advisory queue, and performance               #
+# ==================================================================== #
+def _weather_risk_for(farm) -> dict | None:
+    """The existing weather surface, or None when it cannot answer.
+
+    Wrapped because the advisory queue must produce NO weather item when the
+    forecast is unavailable — an error here would otherwise take the whole queue
+    down, and a farm's conflicts matter more than its forecast.
+    """
+    try:
+        return default_weather_service.get_weather_risk(farm.location)
+    except Exception:  # pragma: no cover - defensive around an external service
+        return None
+
+
+@app.get("/farms/{farm_id}/advisory", tags=["advisory"])
+def get_farm_advisory(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    """The ranked list of what this farm should do next, and why.
+
+    Entirely derived: nothing is stored, and an item disappears as soon as the
+    record behind it moves. Selective by design — a gap becomes an item only when it
+    materially affects crop outcome, compliance, economics, follow-up verification,
+    procurement, or financing. The exhaustive list of what is unentered lives in the
+    season closeout's `completeness`, which is the right place for it.
+
+    Every item carries the recommendation, why, the evidence behind it, the urgency,
+    and one concrete next action. An economic consequence appears only where a
+    recorded baseline exists; otherwise it carries `not_calculated` and its reason.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.build_advisory_queue(
+        db, farm, crop_cycle_id, weather_risk=_weather_risk_for(farm)
+    )
+
+
+@app.get("/farms/{farm_id}/performance", tags=["advisory"])
+def get_farm_performance(farm_id: int, db: Session = Depends(get_db)):
+    """This farm's own seasons, compared against each other.
+
+    No overall score and no cross-farm benchmark — a blended figure across seasons
+    that differ in crop, area, weather and market is a claim nobody can check. A
+    trend appears only where the same metric computed in both seasons with matching
+    units, and refuses by name otherwise.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.build_farm_performance(db, farm)
+
+
+@app.get("/farms/{farm_id}/intelligence", tags=["advisory"])
+def get_farm_intelligence(
+    farm_id: int, crop_cycle_id: int | None = None, db: Session = Depends(get_db)
+):
+    """Everything the farm page needs, in one call: state, advice, economics, value.
+
+    Composition only — each block is the same builder its own endpoint serves, so
+    the overview and the detail pages cannot tell different stories.
+
+    Carries NO disease-risk assessment. The Botrytis study is blinded and a shadow
+    row reaching a PCA-facing surface ends the measurement (ENGINEERING_GUIDELINES.md §5).
+    """
+    farm = _require_farm(db, farm_id)
+    if crop_cycle_id is not None:
+        cycle = _require_crop_cycle(db, crop_cycle_id)
+        if cycle.farm_id != farm_id:
+            raise HTTPException(
+                status_code=404, detail="That crop cycle belongs to a different farm"
+            )
+    return crud.build_farm_intelligence(
+        db, farm, crop_cycle_id, weather_risk=_weather_risk_for(farm)
+    )
+
+
+@app.post("/farms/{farm_id}/advisory/explain", tags=["advisory"])
+def explain_advisory_item(
+    farm_id: int, body: dict, db: Session = Depends(get_db)
+):
+    """A retrieval-grounded explanation of ONE queue item, on demand.
+
+    Opt-in, never on load: the queue itself is deterministic and works with no API
+    key, and the demo must not depend on one. The AI explains the evidence already
+    on the item — it does not set the urgency, choose the next action, name a
+    product, or decide anything. Every call is logged as an `AiJudgment`.
+    """
+    farm = _require_farm(db, farm_id)
+    item_key = (body or {}).get("item_key")
+    if not item_key:
+        raise HTTPException(status_code=422, detail="item_key is required")
+
+    queue = crud.build_advisory_queue(
+        db, farm, (body or {}).get("crop_cycle_id"),
+        weather_risk=_weather_risk_for(farm),
+    )
+    item = next((i for i in queue["items"] if i["item_key"] == item_key), None)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail="That advisory item is no longer in the queue — it may be resolved.",
+        )
+    return crud.explain_advisory_item(db, farm, item)
+
+
+# ==================================================================== #
+# Season financing                                                     #
+# ==================================================================== #
+def _require_financing_request(db: Session, request_id: int):
+    request = crud.get_financing_request(db, request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="Financing request not found")
+    return request
+
+
+@app.post(
+    "/farms/{farm_id}/financing-requests",
+    response_model=schemas.FinancingRequest, status_code=201, tags=["financing"],
+)
+def post_financing_request(
+    farm_id: int, data: schemas.FinancingRequestCreate, db: Session = Depends(get_db)
+):
+    """Open a financing request for a season or a defined need.
+
+    Not an application with an outcome: Lumos assembles the evidence and records the
+    indicative terms that come back. There is no `approved` status because the credit
+    decision is the lender's, and Lumos never makes one.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.create_financing_request(db, farm, data)
+
+
+@app.get(
+    "/farms/{farm_id}/financing-requests",
+    response_model=list[schemas.FinancingRequest], tags=["financing"],
+)
+def get_financing_requests(farm_id: int, db: Session = Depends(get_db)):
+    _require_farm(db, farm_id)
+    return crud.list_financing_requests(db, farm_id)
+
+
+@app.get(
+    "/financing-requests/{request_id}",
+    response_model=schemas.FinancingRequest, tags=["financing"],
+)
+def get_financing_request(request_id: int, db: Session = Depends(get_db)):
+    return _require_financing_request(db, request_id)
+
+
+@app.patch(
+    "/financing-requests/{request_id}",
+    response_model=schemas.FinancingRequest, tags=["financing"],
+)
+def patch_financing_request(
+    request_id: int, data: schemas.FinancingRequestUpdate,
+    db: Session = Depends(get_db),
+):
+    request = _require_financing_request(db, request_id)
+    if data.lender_policy_id is not None:
+        request.lender_policy_id = data.lender_policy_id
+    if data.requested_amount is not None:
+        request.requested_amount = data.requested_amount
+    if data.notes is not None:
+        request.notes = data.notes
+    if data.status is not None:
+        return crud.update_financing_request_status(
+            db, request, data.status, actor=data.actor
+        )
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+@app.get("/financing-requests/{request_id}/evidence-package", tags=["financing"])
+def get_financing_evidence_package(request_id: int, db: Session = Depends(get_db)):
+    """Everything a lender typically asks for, and whether this farm has it.
+
+    A checklist of records, not a credit opinion. There is no score, no approval
+    likelihood, and no rate — those are the lender's to form, and Lumos has no policy
+    to form them with. What it can say honestly is what is on record and what is not.
+
+    This is the product insight made visible: the same operational data that lets
+    Lumos advise the grower is what makes the farm legible to credit.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.build_financing_package(db, request)
+
+
+@app.get("/financing-requests/{request_id}/assessment", tags=["financing"])
+def get_financing_assessment(request_id: int, db: Session = Depends(get_db)):
+    """This farm's recorded evidence read against the attached lender's own criteria.
+
+    Refuses when no policy is attached. The strongest affirmative outcome is
+    `conditions_met` — a statement about the policy, never a commitment to lend —
+    and a rule that could not be evaluated routes to `referred_to_human` rather than
+    being folded into a pass.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.assess_financing_request(db, request)
+
+
+@app.get("/financing-requests/{request_id}/monitoring", tags=["financing"])
+def get_financing_monitoring(request_id: int, db: Session = Depends(get_db)):
+    """Covenant standing for a financed season, from the same operational features.
+
+    The same records that drive the advisory queue drive this. A covenant whose
+    feature could not be computed is NOT EVALUATED, never `within` — nothing checked
+    is not the same as compliant.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.monitor_financing_request(db, request)
+
+
+@app.post(
+    "/internal/financing-requests/{request_id}/offers",
+    response_model=schemas.FinancingOffer, status_code=201, tags=["internal"],
+)
+def internal_post_financing_request_offer(
+    request_id: int, data: schemas.FinancingOfferCreate,
+    db: Session = Depends(get_db),
+):
+    """Concierge-enter a lender's indicative terms against a season request.
+
+    Operator-gated by the `/internal` path prefix, exactly like supplier quotes: a
+    lender's terms arrive by email and a human transcribes them. Every figure is the
+    lender's own; Lumos computes no rate and no repayment.
+    """
+    request = _require_financing_request(db, request_id)
+    return crud.create_financing_offer_for_request(db, request, data)
+
+
+@app.post(
+    "/internal/lender-policies",
+    response_model=schemas.LenderPolicy, status_code=201, tags=["internal"],
+)
+def internal_post_lender_policy(
+    data: schemas.LenderPolicyCreate, db: Session = Depends(get_db)
+):
+    """Record a lending partner's WRITTEN criteria, with its source document.
+
+    Operator-gated, and `source_document` is required: a threshold with no stated
+    origin is indistinguishable from one Lumos invented, and a Lumos-authored credit
+    policy is forbidden (ENGINEERING_GUIDELINES.md §4). Lumos evaluates a lender's policy; it never
+    writes one.
+    """
+    return crud.create_lender_policy(db, data)
+
+
+@app.get(
+    "/lender-policies", response_model=list[schemas.LenderPolicy], tags=["financing"],
+)
+def get_lender_policies(db: Session = Depends(get_db)):
+    """Policies on record, so a grower can see which criteria they are read against."""
+    return crud.list_lender_policies(db)
+
+
+# ==================================================================== #
+# Commercial agreements and Lumos economic participation               #
+# ==================================================================== #
+@app.post(
+    "/internal/farms/{farm_id}/commercial-agreements",
+    response_model=schemas.CommercialAgreement, status_code=201, tags=["internal"],
+)
+def internal_post_commercial_agreement(
+    farm_id: int, data: schemas.CommercialAgreementCreate,
+    db: Session = Depends(get_db),
+):
+    """Record what Lumos and this farm agreed Lumos is paid, and on what basis.
+
+    Operator-gated because a commercial term is a negotiated act, not something a
+    grower sets in a form. Append-only: renegotiating supersedes rather than edits,
+    so the figure a past season was calculated under stays reproducible.
+    """
+    farm = _require_farm(db, farm_id)
+    return crud.create_commercial_agreement(db, farm, data)
+
+
+@app.get(
+    "/farms/{farm_id}/commercial-agreements",
+    response_model=list[schemas.CommercialAgreement], tags=["value"],
+)
+def get_commercial_agreements(farm_id: int, db: Session = Depends(get_db)):
+    """Grower-facing on purpose: a farm can always read its own commercial terms."""
+    _require_farm(db, farm_id)
+    return crud.list_commercial_agreements(db, farm_id)
+
+
+@app.get("/crop-cycles/{cycle_id}/participation", tags=["value"])
+def get_crop_cycle_participation(cycle_id: int, db: Session = Depends(get_db)):
+    """What the agreed commercial model comes to on this season's recorded evidence.
+
+    Accounting, not billing. This is a calculated figure — there is no invoice, no
+    due date, no balance, and no payment anywhere downstream, and
+    `participation.Participation` has no field that could carry one.
+
+    A share of verified value reads the VERIFIED tier only: charging against
+    estimated value would bill for a claim nobody has corroborated. With no verified
+    value the answer is a refusal naming that, never a share of zero.
+    """
+    cycle = _require_crop_cycle(db, cycle_id)
+    return crud.compute_participation(db, cycle)

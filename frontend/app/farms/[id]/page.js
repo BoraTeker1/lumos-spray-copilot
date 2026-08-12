@@ -8,14 +8,19 @@ import {
   CalendarClock,
   ClipboardCheck,
   CloudSun,
+  Database,
   Droplets,
   Eye,
   FlaskConical,
+  Handshake,
+  Landmark,
   ListChecks,
   MapPin,
   Plus,
+  ShieldCheck,
   ShoppingCart,
   Sprout,
+  TrendingUp,
   TriangleAlert,
   Users,
   Wrench,
@@ -63,6 +68,10 @@ import SeverityBadge from "@/components/SeverityBadge";
 import SprayImportCard from "@/components/SprayImportCard";
 import StatusBadge from "@/components/StatusBadge";
 import ValueLedgerCard from "@/components/ValueLedgerCard";
+import AdvisoryQueue from "@/components/AdvisoryQueue";
+import FarmPerformanceCard from "@/components/FarmPerformanceCard";
+import ParticipationCard from "@/components/ParticipationCard";
+import DataCoverageCard from "@/components/DataCoverageCard";
 import OutstandingFollowUpsCard from "@/components/OutstandingFollowUpsCard";
 import WeatherCard from "@/components/WeatherCard";
 
@@ -102,6 +111,10 @@ function FarmDetail({ farmId }) {
   const [cycles, setCycles] = useState([]);
   const [blocks, setBlocks] = useState([]);
   const [ledger, setLedger] = useState(null);
+  // The composed farm-intelligence payload: advisory queue, performance, coverage,
+  // participation and financing in ONE call, so the overview cannot disagree with
+  // the dedicated pages that serve the same builders.
+  const [intelligence, setIntelligence] = useState(null);
   // null = every season; a cycle id scopes the ledger to that one.
   const [ledgerCycleId, setLedgerCycleId] = useState(null);
   const [error, setError] = useState(null);
@@ -142,6 +155,13 @@ function FarmDetail({ farmId }) {
       setPurchaseOrders(orders);
       setCycles(cyc);
       setBlocks(blk);
+      // Fetched separately and non-fatally: the intelligence view composes several
+      // builders, and a farm with no season yet must still render its records.
+      try {
+        setIntelligence(await api.getFarmIntelligence(farmId));
+      } catch {
+        setIntelligence(null);
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -384,12 +404,32 @@ function FarmDetail({ farmId }) {
         </TabsContent>
 
         {/* ------------------------------------------------------------ Overview */}
+        {/* The operating loop, in the order a grower reads it:
+              what needs doing → what the season is worth → what Lumos created
+              → how the farm is performing → what that unlocks → what data backs it.
+            Detail stays on the dedicated pages; this tab is the story. */}
         <TabsContent value="overview">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <div className="min-w-0 space-y-4 lg:col-span-2">
+              {/* 1. PRIORITIES. The advisory queue leads because it is the only
+                  block that tells you what to DO. Everything below explains it. */}
+              <SectionCard
+                title="What needs attention"
+                icon={<ListChecks />}
+                description="Ranked by urgency, derived from this farm's records. Items clear themselves as records change — there is nothing to dismiss."
+              >
+                <AdvisoryQueue
+                  queue={intelligence?.advisory}
+                  farmId={farmId}
+                  cropCycleId={intelligence?.crop_cycle?.id}
+                  limit={6}
+                />
+              </SectionCard>
+
+              {/* 2. THE DECISION LOOP, still the core product. */}
               <SectionCard
                 title="Decision queue"
-                icon={<ListChecks />}
+                icon={<ShieldCheck />}
                 description="Every planned spray gets one clear outcome — approve, block, delay, inspect first, or PCA review required — then a recorded real-world result."
                 action={
                   planned.length > 3 && (
@@ -415,7 +455,7 @@ function FarmDetail({ farmId }) {
                   page a grower actually opens — not only on a decision's detail. */}
               <OutstandingFollowUpsCard planned={planned} onChanged={load} />
 
-              {/* The loop, closed: recommendation → action → outcome → value. */}
+              {/* 3. WHAT LUMOS CREATED: recommendation → action → outcome → value. */}
               <ValueLedgerCard
                 ledger={ledger}
                 cycles={cycles}
@@ -423,6 +463,27 @@ function FarmDetail({ farmId }) {
                 onSelectCycle={setLedgerCycleId}
                 onChanged={load}
               />
+
+              {/* 4. HOW THE FARM IS DOING, season over season. */}
+              <SectionCard
+                title="Farm performance"
+                icon={<TrendingUp />}
+                description="This farm against its own previous seasons. No score and no peer benchmark — the metrics and their movement are the story."
+              >
+                <FarmPerformanceCard performance={intelligence?.performance} />
+              </SectionCard>
+
+              {/* 5. WHAT LUMOS IS PAID, on the same recorded evidence. */}
+              <SectionCard
+                title="Lumos commercial model"
+                icon={<Handshake />}
+                description="What was agreed, what recorded evidence is the basis, and what the participation calculates to. An accounting figure — no money moves through Lumos."
+              >
+                <ParticipationCard
+                  participation={intelligence?.participation}
+                  farmId={farmId}
+                />
+              </SectionCard>
 
               <SectionCard title="Recent activity" icon={<Droplets />}>
                 <ActivityTimeline
@@ -471,6 +532,56 @@ function FarmDetail({ farmId }) {
                   above, this reports what the data IS, so a demo farm honestly shows
                   its measures abstaining. */}
               <DataReadinessCard farmId={farmId} />
+
+              {/* What data Lumos actually holds for this farm. Deliberately blunt:
+                  most domains are empty for most farms, and saying so is more useful
+                  than a full-looking grid. */}
+              <SectionCard
+                title="Data coverage"
+                icon={<Database />}
+                description="Which sources carry records for this farm — and which are declared but not connected."
+              >
+                <DataCoverageCard coverage={intelligence?.coverage} />
+              </SectionCard>
+
+              {/* The financing opportunity the operational record creates. This is
+                  the product insight in one card: the same data that advises the
+                  grower is what makes the farm legible to a lender. */}
+              <SectionCard
+                title="Financing"
+                icon={<Landmark />}
+                description="Evidence a lender asks for, assembled from records this farm already keeps."
+                action={
+                  <Link
+                    href="/financing"
+                    className="text-xs font-medium text-leaf-700 hover:underline"
+                  >
+                    Open
+                  </Link>
+                }
+              >
+                {intelligence?.financing?.request_count ? (
+                  <dl className="space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <dt className="text-muted">Requests</dt>
+                      <dd className="font-medium text-ink">
+                        {intelligence.financing.request_count}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="text-muted">Open</dt>
+                      <dd className="font-medium text-ink">
+                        {intelligence.financing.open_request_count}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="text-sm text-muted">
+                    No financing request yet. Opening one shows which of a lender&rsquo;s
+                    usual evidence items this farm already has on record.
+                  </p>
+                )}
+              </SectionCard>
 
               {/* The cross-layer view. Farm-scoped and grower-facing — and deliberately
                   NOT on /decisions/[id], because the Botrytis shadow study depends on

@@ -12,11 +12,11 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app import (
-    backtest, clock, credit_scoring, crop_aliases, csv_import, decision_status,
-    disease_risk, insurance, label_data, label_table, models, monitoring,
-    pca_authority, procurement_analytics, procurement_status, refusal, rfq_transport,
-    risk_snapshot, schemas, season_closeout, target_aliases, underwriting, units,
-    value_ledger,
+    advisory, backtest, clock, credit_scoring, crop_aliases, csv_import,
+    decision_status, disease_risk, farm_performance, financing_evidence, insurance,
+    label_data, label_table, models, monitoring, participation, pca_authority,
+    procurement_analytics, procurement_status, refusal, rfq_transport, risk_snapshot,
+    schemas, season_closeout, target_aliases, underwriting, units, value_ledger,
 )
 from app.decision_engine import LabelContext, evaluate_planned_spray
 from app.recommendation_engine import generate_recommendation
@@ -4963,3 +4963,657 @@ def build_crop_cycle_closeout(db: Session, cycle: models.CropCycle) -> dict:
         scope=ledger.get("scope"),
         completeness_extra=extra_gaps,
     )
+
+
+# ==================================================================== #
+# The advisory queue, the intelligence view, and farm performance      #
+#                                                                      #
+# All three COMPOSE existing builders rather than deriving anything    #
+# themselves. Nothing here recomputes a season's economics or a        #
+# decision's status; if a number appears twice in the app it is the    #
+# same call producing it, which is why the closeout and the ledger     #
+# cannot disagree and why these cannot disagree with either.           #
+# ==================================================================== #
+def build_advisory_queue(
+    db: Session, farm: models.Farm, crop_cycle_id: int | None = None,
+    weather_risk: dict | None = None,
+) -> dict:
+    """Gather one farm's state and hand it to the pure `advisory` module.
+
+    Scoped to the named cycle when given, otherwise to the farm's open cycle — a
+    queue spanning every season a farm ever had would rank last year's unrecorded
+    outcome against this morning's harvest conflict.
+    """
+    cycle = None
+    if crop_cycle_id is not None:
+        cycle = get_crop_cycle(db, crop_cycle_id)
+    else:
+        cycle = open_crop_cycle(db, farm.id)
+
+    decisions = list_planned_sprays(db, farm.id)
+    if cycle is not None:
+        # An unlinked decision still belongs to the farm's current work: linking is
+        # backfilled, and dropping unlinked rows would hide real conflicts.
+        decisions = [
+            d for d in decisions
+            if d.crop_cycle_id in (cycle.id, None)
+        ]
+    follow_ups = {d.id: list_follow_up_events(db, d.id) for d in decisions}
+
+    closeout = None
+    if cycle is not None:
+        closeout = build_crop_cycle_closeout(db, cycle)
+
+    return advisory.build_queue(
+        farm=farm,
+        cycle=cycle,
+        decisions=decisions,
+        follow_ups_by_decision=follow_ups,
+        blocks=list_blocks(db, farm.id),
+        scout_observations=list_scout_observations(db, farm.id),
+        input_plans=list_input_plans(db, farm.id),
+        orders=list_purchase_orders(db, farm.id),
+        financing_requests=list_financing_requests(db, farm.id),
+        closeout=closeout,
+        weather_risk=weather_risk,
+        today=clock.current_date(),
+    )
+
+
+def build_farm_performance(db: Session, farm: models.Farm) -> dict:
+    """Every crop cycle's closeout, turned into a season-over-season profile."""
+    cycles = list_crop_cycles(db, farm.id)
+    closeouts = [build_crop_cycle_closeout(db, c) for c in cycles]
+
+    decisions_by_cycle: dict = {}
+    outcomes_by_cycle: dict = {}
+    follow_ups: dict = {}
+    all_decisions = list_planned_sprays(db, farm.id)
+    all_outcomes = list_block_outcomes(db, farm.id)
+    for cycle in cycles:
+        scoped = [d for d in all_decisions if d.crop_cycle_id == cycle.id]
+        decisions_by_cycle[cycle.id] = scoped
+        outcomes_by_cycle[cycle.id] = [
+            o for o in all_outcomes if o.crop_cycle_id == cycle.id
+        ]
+        for decision in scoped:
+            follow_ups[decision.id] = list_follow_up_events(db, decision.id)
+
+    return farm_performance.build_performance(
+        farm=farm,
+        closeouts=closeouts,
+        decisions_by_cycle=decisions_by_cycle,
+        follow_ups_by_decision=follow_ups,
+        block_outcomes_by_cycle=outcomes_by_cycle,
+        today=clock.current_date(),
+    )
+
+
+def _coverage_rows(db: Session, farm: models.Farm) -> list[dict]:
+    """Which data sources are actually connected for this farm, and which are not.
+
+    The honest answer to "what Big Data does Lumos have here". A domain is CONNECTED
+    only when a row exists for this farm; declaring a domain is not building it (the
+    rule `app/ingest/domains.py` was written to enforce), and a coverage list that
+    counted declarations would be exactly the pretence this surface exists to avoid.
+    """
+    from app.ingest import domains as ingest_domains
+
+    connected: dict[str, int] = {
+        "crop_protection": db.query(models.SprayEvent).filter(
+            models.SprayEvent.farm_id == farm.id
+        ).count(),
+        "crop": db.query(models.CropCycle).filter(
+            models.CropCycle.farm_id == farm.id
+        ).count(),
+        "climate": db.query(models.WeatherObservation).filter(
+            models.WeatherObservation.farm_id == farm.id
+        ).count(),
+    }
+
+    rows = []
+    for domain in ingest_domains.DOMAINS:
+        count = connected.get(domain.key, 0)
+        rows.append({
+            "key": domain.key,
+            "label": domain.title,
+            "phase": domain.phase,
+            "connected": bool(count),
+            "record_count": count,
+            "empty_source": getattr(domain, "empty_source", None),
+            # Whose job it is to close the gap, in the `farm_profile` vocabulary.
+            "who_fixes": (
+                financing_evidence.OWNER_OPERATOR
+                if getattr(domain, "empty_source", None)
+                else financing_evidence.OWNER_GROWER
+            ),
+        })
+    return rows
+
+
+def build_farm_intelligence(
+    db: Session, farm: models.Farm, crop_cycle_id: int | None = None,
+    weather_risk: dict | None = None,
+) -> dict:
+    """One payload answering: what is happening here, what matters, what next.
+
+    Composition only. Each block is the same builder its own dedicated endpoint
+    calls, so the farm page and the detail pages cannot tell different stories.
+
+    NOTE ON BLINDING: this is a farm-level view and must never carry a shadow
+    disease-risk assessment. The Botrytis study is blinded, and a shadow row
+    reaching any PCA-facing surface ends the measurement (ENGINEERING_GUIDELINES.md §5). Nothing
+    here reads `DiseaseRiskAssessment`; keep it that way.
+    """
+    cycle = (
+        get_crop_cycle(db, crop_cycle_id) if crop_cycle_id is not None
+        else open_crop_cycle(db, farm.id)
+    )
+    cycles = list_crop_cycles(db, farm.id)
+    closeout = build_crop_cycle_closeout(db, cycle) if cycle is not None else None
+    ledger = build_value_ledger(db, farm, cycle.id if cycle else None)
+
+    agreement = active_commercial_agreement(db, farm.id)
+    participation_result = None
+    if agreement is not None and cycle is not None and closeout is not None:
+        participation_result = compute_participation(db, cycle, agreement)
+
+    requests = list_financing_requests(db, farm.id)
+
+    return {
+        "model_version": "farm_intelligence_v1",
+        "farm_id": farm.id,
+        "farm_name": farm.name,
+        "is_reference": bool(getattr(farm, "is_reference", False)),
+        "as_of": clock.current_date().isoformat(),
+        "crop_cycle": schemas.CropCycle.model_validate(cycle).model_dump(mode="json")
+        if cycle is not None else None,
+        "cycles": [
+            schemas.CropCycle.model_validate(c).model_dump(mode="json") for c in cycles
+        ],
+        "advisory": build_advisory_queue(
+            db, farm, cycle.id if cycle else None, weather_risk=weather_risk
+        ),
+        "season": closeout,
+        "value_ledger": ledger,
+        "performance": build_farm_performance(db, farm),
+        "coverage": _coverage_rows(db, farm),
+        "participation": participation_result,
+        "financing": {
+            "request_count": len(requests),
+            "open_request_count": sum(
+                1 for r in requests if r.status not in ("withdrawn", "offer_selected")
+            ),
+            "requests": [
+                schemas.FinancingRequest.model_validate(r).model_dump(mode="json")
+                for r in requests
+            ],
+        },
+        "procurement": {
+            "plan_count": len(list_input_plans(db, farm.id)),
+            "order_count": len(list_purchase_orders(db, farm.id)),
+        },
+    }
+
+
+# ==================================================================== #
+# Season financing: request -> evidence -> lender criteria -> offers    #
+# ==================================================================== #
+FINANCING_REQUEST_STATUSES = (
+    "draft", "evidence_assembled", "shared", "offers_received",
+    "offer_selected", "withdrawn",
+)
+
+
+def create_financing_request(
+    db: Session, farm: models.Farm, data: schemas.FinancingRequestCreate
+) -> models.FinancingRequest:
+    cycle = None
+    if data.crop_cycle_id is not None:
+        cycle = get_crop_cycle(db, data.crop_cycle_id)
+        if cycle is None or cycle.farm_id != farm.id:
+            raise CrossFarmReferenceError(
+                "That crop cycle belongs to a different farm."
+            )
+    request = models.FinancingRequest(
+        farm_id=farm.id,
+        crop_cycle_id=data.crop_cycle_id,
+        purpose=data.purpose,
+        requested_amount=data.requested_amount,
+        currency_code=data.currency_code or value_ledger.currency_for(farm),
+        status="draft",
+        lender_policy_id=data.lender_policy_id,
+        requested_by=data.requested_by,
+        notes=data.notes,
+        data_source=data.data_source or "manual_entry",
+        data_confidence=data.data_confidence or "user_provided",
+    )
+    db.add(request)
+    db.flush()
+    add_financing_request_event(
+        db, request, "created", actor=data.requested_by,
+        notes="Financing request opened.",
+    )
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+def add_financing_request_event(
+    db: Session, request: models.FinancingRequest, event_type: str,
+    actor: str | None = None, notes: str | None = None, payload: dict | None = None,
+) -> models.FinancingRequestEvent:
+    """Append-only. A financing request's history is never rewritten."""
+    event = models.FinancingRequestEvent(
+        financing_request_id=request.id,
+        event_type=event_type,
+        occurred_on=clock.current_date(),
+        actor=actor,
+        notes=notes,
+        payload=payload,
+    )
+    db.add(event)
+    db.flush()
+    return event
+
+
+def list_financing_requests(db: Session, farm_id: int) -> list[models.FinancingRequest]:
+    return (
+        db.query(models.FinancingRequest)
+        .filter(models.FinancingRequest.farm_id == farm_id)
+        .order_by(models.FinancingRequest.id.desc())
+        .all()
+    )
+
+
+def get_financing_request(db: Session, request_id: int) -> models.FinancingRequest | None:
+    return db.get(models.FinancingRequest, request_id)
+
+
+def update_financing_request_status(
+    db: Session, request: models.FinancingRequest, status: str,
+    actor: str | None = None, notes: str | None = None,
+) -> models.FinancingRequest:
+    if status not in FINANCING_REQUEST_STATUSES:
+        raise ValueError(f"unknown financing request status {status!r}")
+    request.status = status
+    add_financing_request_event(db, request, status, actor=actor, notes=notes)
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+def build_financing_package(db: Session, request: models.FinancingRequest) -> dict:
+    """Assemble the lender evidence package for one request."""
+    farm = request.farm
+    cycle = request.crop_cycle or open_crop_cycle(db, farm.id)
+    closeout = build_crop_cycle_closeout(db, cycle) if cycle is not None else None
+    decisions = list_planned_sprays(db, farm.id)
+    if cycle is not None:
+        decisions = [d for d in decisions if d.crop_cycle_id in (cycle.id, None)]
+
+    return financing_evidence.build_package(
+        farm=farm,
+        cycle=cycle,
+        closeout=closeout,
+        performance=build_farm_performance(db, farm),
+        decisions=decisions,
+        collateral_assets=list_collateral_assets(db, farm.id),
+        today=clock.current_date(),
+    )
+
+
+def _policy_from_record(record: models.LenderPolicy):
+    """Rehydrate a stored lender policy into the shape `underwriting` evaluates.
+
+    Built through `underwriting_rules.UnderwritingRule`, so the same validation that
+    guards a transcribed policy guards an entered one: a minimum_score rule with no
+    threshold still raises rather than silently becoming a check that always passes.
+    """
+    from app import transcription, underwriting_rules
+
+    citation = transcription.Citation(
+        document=record.source_document,
+        publisher=record.lender,
+        section=record.policy_version,
+        snippet=record.source_document[:500],
+        transcribed_by=record.entered_by or "operator",
+        transcribed_on=record.entered_on or record.created_at.date(),
+    )
+    rules = tuple(
+        underwriting_rules.UnderwritingRule(
+            rule_id=row["rule_id"],
+            description=row.get("description", ""),
+            kind=row["kind"],
+            citation=citation,
+            threshold=row.get("threshold"),
+            evidence_key=row.get("evidence_key"),
+            feature_name=row.get("feature_name"),
+        )
+        for row in (record.rules or [])
+    )
+    if not rules:
+        return None
+    return underwriting_rules.UnderwritingPolicy(
+        lender=record.lender,
+        version=record.policy_version,
+        effective_from=(record.effective_from or record.created_at.date()).isoformat(),
+        rules=rules,
+        citation=citation,
+    )
+
+
+NO_LENDER_POLICY = "no_lender_policy_attached"
+
+
+def assess_financing_request(db: Session, request: models.FinancingRequest) -> dict:
+    """Evaluate this farm's recorded evidence against the attached lender's criteria.
+
+    Refuses when no policy is attached. Lumos evaluates a lender's written policy; it
+    never supplies one, so with nothing attached there is nothing to assess (ENGINEERING_GUIDELINES.md
+    §4 — no Lumos-authored credit policy).
+    """
+    if request.lender_policy is None:
+        return refusal.Refusal(
+            code=NO_LENDER_POLICY,
+            detail=(
+                "No lender policy is attached to this request, so there are no "
+                "criteria to read the farm's evidence against. Lumos evaluates a "
+                "lender's written policy — it never authors one."
+            ),
+        ).as_payload()
+
+    policy = _policy_from_record(request.lender_policy)
+    if policy is None:
+        return refusal.Refusal(
+            code=NO_LENDER_POLICY,
+            detail="The attached lender policy states no rules, so it decides nothing.",
+        ).as_payload()
+
+    package = build_financing_package(db, request)
+    result = underwriting.assess(
+        as_of=clock.current_datetime(),
+        exposure_amount=request.requested_amount,
+        evidence_keys=package["evidence_keys"],
+        policy=policy,
+    )
+    if refusal.is_refusal(result):
+        return result.as_payload()
+
+    payload = result.as_payload()
+    payload["lender_policy_id"] = request.lender_policy.id
+    payload["source_document"] = request.lender_policy.source_document
+    return payload
+
+
+def monitor_financing_request(db: Session, request: models.FinancingRequest) -> dict:
+    """Covenant standing for a financed season, from the same operational features."""
+    record = request.lender_policy
+    if record is None or not (record.covenants or []):
+        return refusal.Refusal(
+            code=NO_LENDER_POLICY,
+            detail=(
+                "No covenant schedule is on record for this request. Covenants come "
+                "from the executed facility agreement, never from Lumos."
+            ),
+        ).as_payload()
+
+    from app import monitoring_covenants, transcription
+
+    citation = transcription.Citation(
+        document=record.source_document,
+        publisher=record.lender,
+        section=record.policy_version,
+        snippet=record.source_document[:500],
+        transcribed_by=record.entered_by or "operator",
+        transcribed_on=record.entered_on or record.created_at.date(),
+    )
+    schedule = monitoring_covenants.CovenantSchedule(
+        lender=record.lender,
+        facility_reference=record.policy_version,
+        covenants=tuple(
+            monitoring_covenants.Covenant(
+                covenant_id=row["covenant_id"],
+                description=row.get("description", ""),
+                feature_name=row["feature_name"],
+                comparator=row["comparator"],
+                threshold=row["threshold"],
+                breach_severity=row["breach_severity"],
+                citation=citation,
+            )
+            for row in record.covenants
+        ),
+        citation=citation,
+    )
+    result = monitoring.evaluate(
+        features=feature_results_for_farm(db, request.farm_id),
+        as_of=clock.current_datetime(),
+        schedule=schedule,
+    )
+    return result.as_payload()
+
+
+def create_financing_offer_for_request(
+    db: Session, request: models.FinancingRequest,
+    data: schemas.FinancingOfferCreate,
+) -> models.FinancingOffer:
+    """Concierge-entered indicative terms against a season financing request."""
+    offer = models.FinancingOffer(
+        financing_request_id=request.id,
+        supplier_quote_id=None,
+        provider_name=data.provider_name,
+        requested_amount=data.requested_amount,
+        down_payment=data.down_payment or 0.0,
+        financed_amount=data.financed_amount,
+        total_repayment=data.total_repayment,
+        fees_total=data.fees_total or 0.0,
+        schedule_summary=data.schedule_summary,
+        expires_on=data.expires_on,
+        required_documents=data.required_documents,
+        conditions=data.conditions,
+        entered_by=data.entered_by,
+        notes=data.notes,
+        data_source=data.data_source or "manual_entry",
+        data_confidence=data.data_confidence or "user_provided",
+    )
+    db.add(offer)
+    if request.status in ("draft", "evidence_assembled", "shared"):
+        request.status = "offers_received"
+    add_financing_request_event(
+        db, request, "offer_received", actor=data.entered_by,
+        notes=f"Indicative terms entered from {data.provider_name}.",
+    )
+    db.commit()
+    db.refresh(offer)
+    return offer
+
+
+# ==================================================================== #
+# Lender policies (operator-entered, never Lumos-authored)             #
+# ==================================================================== #
+def create_lender_policy(
+    db: Session, data: schemas.LenderPolicyCreate
+) -> models.LenderPolicy:
+    record = models.LenderPolicy(
+        lender=data.lender,
+        policy_version=data.policy_version,
+        effective_from=data.effective_from,
+        source_document=data.source_document,
+        source_url=data.source_url,
+        rules=[r.model_dump(mode="json") for r in (data.rules or [])],
+        covenants=[c.model_dump(mode="json") for c in (data.covenants or [])],
+        entered_by=data.entered_by,
+        entered_on=data.entered_on or clock.current_date(),
+        supersedes_id=data.supersedes_id,
+        notes=data.notes,
+        data_source=data.data_source or "manual_entry",
+        data_confidence=data.data_confidence or "user_provided",
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def list_lender_policies(db: Session) -> list[models.LenderPolicy]:
+    return (
+        db.query(models.LenderPolicy)
+        .order_by(models.LenderPolicy.id.desc())
+        .all()
+    )
+
+
+# ==================================================================== #
+# Commercial agreements and Lumos economic participation                #
+# ==================================================================== #
+def create_commercial_agreement(
+    db: Session, farm: models.Farm, data: schemas.CommercialAgreementCreate
+) -> models.CommercialAgreement:
+    """Record what was agreed. Append-only; renegotiating supersedes."""
+    agreement = models.CommercialAgreement(
+        farm_id=farm.id,
+        name=data.name,
+        model_type=data.model_type,
+        currency_code=data.currency_code or value_ledger.currency_for(farm),
+        effective_from=data.effective_from,
+        effective_to=data.effective_to,
+        terms=data.terms or {},
+        source_document=data.source_document,
+        status="active",
+        supersedes_id=data.supersedes_id,
+        entered_by=data.entered_by,
+        notes=data.notes,
+        data_source=data.data_source or "manual_entry",
+        data_confidence=data.data_confidence or "user_provided",
+    )
+    db.add(agreement)
+    db.flush()
+    if data.supersedes_id is not None:
+        prior = db.get(models.CommercialAgreement, data.supersedes_id)
+        if prior is not None and prior.farm_id == farm.id:
+            prior.status = "superseded"
+    db.commit()
+    db.refresh(agreement)
+    return agreement
+
+
+def list_commercial_agreements(
+    db: Session, farm_id: int
+) -> list[models.CommercialAgreement]:
+    return (
+        db.query(models.CommercialAgreement)
+        .filter(models.CommercialAgreement.farm_id == farm_id)
+        .order_by(models.CommercialAgreement.id.desc())
+        .all()
+    )
+
+
+def active_commercial_agreement(
+    db: Session, farm_id: int
+) -> models.CommercialAgreement | None:
+    """The agreement currently in force, or None. Superseded rows never win."""
+    return (
+        db.query(models.CommercialAgreement)
+        .filter(
+            models.CommercialAgreement.farm_id == farm_id,
+            models.CommercialAgreement.status == "active",
+        )
+        .order_by(models.CommercialAgreement.id.desc())
+        .first()
+    )
+
+
+def _selected_financing_offer(db: Session, farm_id: int, cycle_id: int | None):
+    """The financing offer the grower selected for this season, if any."""
+    query = (
+        db.query(models.FinancingOffer)
+        .join(
+            models.FinancingRequest,
+            models.FinancingOffer.financing_request_id == models.FinancingRequest.id,
+        )
+        .filter(
+            models.FinancingRequest.farm_id == farm_id,
+            models.FinancingOffer.status == procurement_status.OFFER_SELECTED,
+        )
+    )
+    if cycle_id is not None:
+        query = query.filter(models.FinancingRequest.crop_cycle_id == cycle_id)
+    return query.order_by(models.FinancingOffer.id.desc()).first()
+
+
+def compute_participation(
+    db: Session, cycle: models.CropCycle,
+    agreement: models.CommercialAgreement | None = None,
+) -> dict:
+    """What the agreed commercial model comes to on this season's records."""
+    farm = cycle.farm
+    agreement = (
+        agreement if agreement is not None
+        else active_commercial_agreement(db, farm.id)
+    )
+    closeout = build_crop_cycle_closeout(db, cycle)
+    result = participation.compute(
+        agreement=agreement,
+        cycle=cycle,
+        closeout=closeout,
+        ledger=closeout.get("lumos_value"),
+        financing_offer=_selected_financing_offer(db, farm.id, cycle.id),
+    )
+    return result.as_payload()
+
+
+def explain_advisory_item(db: Session, farm: models.Farm, item: dict) -> dict:
+    """An AI explanation of one queue item. The item itself is never changed.
+
+    The deterministic queue already decided the urgency, the next action and the
+    economic consequence; `AdvisoryExplanation` has no field that could carry any of
+    them, so this can only describe. Logged append-only like every AI path here.
+    """
+    from app import advisory_explain, llm
+
+    farm_summary = {
+        "name": farm.name,
+        "crop": getattr(farm, "crop_type", None),
+        "location": getattr(farm, "location", None),
+        "is_demo": decision_status.is_demo_record(farm),
+    }
+    blocks = advisory_explain.build_content_blocks(item, farm_summary)
+    digest = advisory_explain.input_digest(item, farm_summary)
+
+    service = llm.default_llm_service
+    try:
+        raw, model_id = service.parse(
+            advisory_explain.build_system_prompt(),
+            blocks,
+            advisory_explain.AdvisoryExplanation,
+        )
+    except Exception as exc:
+        log_ai_judgment(
+            db, kind="advisory_explanation", model_id="unavailable",
+            prompt_version=advisory_explain.PROMPT_VERSION, input_digest=digest,
+            output=None, confidence="low", abstained=True,
+            abstain_reason=str(exc)[:300], is_mock=getattr(service, "is_mock", False),
+            farm_id=farm.id,
+        )
+        return refusal.Refusal(
+            code="explanation_unavailable",
+            detail=(
+                "The explanation service could not be reached. The item, its "
+                "evidence and its next action are unchanged — they are computed "
+                "from your records, not written by the model."
+            ),
+        ).as_payload()
+
+    guarded = advisory_explain.apply_post_guards(raw, item)
+    payload = advisory_explain.explanation_payload(
+        guarded, model_id=model_id, is_mock=getattr(service, "is_mock", False)
+    )
+    log_ai_judgment(
+        db, kind="advisory_explanation", model_id=model_id,
+        prompt_version=advisory_explain.PROMPT_VERSION, input_digest=digest,
+        output=payload, confidence=guarded.confidence, abstained=False,
+        abstain_reason=None, is_mock=getattr(service, "is_mock", False),
+        farm_id=farm.id,
+    )
+    payload["item_key"] = item.get("item_key")
+    return payload
