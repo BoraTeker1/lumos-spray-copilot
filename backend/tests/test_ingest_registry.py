@@ -25,7 +25,7 @@ import pytest
 from app import transcription
 from app.ingest import base, domains, geo, registry
 
-CLAUDE_MD = Path(__file__).resolve().parents[2] / "ENGINEERING_GUIDELINES.md"
+GUIDELINES_MD = Path(__file__).resolve().parents[2] / "ENGINEERING_GUIDELINES.md"
 
 
 def _section(name: str) -> str:
@@ -35,7 +35,7 @@ def _section(name: str) -> str:
     scoring" contains no literal "credit scoring" substring. A test that missed the
     guardrail because of a line break would be worse than no test.
     """
-    text = CLAUDE_MD.read_text()
+    text = GUIDELINES_MD.read_text()
     match = re.search(rf"^## {re.escape(name)}\b.*?(?=^## |\Z)", text, re.M | re.S)
     assert match, f"ENGINEERING_GUIDELINES.md has no section {name!r}"
     return " ".join(match.group(0).split())
