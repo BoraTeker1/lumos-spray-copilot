@@ -4,8 +4,8 @@ How to run real-world validation with growers/PCAs using **manually collected** 
 calls, WhatsApp, spreadsheets, or emails. The goal is learning and useful pilot conversations,
 **not** more product surface area and **not** automated integrations.
 
-This pairs with the [YC positioning](YC_POSITIONING.md) "Pilot evidence we are collecting" and
-"What we are NOT claiming yet" sections.
+This pairs with the positioning document's "Pilot evidence we are collecting" and
+"What we are NOT claiming yet" sections (kept in the private repo).
 
 ---
 

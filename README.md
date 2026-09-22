@@ -5,9 +5,13 @@ It helps growers reduce unnecessary pesticide sprays, avoid pre-harvest-interval
 risk, track pesticide cost, and produce a cautious, reviewable recommendation plus a
 copy-pasteable weekly report.
 
-This is a narrowed MVP of the broader Lumos precision-farming vision (see `docs/`).
+This is a narrowed MVP of a broader precision-farming vision.
 See **[MVP_SPEC.md](MVP_SPEC.md)** for the product brief and **[ENGINEERING_GUIDELINES.md](ENGINEERING_GUIDELINES.md)** for
 build guidance, scope boundaries, and the milestone plan.
+
+> This is the public engineering repository. Commercial and go-to-market material
+> (positioning, customer-discovery notes, pilot outreach) is kept in a separate private
+> repo, so a few documents referenced in passing below are not present here.
 
 ## U.S. pilot positioning
 **Lumos starts as an AI-assisted pesticide decision and compliance copilot for specialty crops,
@@ -15,7 +19,7 @@ with agronomist/PCA-in-the-loop approval.** First U.S. wedge: **California speci
 (strawberries, greenhouse tomatoes) + their PCAs/agronomists** — fewer unnecessary sprays, fewer
 PHI/REI mistakes, cleaner audit-ready records. We are the **decision/compliance layer before the
 spray** — not a sprayer, robot, drone, or farm OS, and explicitly **not** competing with John
-Deere See & Spray or row-crop hardware. Full strategy: **[US_WEDGE.md](US_WEDGE.md)**.
+Deere See & Spray or row-crop hardware.
 
 > ⚠️ The recommendation engine is **decision support, not a prescription**. It never tells a
 > farmer to spray and never claims a definitive diagnosis.
@@ -38,7 +42,6 @@ precision_farming/
 │   ├── app/                 # dashboard + farm detail pages
 │   ├── components/          # forms, recommendation panel, weekly report
 │   └── lib/api.js           # single API client
-├── docs/                    # original startup background material
 ├── MVP_SPEC.md
 └── ENGINEERING_GUIDELINES.md
 ```
@@ -81,7 +84,7 @@ The frontend talks to `http://localhost:8000` by default. To point elsewhere, co
 5. Open **Sunrise Tomato House** → **Low risk — continue monitoring** (the healthy contrast).
 
 Full timed walkthrough: see **[DEMO_SCRIPT.md](DEMO_SCRIPT.md)**. What the seed data means:
-**[DEMO_DATA.md](DEMO_DATA.md)**. Interviewing growers: **[CUSTOMER_DISCOVERY.md](CUSTOMER_DISCOVERY.md)**.
+**[DEMO_DATA.md](DEMO_DATA.md)**.
 
 ## Real Pilot Evidence Loop (V1)
 
